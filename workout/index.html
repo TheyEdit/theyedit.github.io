@@ -78,7 +78,22 @@ function buildOrder(cues, recentIdx) {
 }
 
 /* ─────────────── persistent storage (artifact memory) ─────────────── */
-const KEY = "gg:v1", LIVE = "gg:live", TSKEY = "gg:ts", SYNCKEY = "gg:sync";
+const KEY = "gg:v1", LIVE = "gg:live", TSKEY = "gg:ts", SYNCKEY = "gg:sync", SYNCEDKEY = "gg:synced";
+
+/* ─────────────── sync debug log (observable, on-screen) ─────────────── */
+// A small ring buffer that every pull/push/decision writes to, mirrored into the
+// SyncPanel so failures are visible instead of swallowed into a one-line status.
+const SYNCLOG = [];
+let SYNCLOG_NOTIFY = null;
+function dbg(msg) {
+  let stamp = "--:--:--";
+  try { stamp = new Date().toLocaleTimeString(); } catch (e) {}
+  const line = `${stamp}  ${msg}`;
+  SYNCLOG.push(line);
+  if (SYNCLOG.length > 120) SYNCLOG.shift();
+  if (SYNCLOG_NOTIFY) { try { SYNCLOG_NOTIFY(SYNCLOG.slice()); } catch (e) {} }
+  try { console.log("[sync]", msg); } catch (e) {}
+}
 const hasStore = typeof window !== "undefined" && !!window.localStorage;
 // LS_BLOCK — single local layer. The self-hosted build swaps this body for localStorage.
 const LS = {
@@ -87,14 +102,23 @@ const LS = {
   async del(k) { try { localStorage.removeItem(k); } catch (e) {} },
 };
 async function loadState() { return LS.get(KEY); }
-async function saveState(s) { await LS.set(KEY, s); await LS.set(TSKEY, Date.now()); }   // bump change-time for sync
+async function saveState(s) { await LS.set(KEY, s); await bumpChange(); }   // bump change-time for sync
 async function clearState() { await LS.del(KEY); await LS.del(TSKEY); }
 async function loadLive() { return LS.get(LIVE); }
 async function saveLive(s) { await LS.set(LIVE, s); }
 async function clearLive() { await LS.del(LIVE); }
 async function loadSyncCfg() { return LS.get(SYNCKEY); }
 async function saveSyncCfg(c) { return LS.set(SYNCKEY, c); }
+// localTs = last *genuine local change* (mem save or live-session edit).
+// syncedTs = the remote `ts` we last reconciled with (adopted or pushed).
+// We have unsynced local work iff localTs > syncedTs. We must adopt iff remoteTs > syncedTs.
 async function localTs() { return (await LS.get(TSKEY)) || 0; }
+async function syncedTs() { return (await LS.get(SYNCEDKEY)) || 0; }
+async function setSyncedTs(ts) { await LS.set(SYNCEDKEY, ts || 0); }
+// Monotonic change clock: always strictly greater than the last synced ts, so a genuine local
+// edit registers as "newer than what we synced" even if the other device's clock runs ahead
+// (wall-clock skew across phone/computer would otherwise make a real edit look stale and never push).
+async function bumpChange() { const st = await syncedTs(); const t = Math.max(Date.now(), st + 1); await LS.set(TSKEY, t); return t; }
 
 // Optional cross-device sync — stores one JSON file in your own GitHub repo. Last-write-wins by timestamp
 // (single-user assumption). cfg = { repo:"owner/name", token, path:"data.json", branch:"main" }. Never synced itself.
@@ -103,22 +127,36 @@ const b64dec = (b) => decodeURIComponent(escape(atob(String(b).replace(/\n/g, ""
 const ghHeaders = (cfg) => ({ Authorization: `Bearer ${cfg.token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" });
 const REMOTE = {
   async pull(cfg) {
-    const r = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${cfg.path}?ref=${cfg.branch || "main"}&t=${Date.now()}`, { headers: ghHeaders(cfg), cache: "no-store" });
-    if (r.status === 404) return { empty: true, sha: null, ts: 0, data: null };
-    if (!r.ok) throw new Error("read " + r.status);
+    const url = `https://api.github.com/repos/${cfg.repo}/contents/${encodeURIComponent(cfg.path).replace(/%2F/g, "/")}?ref=${encodeURIComponent(cfg.branch || "main")}&t=${Date.now()}`;
+    const r = await fetch(url, { headers: ghHeaders(cfg), cache: "no-store" });
+    if (r.status === 404) { dbg(`pull ← 404 (no file yet, empty repo)`); return { empty: true, sha: null, ts: 0, data: null }; }
+    if (!r.ok) { const body = await r.text().catch(() => ""); dbg(`pull ← HTTP ${r.status} ${body.slice(0, 140)}`); throw new Error("read " + r.status); }
     const j = await r.json();
-    let parsed = null; try { parsed = JSON.parse(b64dec(j.content)); } catch (e) {}
+    let parsed = null, err = null; try { parsed = JSON.parse(b64dec(j.content)); } catch (e) { err = e.message; }
+    if (err) dbg(`pull ← HTTP 200 sha=${shortSha(j.sha)} but JSON decode failed: ${err}`);
+    else dbg(`pull ← HTTP 200 sha=${shortSha(j.sha)} remoteTs=${tsLabel(parsed?.ts)} hasData=${!!(parsed && parsed.data)}`);
     return { sha: j.sha, ts: parsed?.ts || 0, data: parsed?.data || null };
   },
-  async push(cfg, data, sha) {
-    const mk = (s) => ({ method: "PUT", headers: { ...ghHeaders(cfg), "Content-Type": "application/json" }, body: JSON.stringify({ message: `coach sync ${new Date().toISOString()}`, content: b64enc(JSON.stringify({ ts: Date.now(), data })), branch: cfg.branch || "main", ...(s ? { sha: s } : {}) }) });
-    let r = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${cfg.path}`, mk(sha));
-    if (r.status === 409 || r.status === 422) { const cur = await this.pull(cfg); r = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${cfg.path}`, mk(cur.sha)); }
-    if (!r.ok) throw new Error("write " + r.status);
+  // ts: the change-timestamp to stamp into the file so remoteTs reflects the real change time
+  // (not "when the PUT happened"). Returns the new sha and the ts that was written.
+  async push(cfg, data, sha, ts) {
+    const stamp = ts || Date.now();
+    const mk = (s) => ({ method: "PUT", headers: { ...ghHeaders(cfg), "Content-Type": "application/json" }, body: JSON.stringify({ message: `coach sync ${new Date().toISOString()}`, content: b64enc(JSON.stringify({ ts: stamp, data })), branch: cfg.branch || "main", ...(s ? { sha: s } : {}) }) });
+    let r = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${encodeURIComponent(cfg.path).replace(/%2F/g, "/")}`, mk(sha));
+    if (r.status === 409 || r.status === 422) {
+      dbg(`push → HTTP ${r.status} (stale sha ${shortSha(sha)}); re-pulling sha and retrying`);
+      const cur = await this.pull(cfg);
+      r = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${encodeURIComponent(cfg.path).replace(/%2F/g, "/")}`, mk(cur.sha));
+    }
+    if (!r.ok) { const body = await r.text().catch(() => ""); dbg(`push → HTTP ${r.status} FAILED ${body.slice(0, 140)}`); throw new Error("write " + r.status); }
     const j = await r.json();
-    return j.content?.sha || null;
+    const newSha = j.content?.sha || null;
+    dbg(`push → HTTP ${r.status} OK sha=${shortSha(newSha)} wroteTs=${tsLabel(stamp)}`);
+    return { sha: newSha, ts: stamp };
   },
 };
+const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
+const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 const DEFAULT = { version: 1, lastTag: null, sessionCount: 0, weights: {}, recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb" };
 
 /* ───────────────────────── program ───────────────────────── */
@@ -395,10 +433,12 @@ const ProgressChart = React.memo(function ProgressChart({ mem }) {
 });
 
 /* ───────────────────────── app ───────────────────────── */
-function SyncPanel({ sync, msg, onConnect, onDisconnect, onSyncNow }) {
+function SyncPanel({ sync, msg, log, onConnect, onDisconnect, onSyncNow }) {
   const [f, setF] = useState({ repo: sync?.repo || "", token: sync?.token || "", path: sync?.path || "data.json", branch: sync?.branch || "main" });
+  const [showLog, setShowLog] = useState(false);
   const base = { background: "#100E09", border: `1px solid ${C.edge}`, color: C.bone };
   const lbl = "font-mono text-[9px] uppercase tracking-wider";
+  const copyLog = () => { try { navigator.clipboard.writeText((log || []).join("\n")); } catch (e) {} };
   return (
     <div className="mt-6 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
       <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Sync across devices</span>
@@ -417,6 +457,20 @@ function SyncPanel({ sync, msg, onConnect, onDisconnect, onSyncNow }) {
         {sync && <button onClick={onDisconnect} className="rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ashDim }}>Disconnect</button>}
       </div>
       {msg && <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>{msg}</p>}
+      <div className="mt-3 flex items-center gap-3">
+        <button onClick={() => setShowLog((v) => !v)} className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.gold }}>{showLog ? "▾ hide" : "▸ show"} sync log ({(log || []).length})</button>
+        {showLog && (log || []).length > 0 && <button onClick={copyLog} className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>copy</button>}
+      </div>
+      {showLog && (
+        <div className="mt-2 rounded-lg p-2 overflow-auto" style={{ background: "#0B0A06", border: `1px solid ${C.edge}`, maxHeight: 220 }}>
+          {(log || []).length === 0
+            ? <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>no sync activity yet — connect, or open the app on another device.</p>
+            : (log || []).map((line, i) => {
+                const tone = /ERROR|FAILED|failed/.test(line) ? "#E2725B" : /ADOPT|pull ←/.test(line) ? C.sage : /PUSH|push →/.test(line) ? C.gold : C.ash;
+                return <div key={i} className="font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-words" style={{ color: tone }}>{line}</div>;
+              })}
+        </div>
+      )}
       <p className="mt-3 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>the token is saved only on this device and never written into the repo. use a fine-grained token limited to this one repo, contents: read &amp; write. reading is automatic; saving happens a few seconds after changes.</p>
     </div>
   );
@@ -428,12 +482,17 @@ function App() {
   const [tag, setTag] = useState("A");
   const [sync, setSync] = useState(null);          // {url,key,code} or null
   const [syncMsg, setSyncMsg] = useState("");       // human-readable status
+  const [syncLog, setSyncLog] = useState([]);       // verbose, on-screen debug log
   const pushTimer = useRef(null);
   const memRef = useRef(DEFAULT);
   const liveRef = useRef(null);
   const shaRef = useRef(null);
   const syncReady = useRef(false);
+  const reconciling = useRef(false);   // serialize pull/push so they can't race each other
   const quietRef = useRef(0);   // suppress push echoes right after adopting a remote copy
+
+  // mirror the module-level sync debug ring buffer into React state so it renders
+  useEffect(() => { setSyncLog(SYNCLOG.slice()); SYNCLOG_NOTIFY = (lines) => setSyncLog(lines); return () => { SYNCLOG_NOTIFY = null; }; }, []);
   const now = new Date();
   const today = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 
@@ -445,21 +504,19 @@ function App() {
       if (!alive) return;
       const m = s || DEFAULT;
       setMem(m); memRef.current = m;
+      // Migration: an existing local copy with no change-clock yet (legacy / pre-sync data)
+      // must count as unsynced content so reconcile seeds it to the repo instead of risking
+      // it being silently overwritten by the other device.
+      if (s && hasStore && !(await localTs())) await bumpChange();
       setTag(m.lastTag ? (m.lastTag === "A" ? "B" : "A") : "A");
       const live = hasStore ? await loadLive() : null;
       const liveOk = live && Array.isArray(live.done) && (live.done.length > 0 || live.active);
       if (liveOk && Date.now() - (live.ts || 0) < 86400000) { setPending(live); liveRef.current = live; }
-      // cross-device sync: adopt remote if it's newer than this device, else seed remote from local
       const cfg = hasStore ? await loadSyncCfg() : null;
       if (cfg && cfg.repo && cfg.token) {
         setSync(cfg);
-        try {
-          const res = await REMOTE.pull(cfg);
-          const lt = await localTs();
-          if (res.data && (res.ts || 0) > lt) { await applyBlob(res.data, res.sha, res.ts, true); }
-          else { shaRef.current = res.sha || null; const blob = { mem: m, live: liveOk ? live : null }; const ns = await REMOTE.push(cfg, blob, shaRef.current); shaRef.current = ns || shaRef.current; }
-          if (alive) setSyncMsg("synced · " + new Date().toLocaleTimeString());
-        } catch (e) { if (alive) setSyncMsg("offline — using this device's copy"); }
+        syncReady.current = true;   // reconcile() may push genuine local changes during boot
+        await reconcile(cfg, "boot", true);
       }
       setLoaded(true);
       syncReady.current = true;   // only start auto-pushing after the initial reconcile
@@ -467,62 +524,112 @@ function App() {
     return () => { alive = false; };
   }, []);
 
-  // adopt a pulled {mem, live} blob into local state + storage
+  // adopt a pulled {mem, live} blob into local state + storage.
+  // After adopting we set BOTH localTs and syncedTs to the remote ts, so this device
+  // now reports "no unsynced changes" and won't immediately push the copy back (echo).
   const applyBlob = async (blob, sha, ts, setTagToo) => {
     const rmem = blob && blob.mem ? blob.mem : blob;                 // tolerate older mem-only files
     const rlive = blob && blob.mem ? blob.live : null;
+    const adoptTs = ts || Date.now();
     quietRef.current = Date.now() + 1800;
     shaRef.current = sha || shaRef.current;
     memRef.current = rmem; setMem(rmem);
-    await LS.set(KEY, rmem); await LS.set(TSKEY, ts || Date.now());
+    await LS.set(KEY, rmem);
+    await LS.set(TSKEY, adoptTs);        // local "change" clock == what we just adopted
+    await setSyncedTs(adoptTs);          // ...and we are in sync with it
     if (setTagToo) setTag(rmem.lastTag ? (rmem.lastTag === "A" ? "B" : "A") : "A");
     const liveOk = rlive && Array.isArray(rlive.done) && (rlive.done.length > 0 || rlive.active);
     if (liveOk) { liveRef.current = rlive; if (hasStore) await LS.set(LIVE, rlive); setPending(rlive); }
     else { liveRef.current = null; if (hasStore) await LS.del(LIVE); setPending(null); }
   };
 
+  // push this device's current copy to remote, stamping the file with our local change ts.
+  const pushLocal = async (cfg, reason) => {
+    const lt = await localTs();
+    const out = await REMOTE.push(cfg, { mem: memRef.current, live: liveRef.current }, shaRef.current, lt);
+    shaRef.current = out.sha || shaRef.current;
+    await setSyncedTs(out.ts);            // we are now in sync at the ts we just wrote
+    return out;
+  };
+
+  // THE one decision point used by boot / connect / focus / poll / sync-now / debounced save.
+  // Compares remoteTs and localTs against the *last synced ts* and logs which branch it takes:
+  //   adopt — remote has changes we haven't seen (and it's at least as new as ours)
+  //   push  — we have genuine unsynced local changes that are newer
+  //   skip  — already in sync (or remote is just our own last push echoing back)
+  const reconcile = async (cfg, reason, setTagToo) => {
+    cfg = cfg || sync; if (!cfg) return;
+    if (reconciling.current) { dbg(`reconcile(${reason}) skipped — another reconcile in flight`); return; }
+    reconciling.current = true;
+    try {
+      const res = await REMOTE.pull(cfg);
+      const lt = await localTs();
+      const st = await syncedTs();
+      const remoteTs = res.ts || 0;
+      const hasRemote = !!res.data;
+      const remoteNewer = hasRemote && remoteTs > st;     // remote moved since we last synced
+      const localNewer = lt > st;                         // we changed since we last synced
+      dbg(`reconcile(${reason}): localTs=${tsLabel(lt)} syncedTs=${tsLabel(st)} remoteTs=${tsLabel(remoteTs)} → remoteNewer=${remoteNewer} localNewer=${localNewer}`);
+
+      if (remoteNewer && (!localNewer || remoteTs >= lt)) {
+        await applyBlob(res.data, res.sha, remoteTs, setTagToo);
+        dbg(`reconcile(${reason}): ADOPT remote (sha=${shortSha(res.sha)})`);
+        setSyncMsg("pulled latest · " + new Date().toLocaleTimeString());
+      } else if (localNewer) {
+        shaRef.current = res.sha || shaRef.current;       // adopt latest sha before writing
+        const out = await pushLocal(cfg, reason);
+        dbg(`reconcile(${reason}): PUSH local (wroteTs=${tsLabel(out.ts)} sha=${shortSha(out.sha)})`);
+        setSyncMsg("pushed · " + new Date().toLocaleTimeString());
+      } else {
+        shaRef.current = res.sha || shaRef.current;
+        if (hasRemote && remoteTs > st) await setSyncedTs(remoteTs);
+        dbg(`reconcile(${reason}): SKIP — in sync`);
+        setSyncMsg("up to date · " + new Date().toLocaleTimeString());
+      }
+    } catch (e) {
+      dbg(`reconcile(${reason}): ERROR ${e.message}`);
+      setSyncMsg("sync error: " + e.message);
+    } finally {
+      reconciling.current = false;
+    }
+  };
+
+  // debounced local→remote: only fires when there are GENUINE unsynced local changes.
   const schedulePush = () => {
     if (!sync || !syncReady.current || Date.now() < quietRef.current) return;
     if (pushTimer.current) clearTimeout(pushTimer.current);
     pushTimer.current = setTimeout(async () => {
-      try { setSyncMsg("saving…"); const sh = await REMOTE.push(sync, { mem: memRef.current, live: liveRef.current }, shaRef.current); shaRef.current = sh || shaRef.current; await LS.set(TSKEY, Date.now()); setSyncMsg("saved · " + new Date().toLocaleTimeString()); }
-      catch (e) { setSyncMsg("save failed — kept on device"); }
+      if (reconciling.current) { schedulePush(); return; }   // retry after the in-flight reconcile
+      const lt = await localTs(); const st = await syncedTs();
+      if (lt <= st) { dbg(`schedulePush: nothing unsynced (localTs=${tsLabel(lt)} ≤ syncedTs=${tsLabel(st)}) — skip`); return; }
+      reconciling.current = true;
+      try { setSyncMsg("saving…"); const out = await pushLocal(sync, "debounced-save"); dbg(`schedulePush: PUSH ok (wroteTs=${tsLabel(out.ts)} sha=${shortSha(out.sha)})`); setSyncMsg("saved · " + new Date().toLocaleTimeString()); }
+      catch (e) { dbg(`schedulePush: ERROR ${e.message}`); setSyncMsg("save failed — kept on device"); }
+      finally { reconciling.current = false; }
     }, 3500);
   };
 
   useEffect(() => { memRef.current = mem; schedulePush(); }, [mem]);
 
-  // returning to the app pulls whatever the other device left
+  // returning to the app — and a light poll while visible — pulls whatever the other device left
   useEffect(() => {
     if (!sync) return;
-    const onFocus = async () => {
-      try { const res = await REMOTE.pull(sync); const lt = await localTs(); if (res.data && (res.ts || 0) > lt) { await applyBlob(res.data, res.sha, res.ts, false); setSyncMsg("pulled latest · " + new Date().toLocaleTimeString()); } else { shaRef.current = res.sha || shaRef.current; } } catch (e) {}
-    };
+    const onFocus = () => { if (document.visibilityState !== "hidden") reconcile(sync, "focus", false); };
+    const onVis = () => { if (document.visibilityState === "visible") reconcile(sync, "visibility", false); };
     window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") onFocus(); });
-    return () => window.removeEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVis);
+    const poll = setInterval(() => { if (document.visibilityState === "visible") reconcile(sync, "poll", false); }, 20000);
+    return () => { window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVis); clearInterval(poll); };
   }, [sync]);
 
   const connectSync = async (cfg) => {
     await saveSyncCfg(cfg); setSync(cfg); shaRef.current = null; setSyncMsg("connecting…");
-    try {
-      const res = await REMOTE.pull(cfg);
-      const lt = await localTs();
-      if (res.data && (res.ts || 0) > lt) { await applyBlob(res.data, res.sha, res.ts, true); setSyncMsg("connected · pulled cloud copy"); }
-      else { shaRef.current = res.sha || null; const sh = await REMOTE.push(cfg, { mem: memRef.current, live: liveRef.current }, shaRef.current); shaRef.current = sh || null; setSyncMsg("connected · pushed this device"); }
-      syncReady.current = true;
-    } catch (e) { setSyncMsg("couldn't connect: " + e.message); }
+    dbg(`connect: repo=${cfg.repo} path=${cfg.path} branch=${cfg.branch || "main"}`);
+    syncReady.current = true;
+    await reconcile(cfg, "connect", true);
   };
-  const disconnectSync = async () => { await LS.del(SYNCKEY); setSync(null); shaRef.current = null; setSyncMsg(""); };
-  const syncNow = async () => {
-    if (!sync) return; setSyncMsg("syncing…");
-    try {
-      const res = await REMOTE.pull(sync);
-      const lt = await localTs();
-      if (res.data && (res.ts || 0) > lt) { await applyBlob(res.data, res.sha, res.ts, false); setSyncMsg("pulled latest · " + new Date().toLocaleTimeString()); }
-      else { shaRef.current = res.sha || shaRef.current; const sh = await REMOTE.push(sync, { mem: memRef.current, live: liveRef.current }, shaRef.current); shaRef.current = sh || shaRef.current; await LS.set(TSKEY, Date.now()); setSyncMsg("pushed · " + new Date().toLocaleTimeString()); }
-    } catch (e) { setSyncMsg("sync error: " + e.message); }
-  };
+  const disconnectSync = async () => { await LS.del(SYNCKEY); setSync(null); shaRef.current = null; setSyncMsg(""); dbg("disconnected (config cleared on this device)"); };
+  const syncNow = async () => { if (!sync) return; setSyncMsg("syncing…"); await reconcile(sync, "sync-now", false); };
 
   const plan = useMemo(() => {
     if (!loaded) return [];
@@ -613,7 +720,10 @@ function App() {
     const liveObj = started ? { tag, logs, done: [...done], active, ts: Date.now() } : (pending || null);
     liveRef.current = liveObj;
     if (hasStore && started) saveLive(liveObj);
-    schedulePush();
+    // A live-session edit is a genuine local change — advance the change clock so reconcile()
+    // knows this device has unsynced work (previously only mem-saves bumped it, so logging
+    // sets never marked the device "dirty" and the in-progress session failed to transfer).
+    if (started) { bumpChange().then(schedulePush); } else { schedulePush(); }
   }, [done, active, loaded, pending]);
 
   const workKeys = useMemo(() => { const ks = []; plan.forEach((it, ei) => { if (it.ex.optional) return; it.sets.forEach((s, si) => { if (s.kind === "work") ks.push(`${ei}-${si}`); }); }); return ks; }, [plan]);
@@ -1046,7 +1156,7 @@ function App() {
           );})}
         </div>
 
-        <SyncPanel sync={sync} msg={syncMsg} onConnect={connectSync} onDisconnect={disconnectSync} onSyncNow={syncNow} />
+        <SyncPanel sync={sync} msg={syncMsg} log={syncLog} onConnect={connectSync} onDisconnect={disconnectSync} onSyncNow={syncNow} />
 
         {/* finish + progress */}
         {confirm === "finish" ? (
