@@ -1,0 +1,1145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0E0D0B" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Greek God Coach</title>
+<link rel="preconnect" href="https://esm.sh" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom": "https://esm.sh/react-dom@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+    "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom",
+    "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react"
+  }
+}
+</script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<style> html,body{margin:0;background:#0E0D0B} #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#6E5A1E;font:600 12px ui-monospace,monospace;letter-spacing:.2em;text-transform:uppercase} </style>
+</head>
+<body>
+<div id="root"></div>
+<div id="boot">loading…</div>
+<noscript style="color:#ECE6D8;font-family:sans-serif;padding:2rem;display:block">This app needs JavaScript enabled.</noscript>
+<script type="text/babel" data-type="module" data-presets="react">
+const _b = document.getElementById("boot"); if (_b) _b.remove();
+import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, Minus, Plus, Save, RotateCcw, TrendingUp, TrendingDown, Info, X, Undo2 } from "lucide-react";
+import { createRoot } from "react-dom/client";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+
+/* ───────────────────────── palette ───────────────────────── */
+const C = {
+  bg: "#0E0D0B", card: "#17150F", edge: "#2A2418", activeEdge: "#5A4A1C",
+  bone: "#ECE6D8", ash: "#8A8276", ashDim: "#5C564C",
+  gold: "#C9A227", goldDim: "#6E5A1E", sage: "#7E9A6E", rust: "#B06A3A",
+};
+
+/* ─────────────── PowerBlock weights (per hand) ─────────────── */
+const STAGES = [10, 20, 30, 40, 50, 60, 70, 80, 90];
+const PLATES = (() => { const s = new Set(); STAGES.forEach((st) => [0, 2.5, 5].forEach((d) => s.add(st - d))); return [...s].sort((a, b) => a - b); })();
+const nearest = (w) => PLATES.reduce((b, v) => (Math.abs(v - w) < Math.abs(b - w) ? v : b), PLATES[0]);
+const wIndex = (w) => { let bi = 0; for (let i = 1; i < PLATES.length; i++) if (Math.abs(PLATES[i] - w) < Math.abs(PLATES[bi] - w)) bi = i; return bi; };
+const stepPlate = (w, d) => PLATES[Math.max(0, Math.min(PLATES.length - 1, wIndex(w) + d))];
+const rptLoads = (W) => [W, nearest(W * 0.9), nearest(W * 0.81)];
+const parseRange = (r) => { const p = String(r).split(/[-–]/); return [Number(p[0]), Number(p[1])]; };
+const e1rm = (w, r) => w * (1 + (r || 0) / 30);                       // estimated strength of a set (weight × reps)
+const fiveRM = (e1) => e1 / (1 + 5 / 30);                             // back out an estimated 5-rep max from an e1RM
+const lbToKg = (lb) => Math.round((lb / 2.20462) * 10) / 10;
+const KG = 0.45359237;
+const dispW = (lb, unit) => (unit === "kg" ? Math.round(lb * KG * 10) / 10 : lb);   // dumbbell/lift weight: lb stays canonical, kg is the converted view
+const uw = (unit) => (unit === "kg" ? "kg" : "lb");
+const ulen = (unit) => (unit === "kg" ? "cm" : "in");
+// Greek God / Kinobody Ch.14 standards — ratios of total load (the DB pair) to bodyweight, for 5 reps.
+// Barbell-based in the book, so DB numbers run a touch lower for the same person — treat as directional.
+const STD = [
+  { name: "Incline DB Bench Press", label: "Incline press", ratios: [1.0, 1.2, 1.4] },
+  { name: "Standing DB Shoulder Press", label: "Standing press", ratios: [0.7, 0.85, 1.0] },
+  { name: "Incline DB Curls", label: "Curl", ratios: [0.55, 0.65, 0.75] },
+];
+const TIERS = ["Good", "Great", "Godlike"];
+const WAIST_STD = [0.47, 0.46, 0.45];   // waist as a fraction of height (lower is better)
+const fmtPct = (v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+const pctColor = (v) => (v > 0.05 ? C.sage : v < -0.05 ? C.rust : C.ashDim);
+
+/* ─────────────── random no-repeat order, fresh cues first ─────────────── */
+function buildOrder(cues, recentIdx) {
+  const idx = cues.map((_, i) => i);
+  for (let i = idx.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [idx[i], idx[j]] = [idx[j], idx[i]]; }
+  const recent = new Set(recentIdx || []);
+  return [...idx.filter((i) => !recent.has(i)), ...idx.filter((i) => recent.has(i))];
+}
+
+/* ─────────────── persistent storage (artifact memory) ─────────────── */
+const KEY = "gg:v1", LIVE = "gg:live", TSKEY = "gg:ts", SYNCKEY = "gg:sync";
+const hasStore = typeof window !== "undefined" && !!window.localStorage;
+// LS_BLOCK — single local layer. The self-hosted build swaps this body for localStorage.
+const LS = {
+  async get(k) { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; } catch { return null; } },
+  async set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+  async del(k) { try { localStorage.removeItem(k); } catch (e) {} },
+};
+async function loadState() { return LS.get(KEY); }
+async function saveState(s) { await LS.set(KEY, s); await LS.set(TSKEY, Date.now()); }   // bump change-time for sync
+async function clearState() { await LS.del(KEY); await LS.del(TSKEY); }
+async function loadLive() { return LS.get(LIVE); }
+async function saveLive(s) { await LS.set(LIVE, s); }
+async function clearLive() { await LS.del(LIVE); }
+async function loadSyncCfg() { return LS.get(SYNCKEY); }
+async function saveSyncCfg(c) { return LS.set(SYNCKEY, c); }
+async function localTs() { return (await LS.get(TSKEY)) || 0; }
+
+// Optional cross-device sync — stores one JSON file in your own GitHub repo. Last-write-wins by timestamp
+// (single-user assumption). cfg = { repo:"owner/name", token, path:"data.json", branch:"main" }. Never synced itself.
+const b64enc = (str) => btoa(unescape(encodeURIComponent(str)));
+const b64dec = (b) => decodeURIComponent(escape(atob(String(b).replace(/\n/g, ""))));
+const ghHeaders = (cfg) => ({ Authorization: `Bearer ${cfg.token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" });
+const REMOTE = {
+  async pull(cfg) {
+    const r = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${cfg.path}?ref=${cfg.branch || "main"}&t=${Date.now()}`, { headers: ghHeaders(cfg), cache: "no-store" });
+    if (r.status === 404) return { empty: true, sha: null, ts: 0, data: null };
+    if (!r.ok) throw new Error("read " + r.status);
+    const j = await r.json();
+    let parsed = null; try { parsed = JSON.parse(b64dec(j.content)); } catch (e) {}
+    return { sha: j.sha, ts: parsed?.ts || 0, data: parsed?.data || null };
+  },
+  async push(cfg, data, sha) {
+    const mk = (s) => ({ method: "PUT", headers: { ...ghHeaders(cfg), "Content-Type": "application/json" }, body: JSON.stringify({ message: `coach sync ${new Date().toISOString()}`, content: b64enc(JSON.stringify({ ts: Date.now(), data })), branch: cfg.branch || "main", ...(s ? { sha: s } : {}) }) });
+    let r = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${cfg.path}`, mk(sha));
+    if (r.status === 409 || r.status === 422) { const cur = await this.pull(cfg); r = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${cfg.path}`, mk(cur.sha)); }
+    if (!r.ok) throw new Error("write " + r.status);
+    const j = await r.json();
+    return j.content?.sha || null;
+  },
+};
+const DEFAULT = { version: 1, lastTag: null, sessionCount: 0, weights: {}, recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb" };
+
+/* ───────────────────────── program ───────────────────────── */
+const AB_VARIANTS = [
+  { name: "V-ups", type: "straight", load: 0, sets: 3, range: "10–20", rest: 90, repProgress: true,
+    basic: "Lie flat on your back, arms extended overhead, legs straight. In one motion lift your legs and torso to meet over your hips, reaching your hands toward your toes into a V, then lower under control without letting heels or shoulders touch down.",
+    cues: ["Reach your hands toward your toes and fold like a closing jackknife.","Lift your legs and upper body at the same time to meet over your hips.","Keep your legs as straight as you can — bent knees make it easier, so earn it.","Lower under control; don't let your heels or shoulders crash down.","Keep constant tension — don't fully rest at the bottom between reps.","Curl from your abs, not by yanking your neck or arms.","Exhale hard as you fold up, squeezing the abs at the top.","Keep your lower back from arching off the floor at the bottom.","Point your toes and reach long through the whole body.","Move smoothly; no jerking or bouncing to get up.","If full V-ups are too much, bend the knees and build up.","Balance on your tailbone for a beat at the top before lowering.","Slow the lowering for a two-count to double the work.","Clean folds beat fast flails — make every rep count."] },
+  { name: "DB Russian Twist", type: "straight", load: 10, sets: 3, range: "20–40", rest: 90, single: true,
+    basic: "Sit on the floor, knees bent, leaning back to about 45°. Hold one dumbbell with both hands and rotate it from hip to hip, touching near the floor on each side, chest tall and core braced. Hover your heels to make it harder.",
+    cues: ["Rotate from your ribcage and obliques, not just your arms.","Keep your chest tall and proud as you turn side to side.","Move slowly and control the twist — that control is the point.","Touch the dumbbell near the floor on each side.","Lean back to about forty-five degrees and hold it there.","Brace your core hard so your lower back stays supported.","Hover your heels to crank up the difficulty when ready.","Exhale as you rotate to each side.","Keep the dumbbell close and controlled, no flinging.","Turn your shoulders across your body, not just your hands.","Keep your neck neutral, eyes following the weight.","Stay consistent on how you count — each side, or a full left-right.","Slow down at the end of range and squeeze the oblique.","Stay tall; don't round your back as you fatigue."] },
+  { name: "Bicycle Crunch", type: "straight", load: 0, sets: 3, range: "16–30", rest: 90, repProgress: true,
+    basic: "Lie on your back, hands lightly behind your head, legs lifted with knees bent. Bring one elbow toward the opposite knee while extending the other leg, then switch sides in a smooth pedaling motion, curling your torso with each turn.",
+    cues: ["Twist from your ribcage, bringing elbow toward the opposite knee.","Extend the straight leg fully and keep it off the floor.","Move slowly and with control — the twist is the point, not speed.","Don't pull on your neck; your hands just rest behind your head.","Curl your shoulder blade off the floor with each turn.","Keep your lower back pressed into the floor throughout.","Pedal smoothly, like slow-motion cycling.","Exhale as you crunch across, inhale as you switch.","Reach the elbow past the knee, really rotating the trunk.","Keep constant tension — legs never touch down.","The lower your straight leg, the harder your abs work.","Squeeze the obliques at the peak of each twist.","Don't rush the switch — control both directions.","Equal reps each side; the abs do the turning, not momentum."] },
+  { name: "Reverse Crunch", type: "straight", load: 0, sets: 3, range: "12–20", rest: 90, repProgress: true,
+    basic: "Lie on your back, hands by your sides or gripping the bench behind your head. Bring your knees toward your chest, then curl your pelvis up off the floor so your hips lift, then lower slowly without letting your feet touch down.",
+    cues: ["Curl your pelvis up off the floor — that hip lift is the whole exercise.","Bring the knees in, then lift the hips; don't just swing the legs.","Control the lowering over two to three seconds.","Keep your lower back from arching as you lower.","No momentum — don't swing the legs to bounce up.","Press your hands into the floor for stability, not to push.","Exhale as you curl the hips up, squeezing the lower abs.","Keep the movement small and controlled, all in the abs.","Stop the legs just short of the floor to keep tension.","Think about rolling your hips toward your ribs.","The slower you go, the more the lower abs work.","Keep your neck and shoulders relaxed on the floor.","Lift from the abs, not by kicking the legs.","Build the range gradually as your control improves."] },
+  { name: "Weighted DB Crunch", type: "straight", load: 15, sets: 3, range: "10–15", rest: 90, single: true,
+    basic: "Lie on your back, knees bent, holding one dumbbell against your chest or extended over your forehead. Curl your shoulder blades off the floor by crunching your ribcage toward your pelvis, then lower under control.",
+    cues: ["Curl your ribcage toward your pelvis — a short, hard crunch.","Hold the dumbbell on your chest, or over your forehead for more load.","Lift your shoulder blades off the floor, not your whole back.","Don't pull with your neck; lead with the abs.","Lower under control for a two- to three-count.","Exhale hard at the top and squeeze the abs.","Keep your lower back flat on the floor throughout.","Pause for a beat at the top contraction.","Keep the movement small and deliberate — it's a curl, not a sit-up.","Keep constant tension; don't fully relax at the bottom.","Press the dumbbell over your forehead to increase the load.","Brace before each rep so the abs do all the work.","Don't swing the weight to help you up.","The slower the lowering, the more the abs are worked."] },
+];
+const WORKOUTS = {
+  A: { tag: "A", name: "Push", sub: "Chest · Shoulders · Triceps", exercises: [
+    { name: "Incline DB Bench Press", type: "rpt", heavy: 40, reps: [5, 6, 8], ranges: [[4, 6], [6, 8], [8, 10]], rest: 180, replaces: "Incline Barbell Bench Press", gap: "no barbell",
+      basic: "Bench at ~30°, shoulder blades pinned back and down, feet planted. Lower the dumbbells to the sides of your upper chest, then press up and slightly together, stopping just short of lockout.",
+      cues: ["Imagine bending the dumbbells into a U-shape as you press — it screws your shoulders into their sockets and fires the chest.","Tuck a tennis ball under each armpit and don't let it drop; that keeps your elbows in the right groove.","Push your sternum up to meet the dumbbells instead of curling your shoulders forward — chest to the sky.","Drive your feet into the floor like a leg press; the tension travels up into a stronger press.","Pull the dumbbells down like you're rowing them, then reverse — own the weight, don't just catch it.","Spread your collarbones wide and proud before each rep to pre-load the upper chest.","Lower until you feel a deep stretch across the top of the pecs — that stretch is the rep.","Squeeze the handles like you're leaving fingerprints in the metal; a hard grip wakes the whole arm.","At the top, press both dumbbells toward a single point a foot above your collarbones.","Picture pushing yourself away from the dumbbells, not the dumbbells away from you.","This is your money set — explode the first half, control the lockout. Fast up, never sloppy.","Leave one honest rep in the tank; the rep where bar speed dies is the one you skip.","Keep your forearms stacked dead vertical under the weight — never let them tip in or out.","Crush the dumbbells together with isometric tension at the top to squeeze the inner-upper chest.","Keep your chin tucked and head flat on the bench; lifting your head kills your drive.","Glue your shoulder blades into your back pockets and keep them there the whole set.","Breathe into your belly, brace, then press — never take a breath at the bottom under load.","Lower the dumbbells like you're setting down a glass you don't want to spill.","Don't clack them at the top — stop just short and keep the pecs loaded.","If one side lags, slow both down and re-sync; symmetry now prevents imbalances later.","Treat your elbows as the only hinges; the hands just go along for the ride."] },
+    { name: "Standing DB Shoulder Press", type: "rpt", heavy: 27.5, reps: [5, 6, 8], ranges: [[4, 6], [6, 8], [8, 10]], rest: 180, replaces: "Standing Barbell Press", gap: "no barbell",
+      basic: "Stand tall, glutes and abs braced. From shoulder height, press the dumbbells up and slightly together over your head, stopping just short of lockout. No leaning back.",
+      cues: ["Squeeze your glutes like you're cracking a walnut before you press — it locks your pelvis and kills the back-lean.","Brace your abs as if bracing for a punch; a soft middle leaks all your power.","Drive your head 'through the window' the instant the dumbbells clear it — finish with ears between your arms.","Press the dumbbells up through a narrowing chimney so they finish close together overhead.","Keep your ribs stacked down over your hips; don't let your ribcage flare up to cheat the weight.","Crush the handles and bend them apart — that grip tension stabilizes the whole shoulder.","Start each rep from a dead stop at the shoulders — no bounce out of the bottom.","Screw the dumbbells up and slightly in, like turning two jar lids open above your head.","Press as if you're trying to grow two inches taller, lengthening your whole spine.","Pull your shoulder blades down away from your ears before the first rep.","Keep your forearms vertical, stacked like pillars directly under the weight.","Heavy set — full breath, hard brace, one clean rep shy of a grind.","The instant your lower back wants to arch, that set is done — stop on a good rep.","Don't shrug the weight up; let the delts press and keep the traps quiet until the very top.","Tuck your chin slightly so the dumbbells pass cleanly in front of your face.","Screw your feet into the floor, hip-width, for an unshakable base.","Lower under control to chin height before pressing again — no free-falling reps.","Exhale forcefully through the sticking point, like blowing out candles, to push past it.","Squeeze the dumbbells together overhead for a beat to finish the contraction.","Keep both arms mirrored; chase symmetry on every single rep."] },
+    { name: "DB Lateral Raises", type: "straight", load: 17.5, sets: 3, range: "8–12", rest: 120,
+      basic: "Soft, fixed bend in the elbows. Lean slightly forward and raise the dumbbells out to the sides — leading with the elbows — up to shoulder height, then lower slow. No swinging.",
+      cues: ["Pour the water out — tip your pinkies up at the top like emptying two jugs to nail the side delt.","Lead with your elbows as if someone is lifting you by them with strings.","Push the dumbbells out and away, not just up — long arms make a longer lever and a bigger burn.","Raise to a 'T' at shoulder height; one inch higher and the traps steal the work.","Lean your chest forward about ten degrees so the side delt fights gravity head-on.","Lower like you're pressing through honey — three slow seconds, fighting the whole way.","Freeze a soft bend in your elbows; the angle never changes from start to finish.","Imagine your hands are weightless and all the load hangs from your elbows.","Lock your traps down — if you feel your neck, you've handed the work to the wrong muscle.","Pause a beat at the top with the delts balled up tight before you lower.","This is sculpting, not lifting — pick a weight you can stop on a dime.","Never let the dumbbells rest on your thighs; keep constant tension the whole set.","Reach the dumbbells toward the far walls as you raise, widening your whole frame.","Lead with the pinky edge; don't let your wrists roll forward.","If your body starts swinging to launch the weight, it's too heavy — drop it and stay strict.","Picture two protractors at your shoulders and raise both arms to the exact same angle.","Feel the outer cap of the shoulder doing every bit of the work.","On the last reps, slow the negative even more instead of cutting the range short.","Keep your elbows higher than your wrists from the first inch to the last.","Squeeze at the top as if pinning the delts to the ceiling."] },
+    { name: "DB Skull Crushers", type: "straight", load: 20, sets: 3, range: "6–10", rest: 120,
+      basic: "Lying on the bench, upper arms vertical and fixed. Bend only at the elbows to lower the dumbbells toward your forehead, then extend back up, stopping just short of lockout.",
+      cues: ["Point your elbows at the ceiling and weld them there — if they drift, it becomes a press.","Pretend your upper arms are bolted to a wall; only the forearms swing.","Lower toward a spot just behind the crown of your head for a deeper long-head stretch.","Feel the triceps pull apart like taffy at the bottom before you reverse.","Keep your pinkies slightly higher than your thumbs to stop the elbows flaring.","Control the lowering for a three-count — the stretch under load is the growth.","Throw the dumbbells toward the ceiling to extend, then stop a hair short of lockout.","Tuck your elbows to shoulder-width and hold that frame all set.","Brace your abs so your ribs don't flare and your back stays flat on the bench.","Use a neutral grip, palms facing, to keep your elbows happy under the stretch.","Stop just short of straight arms to keep tension on the muscle, not the joint.","Keep your shoulders pinned to the bench — don't let them ride toward your ears.","Pause at the deep-stretch bottom for a beat to kill the bounce.","Picture cracking a nut behind your head, then squeezing it back up.","Move both forearms as a perfectly matched pair.","Light and surgical beats heavy and sloppy — the elbows always win that argument.","Keep your wrists stacked straight; don't let the dumbbells flop backward.","The last two reps slow down — never scramble to finish a skull crusher.","Hinge at the elbow only, like a trap door swinging on a single hinge."] },
+    { name: "Abs", variantSlot: true, slotKey: "ab", variants: AB_VARIANTS },
+  ]},
+  B: { tag: "B", name: "Pull · Legs", sub: "Back · Biceps · Traps · Legs", exercises: [
+    { name: "Chest-Supported DB Row", type: "rpt", heavy: 40, reps: [5, 6, 8], ranges: [[4, 6], [6, 8], [8, 10]], rest: 180, replaces: "Weighted Chin-ups (pull)", gap: "no pull-up bar",
+      basic: "Chest on the incline bench (~30°). Let the arms hang, then row the dumbbells to your hips, driving the elbows back and squeezing the shoulder blades; a neutral or underhand grip biases the biceps like a chin-up. Lower under control.",
+      cues: ["Imagine a pencil between your shoulder blades and crush it hard at the top of every rep.","Drive your elbows toward your back pockets, not out to the sides.","Keep your chest sealed to the bench — the second it lifts, you're cheating with your hips.","Start each rep from a full hang with the shoulder blades spread wide, then pull and pinch.","Pretend you're snapping a twig between your scapulae at the top.","Pull with your elbows and let your hands be passive hooks — take the biceps out of it.","Lower for a three-count and feel the back load up fully before the next pull.","Pause a beat at the top squeeze; own the contraction, don't just touch and go.","Keep your neck long and neutral — don't crane up to look in the mirror.","Row the dumbbells in an arc toward your waistline to load the mid-back, not the upper traps.","Heavy set — drive with intent, one clean rep shy of failure.","Keep both elbows tracking at the same angle; don't let one wing flare.","Think about tucking the dumbbells into your back pockets at the top.","Brace your abs so your lower back stays neutral and your chest stays planted.","Squeeze so hard at the top that the dumbbells pause on their own for a split second.","On the back-off set, slow everything and chase the squeeze in the mid-back.","If your biceps are screaming and your back is quiet, lead more with the elbows.","Pull the dumbbells 'through' your hands, sourcing the force from your back.","Keep your shoulders down and away from your ears as you pull.","Make the bottom stretch as deliberate as the top squeeze — full range at both ends."] },
+    { name: "DB Romanian Deadlift", type: "rpt", heavy: 50, reps: [6, 8, 10], ranges: [[6, 8], [8, 10], [10, 12]], rest: 180, replaces: "Hang Cleans / Sumo Deadlift", gap: "no barbell",
+      basic: "Soft knees, push the hips back and slide the dumbbells down your thighs with a flat back until you feel the hamstrings stretch, then drive the hips forward to stand tall.",
+      cues: ["Push your hips back like you're shutting a car door with your butt — that starts the hinge.","Drag the dumbbells down your thighs as if you're shaving your legs with them.","Reach your hips toward the wall behind you, not your chest toward the floor.","Pinch an imaginary coin between your glutes at the top to finish with the hips.","Carry a proud chest and pull your shoulder blades down and back the whole set.","Stop lowering the instant your hamstrings shout — that stretch is your depth, not the floor.","Keep a soft knee bend and freeze it; the knees don't dip forward like a squat.","Spread the floor with your feet, screwing them outward, to lock in your hips.","Treat your spine like a long broomstick that never bends from tailbone to skull.","Drive the floor away through your heels on the way up, like a standing leg press.","Keep the dumbbells glued close; an inch forward doubles the strain on your lower back.","Big breath at the top, brace the belt of muscle around your waist, then descend.","Feel the load in the hamstrings and glutes — if it's all lower back, sit the hips back more.","Finish tall and stacked; don't lean back and hyperextend at the top.","Heavy set — control the way down, then snap the hips through on the way up.","The moment your back wants to round, that's your range — never chase extra depth.","Grip the handles like a vice and let the forearms earn their keep.","Keep your weight in your heels and mid-foot, never drifting onto your toes.","Pack your neck in line with your spine; don't crane up to the mirror.","The whole rhythm is just 'hips back, then hips through.'"] },
+    { name: "Quads", variantSlot: true, slotKey: "quad", variants: [
+      { name: "Bulgarian Split Squat", type: "straight", load: 25, sets: 3, range: "6–10", rest: 150,
+        basic: "Stand a stride in front of the bench, rear foot laces-down on it, a dumbbell in each hand. Drop straight down until your front thigh is parallel, front knee tracking over the toes, then drive up through the front heel. Finish all reps on one leg, then switch.",
+        cues: ["Keep most of your weight on the front heel — the back leg is a kickstand, not a driver.","Drop straight down, not forward; your front shin stays close to vertical.","Let the back knee sink toward the floor under control on every rep.","Drive up by pushing the floor away through your front heel.","Stay tall and proud, only a slight forward lean from the hips.","Front knee tracks over the toes — don't let it cave inward.","Brace your core so your lower back stays neutral as you descend.","Go deep enough that your front thigh reaches at least parallel.","Let the dumbbells hang straight down at your sides, grip relaxed.","Find your balance point first, then add speed to the rep.","Squeeze the front glute hard at the top of each rep.","Control the descent for a two- to three-count — own the bottom.","Keep your hips square; don't let one side rotate open.","Finish all your reps on one leg before switching — match the count.","Push through the whole foot, not just the toes, on the way up.","If you wobble, slow down and shorten the range until it's solid."] },
+      { name: "DB Squat", type: "straight", load: 30, sets: 3, range: "8–12", rest: 150,
+        basic: "Hold a dumbbell in each hand at your sides (or racked on your shoulders), feet shoulder-width, toes slightly out. Sit straight down between your hips to at least parallel, chest tall, then drive up through mid-foot.",
+        cues: ["Hold a dumbbell in each hand at your sides, arms long and relaxed.","Or rack the dumbbells on your shoulders for a more upright torso — whatever feels solid.","Feet shoulder-width, toes turned out just slightly.","Sit straight down between your hips, not back like a hinge.","Drive your knees out to track over your toes.","Keep your chest tall and proud the whole way down.","Sink to at least parallel — thighs level with the floor.","Push the floor apart with your feet to lock in your hips.","Drive up through your mid-foot and heels, never your toes.","Brace your core hard before each rep, like bracing for a push.","Keep your heels flat and planted — don't let them lift.","Control the descent; no dropping and bouncing out of the bottom.","Keep a long, neutral spine — no rounding as you go deep.","Squeeze your glutes and stand tall at the top of every rep.","Let the dumbbells ride straight down at your sides through the squat.","Knees out, chest up, sit down — that's the whole rep."] },
+      { name: "DB Goblet Squat", type: "straight", load: 40, sets: 3, range: "8–12", rest: 150, single: true,
+        basic: "Hold one dumbbell vertically against your chest, cupping the top end. Feet shoulder-width, toes slightly out. Sit straight down between your hips, elbows brushing the inside of your knees, then drive up through mid-foot with your chest tall.",
+        cues: ["Hold the dumbbell tight to your chest like a goblet — elbows down.","Sit straight down between your hips, not back like a hinge.","Drive your knees out so they track over your toes.","Keep your chest tall and proud the whole way down.","Let your elbows brush the inside of your knees at the bottom.","Sink to at least parallel — thighs level with the floor.","Push the floor apart with your feet to lock in your hips.","Drive up through your mid-foot and heels, not your toes.","Brace your core hard before each rep, like bracing for a push.","Keep your heels flat and planted — never let them lift.","Control the descent; don't drop and bounce out of the bottom.","Keep a long, neutral spine — no rounding as you go deep.","Squeeze your glutes and stand tall at the top of every rep.","Take a breath at the top, brace, descend, then exhale up.","Keep your weight centered over your mid-foot throughout.","Knees out, chest up, sit down — that's the whole rep."] },
+      { name: "Pistol Squat", type: "straight", load: 10, sets: 3, range: "3–6", rest: 150, single: true,
+        basic: "Stand on one leg, the other extended in front, holding a light dumbbell at your chest as a counterweight. Sit straight down on the working leg under control until you're deep, keeping the free leg off the floor, then drive back up. Switch legs.",
+        cues: ["Hold the dumbbell at your chest as a counterweight — it helps you balance.","Sit straight down on the working leg, slow and controlled.","Keep the free leg straight out in front, heel off the floor.","Reach the weight forward to stay balanced as you lower.","Keep the working heel planted flat the entire rep.","Go only as deep as you can control — full depth comes with time.","Drive up through the whole foot, squeezing the glute at the top.","Keep your chest up and spine long; don't collapse forward.","Brace your core hard to keep the whole rep stable.","Track the working knee over the toes; don't let it cave in.","Control the lowering — a slow negative builds the strength.","If you can't hit depth yet, lower to a box and stand back up.","Steady the balance first, then add depth, then add load.","Match your reps on both legs — the weaker side sets the number.","Keep the movement smooth; no falling into the bottom.","Stay patient — pistols reward control over everything else."] },
+    ] },
+    { name: "Bench-Supported DB Pullover", type: "straight", load: 30, sets: 3, range: "10–12", rest: 120, single: true, replaces: "Weighted Chin-ups (lats)", gap: "no pull-up bar",
+      basic: "Lie back along the bench holding one dumbbell with both hands cupping the top end, arms reaching over your chest with a slight, fixed elbow bend. Lower it back behind your head until you feel a deep stretch through the lats and ribcage, then pull it back over your chest in a wide arc.",
+      cues: ["Keep a slight, fixed bend in your elbows the whole way — this is a pullover, not a triceps extension.","Reach the dumbbell back behind your head until you feel a deep stretch through your lats and ribcage.","Pull the weight with your armpits, not your hands — let the lats drive the arc.","Take a big breath in as you lower; the expanding ribcage deepens the stretch.","Keep your hips down and core braced so your lower back doesn't arch off the bench.","Pull the dumbbell over your chest in a wide arc, like hugging a barrel from below.","Lower slowly for a three-count — the loaded stretch at the bottom is the whole point.","Keep your upper arms from flaring wide so the tension stays on the lats.","Feel the lats lengthen at the bottom and shorten hard as you pull over the top.","Don't bend the elbows to cheat — near-locked arms keep the lats working, not the triceps.","Squeeze the lats at the top as if crushing the dumbbell down toward your chest.","Keep your shoulder blades down and back; don't let the shoulders shrug toward your ears.","Move only at the shoulders — the rest of your body stays still and grounded.","Go only as deep as your shoulders comfortably allow; the stretch should feel good, never pinchy.","Exhale as you pull over, inhale as you lower — let the breath ride the rep.","Keep the dumbbell tracking over the midline of your body through the whole arc.","This is the loaded lat stretch chin-ups gave you for free — make every rep earn it.","Lighter and deeper beats heavy and shallow here; chase the stretch, not the number."] },
+    { name: "Bent-Over DB Flyes", type: "straight", load: 15, sets: 3, range: "8–12", rest: 120,
+      basic: "Hinge to near-parallel with a flat back, soft fixed elbows. Raise the dumbbells out to the sides to back height by leading with the elbows, then lower slow.",
+      cues: ["Hug a giant barrel in reverse — open your arms around it, leading with the elbows.","Pour the water out at the top, pinkies tipped up, to hit the rear delts clean.","Squeeze a grape between your shoulder blades at the top of each rep.","Freeze a soft bend in your elbows; if it opens and closes, it's a row, not a fly.","Hinge to near-parallel and let the dumbbells hang straight down to start.","Spread your wings wide and slow — don't think about lifting the weight up.","Raise out to the sides only to back height; no higher, no swinging.","Keep your neck neutral, gaze at the floor a few feet ahead.","Lock your upper traps down — these are featherweights, let the rear delts do it all.","Pull the dumbbells apart and away from each other, not toward the ceiling.","Pause at the top for a beat with the rear delts balled tight.","Lower like you're setting down something fragile — slow and controlled.","Brace your abs so your torso stays frozen in the hinge as you fatigue.","If your chest pops up to help, lighten the weight and reset the hinge.","Move both arms as one wingspan opening — perfectly mirrored.","Imagine your arms are ropes fixed at the elbow; only the shoulders swing them open.","Keep constant tension; don't let the dumbbells clink together at the bottom.","Feel the very back of your shoulders, behind your shirt seam, doing the work.","Drive the pinky edge up and back to bias the rear delt over the traps."] },
+    { name: "Incline DB Curls", type: "straight", load: 22.5, sets: 3, range: "6–10", rest: 120,
+      basic: "Sit back on the incline, arms hanging straight down. Curl without moving the upper arms, squeeze at the top, then lower all the way to a full stretch.",
+      cues: ["Let your arms hang dead-straight behind your torso — that deep stretch is the whole point of the incline.","Pin your elbows in place; if they swing forward, you've thrown away the stretch.","Curl as if pulling your forearm to your shoulder, not the dumbbell to your face.","Turn your pinky up and out at the top — supinate hard to crush the biceps peak.","Squeeze the biceps at the top like flexing for a photo, then lower slow.","Lower until your arms are fully straight and stretched — never cut the bottom.","Keep your back flat on the bench and shoulders down; no heaving off the pad.","Control the negative for a three-count; the stretch under load is where the size lives.","Pause a beat at the bottom, dead straight, to kill any swing.","Drive your elbows slightly back into the bench to deepen the long-head stretch.","Keep your wrists firm and straight — curl with the biceps, not the wrist.","Keep tension on the biceps the whole way; don't rest at the bottom.","Move the dumbbells as if they were twice as heavy — that much control.","Keep your elbows pinned to your sides; don't let them drift out wide.","If your forearms burn before your biceps, slow the lowering and squeeze harder up top.","Pull your pinky up toward your collarbone to finish the curl.","The last reps slow down — never swing a dumbbell to finish a curl.","Keep your chest open and proud; don't round forward as you fatigue.","Use every inch of that hanging stretch — it's the gift the incline gives you."] },
+    { name: "Single-Leg Calf Raises", type: "straight", load: 30, sets: 3, range: "10–12", rest: 90, optional: true,
+      basic: "Ball of the foot on a step's edge. Drop the heel below the step for a stretch, then press all the way up onto the big toe. Slow and full, holding something for balance.",
+      cues: ["Sink the heel as far below the step as it will go before you press — half the gains are in that stretch.","Press all the way up onto the tip of your big toe, like reaching a high shelf with your foot.","Pause a full second at the top and a full second at the bottom — calves love the stops.","Drive up through the big-toe side, not the pinky edge, to keep the ankle honest.","Keep the working knee straight but unlocked to bias the big gastrocnemius.","Lower slow and controlled; never bounce off the Achilles like a spring.","Lightly hold something for balance so every ounce of focus goes to the calf.","Keep your hips level and squared; don't let the free side drop.","Stand tall like you're on a tightrope — straight up, straight down, no wobble.","Feel the stretch at the bottom as much as the squeeze at the top.","Train calves like you mean it — full reps, real tension, never half-bounces.","Keep your ankle tracking straight forward, not rolling outward under load.","Squeeze as if trying to lift your whole body an extra inch at the top.","Match the depth and reps on both legs so neither calf falls behind.","Slow, full, patient reps beat fast and shallow every single time.","Keep a long spine and tall posture; the work is below the knee, not in the back.","Run the rhythm 'stretch, pause, press, squeeze' on every rep.","On the last reps, hold the bottom stretch a beat longer instead of cutting reps."] },
+    { name: "Abs", variantSlot: true, slotKey: "ab", variants: AB_VARIANTS },
+  ]},
+};
+
+const baseWeight = (ex) => (ex.type === "rpt" ? ex.heavy : ex.load);
+
+/* ─────────────── build sets ─────────────── */
+function buildSets(ex, exIndex, w) {
+  const sets = [];
+  const mk = (kind, label, load, prefill, repsLabel, rest, range) => ({ kind, label, load, repsNum: prefill, repsLabel, rest, range });
+  if (exIndex === 0 && ex.type === "rpt")
+    [[0.6, 5, 120], [0.75, 3, 120], [0.9, 1, 180]].forEach(([p, r, rest], k) => sets.push(mk("warmup", `W${k + 1}`, nearest(w * p), r, String(r), rest, null)));
+  else if (exIndex === 1 && ex.type === "rpt")
+    sets.push(mk("warmup", "W1", nearest(w * 0.6), 4, "4", 90, null));   // second compound: one quick ramp to prime cold joints
+  if (ex.type === "rpt")
+    rptLoads(w).forEach((ld, k) => { const [bot, top] = ex.ranges[k]; sets.push(mk("work", `${k + 1}`, ld, ex.reps[k], `${bot}–${top}`, ex.rest, [bot, top])); });
+  else { const [bot, top] = parseRange(ex.range); for (let k = 0; k < ex.sets; k++) sets.push(mk("work", `${k + 1}`, w, top, `${bot}–${top}`, ex.rest, [bot, top])); }
+  return sets;
+}
+
+const SET_EXEC = 40, TRANSITION = 90;
+const fmtClock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+const fmtRest = (s) => (s % 60 === 0 ? `${s / 60} min` : fmtClock(s));
+
+/* ───────────────────────── stepper ───────────────────────── */
+function Stepper({ value, onStep, minW = 30, disabled, label = "value", fmt }) {
+  const timer = useRef(null);
+  const start = (d) => {
+    if (disabled) return;
+    onStep(d);
+    let delay = 380;
+    const rep = () => { onStep(d); delay = Math.max(60, delay - 40); timer.current = setTimeout(rep, delay); };
+    timer.current = setTimeout(rep, delay);
+  };
+  const stop = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
+  useEffect(() => () => stop(), []);
+  return (
+    <div className="inline-flex select-none items-center rounded-lg border" style={{ borderColor: C.edge, background: "#100E09", opacity: disabled ? 0.45 : 1 }}>
+      <button aria-label={`decrease ${label}`} onPointerDown={() => start(-1)} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop} className="flex h-9 w-9 touch-none items-center justify-center active:scale-90" style={{ color: C.bone }}><Minus size={16} /></button>
+      <span className="px-1 text-center font-mono text-[15px] font-bold" style={{ color: C.bone, minWidth: minW }}>{fmt ? fmt(value) : value}</span>
+      <button aria-label={`increase ${label}`} onPointerDown={() => start(1)} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop} className="flex h-9 w-9 touch-none items-center justify-center active:scale-90" style={{ color: C.bone }}><Plus size={16} /></button>
+    </div>
+  );
+}
+
+// Typable numeric field (decimals allowed) with optional +/- nudges. For free body measurements only,
+// NOT dumbbell weights (those must stay snapped to real PowerBlock plates).
+function NumberField({ value, onChange, step = 1, label, width = 58, placeholder }) {
+  const [txt, setTxt] = useState("");
+  const focused = useRef(false);
+  useEffect(() => { if (!focused.current) setTxt(value ? String(value) : ""); }, [value]);
+  const commit = (raw) => { if (raw === "" || raw === ".") { onChange(0); return; } const v = parseFloat(raw); if (!isNaN(v) && v >= 0) onChange(Math.round(v * 100) / 100); };
+  const nudge = (d) => { const base = parseFloat(txt); const v = Math.max(0, Math.round(((isNaN(base) ? 0 : base) + d) * 100) / 100); setTxt(String(v)); onChange(v); };
+  return (
+    <div className="inline-flex items-center rounded-lg border" style={{ borderColor: C.edge, background: "#100E09" }}>
+      <button aria-label={`decrease ${label}`} onClick={() => nudge(-step)} className="flex h-9 w-8 items-center justify-center active:scale-90" style={{ color: C.bone }}><Minus size={15} /></button>
+      <input type="text" inputMode="decimal" aria-label={label} placeholder={placeholder || "—"} value={txt}
+        onFocus={() => { focused.current = true; }}
+        onChange={(e) => setTxt(e.target.value.replace(/[^0-9.]/g, ""))}
+        onBlur={() => { focused.current = false; commit(txt); }}
+        onKeyDown={(e) => { if (e.key === "Enter") { commit(txt); e.currentTarget.blur(); } }}
+        className="bg-transparent text-center font-mono text-[15px] font-bold outline-none placeholder:opacity-40" style={{ color: C.bone, width }} />
+      <button aria-label={`increase ${label}`} onClick={() => nudge(step)} className="flex h-9 w-8 items-center justify-center active:scale-90" style={{ color: C.bone }}><Plus size={15} /></button>
+    </div>
+  );
+}
+const ANIM = {
+  "Incline DB Bench Press": "press recline", "Standing DB Shoulder Press": "press", "DB Lateral Raises": "raise", "DB Skull Crushers": "extend",
+  "Chest-Supported DB Row": "row", "DB Romanian Deadlift": "hinge", "Bench-Supported DB Pullover": "pullover", "Incline DB Curls": "curl recline",
+  "Bent-Over DB Flyes": "fly", "Single-Leg Calf Raises": "calf",
+  "Bulgarian Split Squat": "squat", "DB Squat": "squat", "DB Goblet Squat": "squat", "Pistol Squat": "squat",
+  "V-ups": "vup", "DB Russian Twist": "situp", "Bicycle Crunch": "vup", "Reverse Crunch": "legraise", "Weighted DB Crunch": "situp",
+};
+function ExerciseAnim({ kind }) {
+  return (
+    <div className="ggwrap">
+      <div className="ggground" />
+      <div className={`ggfig ${kind}`}>
+        <div className="gglegs"><div className="ggleg b" /><div className="ggleg f" /></div>
+        <div className="ggbody">
+          <div className="ggtorso" /><div className="gghead" />
+          <div className="ggarm"><div className="ggupper" /><div className="ggelbow"><div className="ggfore" /><div className="ggdb" /></div></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ───────────────────────── progress + projection chart ───────────────────────── */
+const ALL_EX = (() => {
+  const seen = new Set(); const out = [];
+  [...WORKOUTS.A.exercises, ...WORKOUTS.B.exercises].forEach((e) => {
+    (e.variantSlot ? e.variants : [e]).forEach((x) => { if (!seen.has(x.name)) { seen.add(x.name); out.push(x); } });
+  });
+  return out;
+})();
+const SHORT = {
+  "Incline DB Bench Press": "Incline Press", "Standing DB Shoulder Press": "Shoulder Press", "DB Lateral Raises": "Lateral Raise", "DB Skull Crushers": "Skull Crusher",
+  "Chest-Supported DB Row": "Row", "DB Romanian Deadlift": "RDL", "Bent-Over DB Flyes": "Rear Fly", "Incline DB Curls": "Incline Curl", "Single-Leg Calf Raises": "Calf Raise",
+  "Bench-Supported DB Pullover": "Pullover", "Bulgarian Split Squat": "Bulgarian", "DB Squat": "DB Squat", "DB Goblet Squat": "Goblet Squat", "Pistol Squat": "Pistol",
+  "V-ups": "V-ups", "DB Russian Twist": "Russian Twist", "Bicycle Crunch": "Bicycle", "Reverse Crunch": "Reverse Crunch", "Weighted DB Crunch": "Weighted Crunch",
+};
+const ProgressChart = React.memo(function ProgressChart({ mem }) {
+  const [sel, setSel] = useState(ALL_EX[0].name);
+  const ex = ALL_EX.find((e) => e.name === sel);
+  const rp = ex.repProgress;
+  const pref = mem.unit || "lb";
+  const D = (v) => (rp ? v : dispW(v, pref));                 // convert weights for display; reps pass through
+  const unit = rp ? " reps" : ` ${uw(pref)}`;
+  const hist = (mem.history?.[ex.name]) || [];
+  const w0 = rp ? (hist.length ? hist[hist.length - 1].r : parseRange(ex.range)[0]) : (mem.weights?.[ex.name] ?? baseWeight(ex));
+  const nowMs = Date.now();
+  const histPts = hist.map((h) => ({ week: Math.round((new Date(h.t).getTime() - nowMs) / (7 * 864e5)), w: rp ? h.r : h.w, r: h.r }));
+
+  // calibrate the forecast to how YOU actually progress: linear fit on logged weight vs time,
+  // blended with the program's expected pace until you've logged enough to trust your own slope
+  const core = ex.type === "rpt"; const bookR0 = core ? 1.75 : 0.8, tau = core ? 18 : 16;
+  const reg = new Map(); histPts.forEach((p) => reg.set(p.week, p.w)); reg.set(0, w0);
+  const pts = [...reg.entries()].map(([week, w]) => ({ week, w }));
+  let r0 = bookR0, personalized = false;
+  if (pts.length >= 2) {
+    const n = pts.length;
+    const sx = pts.reduce((s, p) => s + p.week, 0), sy = pts.reduce((s, p) => s + p.w, 0);
+    const sxx = pts.reduce((s, p) => s + p.week * p.week, 0), sxy = pts.reduce((s, p) => s + p.week * p.w, 0);
+    const den = n * sxx - sx * sx;
+    let slope = den !== 0 ? (n * sxy - sx * sy) / den : 0;     // lb/hand per week, from YOUR data
+    slope = Math.max(0, Math.min(3, slope));                    // clamp out noise / deloads
+    const span = Math.abs(Math.min(...pts.map((p) => p.week)));
+    const conf = Math.min(1, (n - 1) / 4) * Math.min(1, span / 6);  // trust grows with points + time
+    r0 = conf * slope + (1 - conf) * bookR0;
+    personalized = conf >= 0.34;
+  }
+  const gain = (t) => r0 * tau * (1 - Math.exp(-t / tau));
+
+  const minW = Math.min(0, ...histPts.map((p) => p.week));
+  const map = new Map();
+  for (let wk = minW; wk <= 26; wk++) map.set(wk, { week: wk });
+  for (let wk = 0; wk <= 26; wk++) map.get(wk).projected = Math.round((w0 + gain(wk)) * 10) / 10;
+  histPts.forEach((p) => { const o = map.get(p.week) || { week: p.week }; o.actual = p.w; o.reps = p.r; map.set(p.week, o); });
+  map.get(0).actual = w0;
+  const data = [...map.values()].sort((a, b) => a.week - b.week).map((d) => ({ week: d.week, actual: d.actual != null ? D(d.actual) : undefined, projected: d.projected != null ? D(d.projected) : undefined, reps: d.reps }));
+
+  const best = rp ? hist.reduce((b, h) => (!b || h.r > b.r ? h : b), null) : hist.reduce((b, h) => (!b || h.w > b.w || (h.w === b.w && h.r > b.r) ? h : b), null);
+  const bestVal = best ? (rp ? best.r : best.w) : w0;
+  const milestones = [[1, "1 wk"], [4, "1 mo"], [12, "3 mo"], [26, "6 mo"]].map(([wk, label]) => ({ label, val: rp ? Math.round(w0 + gain(wk)) : nearest(w0 + gain(wk)) }));
+
+  return (
+    <div className="mt-8 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Progress & projection</span>
+        <span className="flex items-center gap-3 font-mono text-[9px]" style={{ color: C.ashDim }}>
+          <span className="flex items-center gap-1"><span style={{ width: 14, height: 2, background: C.gold, display: "inline-block" }} />logged</span>
+          <span className="flex items-center gap-1"><span style={{ width: 14, borderTop: `2px dotted ${C.goldDim}`, display: "inline-block" }} />forecast</span>
+        </span>
+      </div>
+
+      <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+        {ALL_EX.map((e) => (
+          <button key={e.name} onClick={() => setSel(e.name)} className="shrink-0 rounded-full border px-3 py-1.5 font-mono text-[11px] whitespace-nowrap"
+            style={{ borderColor: sel === e.name ? C.goldDim : C.edge, background: sel === e.name ? "#241F12" : "transparent", color: sel === e.name ? C.gold : C.ash }}>
+            {SHORT[e.name]}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-4 flex items-end justify-between">
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>best lift</p>
+          <p className="font-mono text-2xl font-bold leading-none" style={{ color: C.bone }}>
+            {D(bestVal)}<span className="text-sm font-normal" style={{ color: C.ash }}>{unit}</span>
+            {best ? (rp ? null : <span className="text-sm font-normal" style={{ color: C.ash }}> × {best.r} reps</span>) : <span className="text-xs font-normal" style={{ color: C.ashDim }}> · no logs yet</span>}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>now</p>
+          <p className="font-mono text-lg font-bold leading-none" style={{ color: C.gold }}>{D(w0)}<span className="text-xs font-normal" style={{ color: C.ash }}>{unit}</span></p>
+        </div>
+      </div>
+
+      <div className="mt-4" style={{ height: 200, width: "100%" }}>
+        <ResponsiveContainer>
+          <LineChart data={data} margin={{ top: 8, right: 10, bottom: 0, left: -18 }}>
+            <CartesianGrid stroke="#221E15" vertical={false} />
+            <XAxis dataKey="week" type="number" domain={[minW, 26]} tick={{ fill: C.ashDim, fontSize: 10, fontFamily: "monospace" }} tickFormatter={(v) => (v === 0 ? "now" : `${v}w`)} stroke="#2A2418" />
+            <YAxis tick={{ fill: C.ashDim, fontSize: 10, fontFamily: "monospace" }} stroke="#2A2418" width={34} domain={["auto", "auto"]} />
+            <Tooltip contentStyle={{ background: "#15120A", border: `1px solid ${C.edge}`, borderRadius: 8, fontFamily: "monospace", fontSize: 11 }} labelStyle={{ color: C.ash }} itemStyle={{ color: C.bone }} formatter={(v, n) => [`${v}${unit}`, n]} labelFormatter={(v) => (v === 0 ? "now" : `week ${v}`)} />
+            <ReferenceLine x={0} stroke={C.goldDim} strokeDasharray="2 3" />
+            <Line type="monotone" dataKey="actual" stroke={C.gold} strokeWidth={3} dot={{ r: 3, fill: C.gold, strokeWidth: 0 }} connectNulls isAnimationActive={false} />
+            <Line type="monotone" dataKey="projected" stroke={C.goldDim} strokeWidth={2} strokeDasharray="2 5" dot={false} isAnimationActive={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="mt-3 grid grid-cols-4 gap-2">
+        {milestones.map((m) => (
+          <div key={m.label} className="rounded-lg border p-2 text-center" style={{ borderColor: C.edge }}>
+            <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>{m.label}</p>
+            <p className="font-mono text-sm font-bold" style={{ color: C.bone }}>{D(m.val)}<span className="text-[10px] font-normal" style={{ color: C.ash }}>{rp ? "" : ` ${uw(pref)}`}</span></p>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 font-mono text-[9px]" style={{ color: C.ashDim }}>{personalized ? "forecast fitted to your logged trend" : "forecast on the program's expected pace — your logs reshape it as you go"} · {rp ? "reps" : ex.single ? "single DB" : "per hand"} · estimate</p>
+    </div>
+  );
+});
+
+/* ───────────────────────── app ───────────────────────── */
+function SyncPanel({ sync, msg, onConnect, onDisconnect, onSyncNow }) {
+  const [f, setF] = useState({ repo: sync?.repo || "", token: sync?.token || "", path: sync?.path || "data.json", branch: sync?.branch || "main" });
+  const base = { background: "#100E09", border: `1px solid ${C.edge}`, color: C.bone };
+  const lbl = "font-mono text-[9px] uppercase tracking-wider";
+  return (
+    <div className="mt-6 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
+      <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Sync across devices</span>
+      <p className="mt-2 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>Keeps one JSON file in your own GitHub repo so every device shares the same data. {sync ? <span style={{ color: C.sage }}>connected to {sync.repo}</span> : "not connected — this device is local-only."}</p>
+      <div className="mt-3 space-y-2">
+        <div><p className={lbl} style={{ color: C.ashDim }}>repo (owner/name)</p><input value={f.repo} onChange={(e) => setF({ ...f, repo: e.target.value.trim() })} placeholder="dima/workout-data" autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={base} /></div>
+        <div><p className={lbl} style={{ color: C.ashDim }}>fine-grained token (contents: read & write)</p><input value={f.token} onChange={(e) => setF({ ...f, token: e.target.value.trim() })} type="password" placeholder="github_pat_…" autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={base} /></div>
+        <div className="flex gap-2">
+          <div className="flex-1"><p className={lbl} style={{ color: C.ashDim }}>file path</p><input value={f.path} onChange={(e) => setF({ ...f, path: e.target.value.trim() })} autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={base} /></div>
+          <div className="w-24"><p className={lbl} style={{ color: C.ashDim }}>branch</p><input value={f.branch} onChange={(e) => setF({ ...f, branch: e.target.value.trim() })} autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={base} /></div>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button onClick={() => onConnect(f)} disabled={!f.repo || !f.token} className="rounded-full px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: f.repo && f.token ? C.gold : C.card, color: f.repo && f.token ? C.bg : C.ashDim, opacity: f.repo && f.token ? 1 : 0.5 }}>{sync ? "Reconnect" : "Connect"}</button>
+        {sync && <button onClick={onSyncNow} className="rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Sync now</button>}
+        {sync && <button onClick={onDisconnect} className="rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ashDim }}>Disconnect</button>}
+      </div>
+      {msg && <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>{msg}</p>}
+      <p className="mt-3 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>the token is saved only on this device and never written into the repo. use a fine-grained token limited to this one repo, contents: read &amp; write. reading is automatic; saving happens a few seconds after changes.</p>
+    </div>
+  );
+}
+
+function App() {
+  const [loaded, setLoaded] = useState(false);
+  const [mem, setMem] = useState(DEFAULT);
+  const [tag, setTag] = useState("A");
+  const [sync, setSync] = useState(null);          // {url,key,code} or null
+  const [syncMsg, setSyncMsg] = useState("");       // human-readable status
+  const pushTimer = useRef(null);
+  const memRef = useRef(DEFAULT);
+  const liveRef = useRef(null);
+  const shaRef = useRef(null);
+  const syncReady = useRef(false);
+  const quietRef = useRef(0);   // suppress push echoes right after adopting a remote copy
+  const now = new Date();
+  const today = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+
+  // load memory once
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const s = hasStore ? await loadState() : null;
+      if (!alive) return;
+      const m = s || DEFAULT;
+      setMem(m); memRef.current = m;
+      setTag(m.lastTag ? (m.lastTag === "A" ? "B" : "A") : "A");
+      const live = hasStore ? await loadLive() : null;
+      const liveOk = live && Array.isArray(live.done) && (live.done.length > 0 || live.active);
+      if (liveOk && Date.now() - (live.ts || 0) < 86400000) { setPending(live); liveRef.current = live; }
+      // cross-device sync: adopt remote if it's newer than this device, else seed remote from local
+      const cfg = hasStore ? await loadSyncCfg() : null;
+      if (cfg && cfg.repo && cfg.token) {
+        setSync(cfg);
+        try {
+          const res = await REMOTE.pull(cfg);
+          const lt = await localTs();
+          if (res.data && (res.ts || 0) > lt) { await applyBlob(res.data, res.sha, res.ts, true); }
+          else { shaRef.current = res.sha || null; const blob = { mem: m, live: liveOk ? live : null }; const ns = await REMOTE.push(cfg, blob, shaRef.current); shaRef.current = ns || shaRef.current; }
+          if (alive) setSyncMsg("synced · " + new Date().toLocaleTimeString());
+        } catch (e) { if (alive) setSyncMsg("offline — using this device's copy"); }
+      }
+      setLoaded(true);
+      syncReady.current = true;   // only start auto-pushing after the initial reconcile
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // adopt a pulled {mem, live} blob into local state + storage
+  const applyBlob = async (blob, sha, ts, setTagToo) => {
+    const rmem = blob && blob.mem ? blob.mem : blob;                 // tolerate older mem-only files
+    const rlive = blob && blob.mem ? blob.live : null;
+    quietRef.current = Date.now() + 1800;
+    shaRef.current = sha || shaRef.current;
+    memRef.current = rmem; setMem(rmem);
+    await LS.set(KEY, rmem); await LS.set(TSKEY, ts || Date.now());
+    if (setTagToo) setTag(rmem.lastTag ? (rmem.lastTag === "A" ? "B" : "A") : "A");
+    const liveOk = rlive && Array.isArray(rlive.done) && (rlive.done.length > 0 || rlive.active);
+    if (liveOk) { liveRef.current = rlive; if (hasStore) await LS.set(LIVE, rlive); setPending(rlive); }
+    else { liveRef.current = null; if (hasStore) await LS.del(LIVE); setPending(null); }
+  };
+
+  const schedulePush = () => {
+    if (!sync || !syncReady.current || Date.now() < quietRef.current) return;
+    if (pushTimer.current) clearTimeout(pushTimer.current);
+    pushTimer.current = setTimeout(async () => {
+      try { setSyncMsg("saving…"); const sh = await REMOTE.push(sync, { mem: memRef.current, live: liveRef.current }, shaRef.current); shaRef.current = sh || shaRef.current; await LS.set(TSKEY, Date.now()); setSyncMsg("saved · " + new Date().toLocaleTimeString()); }
+      catch (e) { setSyncMsg("save failed — kept on device"); }
+    }, 3500);
+  };
+
+  useEffect(() => { memRef.current = mem; schedulePush(); }, [mem]);
+
+  // returning to the app pulls whatever the other device left
+  useEffect(() => {
+    if (!sync) return;
+    const onFocus = async () => {
+      try { const res = await REMOTE.pull(sync); const lt = await localTs(); if (res.data && (res.ts || 0) > lt) { await applyBlob(res.data, res.sha, res.ts, false); setSyncMsg("pulled latest · " + new Date().toLocaleTimeString()); } else { shaRef.current = res.sha || shaRef.current; } } catch (e) {}
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") onFocus(); });
+    return () => window.removeEventListener("focus", onFocus);
+  }, [sync]);
+
+  const connectSync = async (cfg) => {
+    await saveSyncCfg(cfg); setSync(cfg); shaRef.current = null; setSyncMsg("connecting…");
+    try {
+      const res = await REMOTE.pull(cfg);
+      const lt = await localTs();
+      if (res.data && (res.ts || 0) > lt) { await applyBlob(res.data, res.sha, res.ts, true); setSyncMsg("connected · pulled cloud copy"); }
+      else { shaRef.current = res.sha || null; const sh = await REMOTE.push(cfg, { mem: memRef.current, live: liveRef.current }, shaRef.current); shaRef.current = sh || null; setSyncMsg("connected · pushed this device"); }
+      syncReady.current = true;
+    } catch (e) { setSyncMsg("couldn't connect: " + e.message); }
+  };
+  const disconnectSync = async () => { await LS.del(SYNCKEY); setSync(null); shaRef.current = null; setSyncMsg(""); };
+  const syncNow = async () => {
+    if (!sync) return; setSyncMsg("syncing…");
+    try {
+      const res = await REMOTE.pull(sync);
+      const lt = await localTs();
+      if (res.data && (res.ts || 0) > lt) { await applyBlob(res.data, res.sha, res.ts, false); setSyncMsg("pulled latest · " + new Date().toLocaleTimeString()); }
+      else { shaRef.current = res.sha || shaRef.current; const sh = await REMOTE.push(sync, { mem: memRef.current, live: liveRef.current }, shaRef.current); shaRef.current = sh || shaRef.current; await LS.set(TSKEY, Date.now()); setSyncMsg("pushed · " + new Date().toLocaleTimeString()); }
+    } catch (e) { setSyncMsg("sync error: " + e.message); }
+  };
+
+  const plan = useMemo(() => {
+    if (!loaded) return [];
+    return WORKOUTS[tag].exercises.map((ex, i) => {
+      let realEx = ex;
+      if (ex.variantSlot) {
+        const choice = mem[ex.slotKey + "Choice"] ?? 0;
+        realEx = { ...ex.variants[choice], variantSlot: true, slotKey: ex.slotKey, variants: ex.variants, slotIndex: choice };
+      }
+      const w = mem.weights[realEx.name] ?? baseWeight(realEx);
+      return { ex: realEx, w, sets: buildSets(realEx, i, w), order: buildOrder(realEx.cues, mem.recentCues[realEx.name]) };
+    });
+  }, [tag, mem, loaded]);
+
+  const estMin = useMemo(() => { let t = 0; plan.forEach((it) => { it.sets.forEach((s) => { t += SET_EXEC + s.rest; }); t += TRANSITION; }); return Math.round(t / 60); }, [plan]);
+
+  const [active, setActive] = useState(null);
+  const [cue, setCue] = useState("");
+  const [rest, setRest] = useState(null);
+  const [restLeft, setRestLeft] = useState(0);
+  const [done, setDone] = useState(() => new Set());
+  const [logs, setLogs] = useState({});
+  const [summary, setSummary] = useState(null);
+  const [openInfo, setOpenInfo] = useState(null);
+  const [confirm, setConfirm] = useState(null);   // null | "finish" | "reset"
+  const [pending, setPending] = useState(null);    // saved in-progress session offered for resume
+  const cursors = useRef({});
+  const audioCtx = useRef(null);
+  const skipNextReset = useRef(false);
+
+  const primeAudio = () => { try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) { const ctx = audioCtx.current || (audioCtx.current = new AC()); if (ctx.state === "suspended") ctx.resume(); } } catch (e) {} };
+  const fireAlert = useCallback(() => {
+    try { if (navigator.vibrate) navigator.vibrate([130, 70, 130]); } catch (e) {}
+    try {
+      const ctx = audioCtx.current; if (!ctx) return;
+      const beep = (t, f) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = "sine"; o.frequency.value = f; g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.35, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32); o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.34); };
+      const t0 = ctx.currentTime; beep(t0, 880); beep(t0 + 0.4, 1175);
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
+    if (skipNextReset.current) { skipNextReset.current = false; return; }
+    const init = {};
+    plan.forEach((it, ei) => it.sets.forEach((s, si) => { init[`${ei}-${si}`] = { weight: s.load, reps: s.repsNum }; }));
+    setLogs(init); setActive(null); setCue(""); setRest(null); setDone(new Set()); cursors.current = {}; setOpenInfo(null);
+  }, [plan]);
+
+  const busy = active !== null || rest !== null;
+  const sessionStarted = active !== null || rest !== null || done.size > 0;
+  const setVariant = async (key, idx) => { const nm = { ...mem, [key + "Choice"]: idx }; if (hasStore) await saveState(nm); setMem(nm); };
+  const workDoneCount = useMemo(() => [...done].length, [done]);
+
+  const advance = useCallback(() => {
+    if (!active) return;
+    const exIdx = Number(active.split("-")[0]);
+    const item = plan[exIdx];
+    const n = cursors.current[exIdx] ?? 0;
+    if (n >= item.order.length) { setCue(item.ex.cues[item.order[item.order.length - 1]]); return; }
+    setCue(item.ex.cues[item.order[n]]);
+    cursors.current[exIdx] = n + 1;
+  }, [active, plan]);
+
+  useEffect(() => { if (!active) return; advance(); const id = setInterval(advance, 12000); return () => clearInterval(id); }, [active, advance]);
+
+  // clock-based rest: remaining is computed from an absolute end time, so a locked/backgrounded
+  // screen can't desync it — on return to foreground we recompute and fire if it already elapsed.
+  useEffect(() => {
+    if (!rest) return;
+    let stopped = false;
+    const check = () => {
+      if (stopped) return;
+      const left = Math.round((rest.endAt - Date.now()) / 1000);
+      if (left <= 0) { fireAlert(); setDone((d) => new Set(d).add(rest.key)); setRest(null); return; }
+      setRestLeft(left);
+    };
+    check();
+    const id = setInterval(check, 500);
+    const onVis = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    return () => { stopped = true; clearInterval(id); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("focus", onVis); };
+  }, [rest, fireAlert]);
+
+  // autosave the live session at each set boundary so a lock/refresh/device-switch can be resumed
+  useEffect(() => {
+    if (!loaded) return;
+    const started = done.size > 0 || active !== null;
+    const liveObj = started ? { tag, logs, done: [...done], active, ts: Date.now() } : (pending || null);
+    liveRef.current = liveObj;
+    if (hasStore && started) saveLive(liveObj);
+    schedulePush();
+  }, [done, active, loaded, pending]);
+
+  const workKeys = useMemo(() => { const ks = []; plan.forEach((it, ei) => { if (it.ex.optional) return; it.sets.forEach((s, si) => { if (s.kind === "work") ks.push(`${ei}-${si}`); }); }); return ks; }, [plan]);
+  const workTotal = workKeys.length;
+  const workDone = useMemo(() => workKeys.filter((k) => done.has(k)).length, [workKeys, done]);
+
+  const stepW = (key, d, set) => setLogs((L) => {
+    const cur = L[key]?.weight ?? set.load;
+    const nv = stepPlate(cur, d);
+    const next = { ...L, [key]: { weight: nv, reps: L[key]?.reps ?? set.repsNum } };
+    const [ei] = key.split("-").map(Number);
+    const it = plan[ei];
+    if (it && it.ex.type === "rpt" && set.kind === "work" && set.label === "1") {
+      const work = it.sets.map((s, idx) => ({ s, idx })).filter((x) => x.s.kind === "work");
+      const loads = rptLoads(nv);
+      work.forEach(({ s, idx }, wi) => {
+        if (wi === 0) return;
+        const k2 = `${ei}-${idx}`;
+        const curW = L[k2]?.weight ?? s.load;
+        if (curW === s.load) next[k2] = { weight: loads[wi], reps: L[k2]?.reps ?? s.repsNum };  // only cascade sets you haven't hand-edited
+      });
+    }
+    return next;
+  });
+  const stepR = (key, d, set) => setLogs((L) => { const cur = L[key]?.reps ?? set.repsNum; return { ...L, [key]: { weight: L[key]?.weight ?? set.load, reps: Math.max(0, cur + d) } }; });
+  const startSet = (key) => { if (!busy) { primeAudio(); setActive(key); setOpenInfo(null); } };
+  const finishSet = (set) => { const key = active; primeAudio(); setActive(null); setCue(""); setRestLeft(set.rest); setRest({ key, endAt: Date.now() + set.rest * 1000, total: set.rest }); setOpenInfo(null); };
+  const skipRest = () => { setDone((d) => new Set(d).add(rest.key)); setRest(null); setOpenInfo(null); };
+  const addRest = () => setRest((r) => (r ? { ...r, endAt: r.endAt + 30000, total: r.total + 30 } : null));
+  const cancelSet = () => { setActive(null); setCue(""); setOpenInfo(null); };
+  const undoSet = (key) => setDone((dn) => { const n = new Set(dn); n.delete(key); return n; });
+
+  /* progression engine — reads what you actually did */
+  const finishWorkout = async () => {
+    const newWeights = { ...mem.weights };
+    const newStalls = { ...(mem.stalls || {}) };
+    const changes = [];
+    plan.forEach((item, exIdx) => {
+      const { ex, w, sets } = item;
+      const work = sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "work");
+      let nw = w, deload = false;
+      if (ex.type === "rpt") {
+        const heavy = work[0]; const key = `${exIdx}-${heavy.si}`;
+        if (done.has(key)) {
+          const r = logs[key]?.reps ?? heavy.s.repsNum; const [bot, top] = heavy.s.range;
+          if (r >= top) nw = stepPlate(w, 1); else if (r < bot) nw = stepPlate(w, -1);
+          // stall watch: 3 sessions stuck at the same weight without reaching the top → deload ~10% and rebuild
+          let st = newStalls[ex.name] || 0;
+          if (nw !== w) st = 0;
+          else { st += 1; if (st >= 3) { nw = stepPlate(w, -2); st = 0; deload = true; } }
+          newStalls[ex.name] = st;
+        }
+      } else if (!ex.repProgress) {
+        const keys = work.map((x) => `${exIdx}-${x.si}`);
+        if (keys.every((k) => done.has(k))) {
+          const reps = keys.map((k) => logs[k]?.reps ?? 0); const [bot, top] = work[0].s.range;
+          if (Math.min(...reps) >= top) nw = stepPlate(w, 1); else if (reps[0] < bot) nw = stepPlate(w, -1);
+        }
+      }
+      newWeights[ex.name] = nw;
+      if (nw !== w) changes.push({ name: ex.name, from: w, to: nw, dir: nw > w ? "up" : "down", single: !!ex.single, deload });
+    });
+
+    const recentCues = { ...mem.recentCues };
+    const newHistory = { ...(mem.history || {}) };
+    const newSetHistory = { ...(mem.setHistory || {}) };
+    const stamp = new Date().toISOString();
+    plan.forEach((item, exIdx) => {
+      const c = cursors.current[exIdx] ?? 0; recentCues[item.ex.name] = item.order.slice(0, c);
+      const work = item.sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "work");
+      let rec = null;
+      if (item.ex.type === "rpt") { const h = work[0]; const k = `${exIdx}-${h.si}`; if (done.has(k)) rec = { t: stamp, w: logs[k].weight, r: logs[k].reps }; }
+      else { const ks = work.map((x) => `${exIdx}-${x.si}`).filter((k) => done.has(k)); if (ks.length) rec = { t: stamp, w: logs[ks[0]].weight, r: Math.max(...ks.map((k) => logs[k].reps)) }; }
+      if (rec) newHistory[item.ex.name] = [...(newHistory[item.ex.name] || []), rec].slice(-40);
+      // per-set progression history (work sets only)
+      const sh = { ...(newSetHistory[item.ex.name] || {}) };
+      work.forEach((x) => { const k = `${exIdx}-${x.si}`; if (done.has(k)) sh[x.s.label] = [...(sh[x.s.label] || []), { t: stamp, w: logs[k].weight, r: logs[k].reps }].slice(-30); });
+      newSetHistory[item.ex.name] = sh;
+    });
+    const lastChanges = {}; changes.forEach((c) => { lastChanges[c.name] = c; });
+
+    const newMem = { ...mem, version: 1, lastTag: tag, sessionCount: (mem.sessionCount || 0) + 1, weights: newWeights, recentCues, lastChanges, history: newHistory, setHistory: newSetHistory, stalls: newStalls };
+    if (hasStore) { await saveState(newMem); await clearLive(); }
+    setPending(null);
+    setSummary({ tag, changes });
+    setMem(newMem);
+    setTag(tag === "A" ? "B" : "A");
+    setOpenInfo(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const resumeSession = () => {
+    if (!pending) return;
+    if (pending.tag !== tag) { skipNextReset.current = true; setTag(pending.tag); }
+    setLogs(pending.logs || {});
+    setDone(new Set(pending.done || []));
+    setPending(null);
+  };
+  const discardSession = async () => { if (hasStore) await clearLive(); setPending(null); };
+
+  const setBody = async (patch) => { const body = { ...(mem.body || {}), ...patch }; const nm = { ...mem, body }; if (hasStore) await saveState(nm); setMem(nm); };
+  const setUnit = async (u) => { const nm = { ...mem, unit: u }; if (hasStore) await saveState(nm); setMem(nm); };
+  const logBW = async () => {
+    const body = { ...(mem.body || {}) };
+    if (!body.bw) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const hist = (body.bwHist || []).filter((e) => e.t.slice(0, 10) !== today);
+    body.bwHist = [...hist, { t: new Date().toISOString(), w: body.bw }].slice(-60);
+    const nm = { ...mem, body }; if (hasStore) await saveState(nm); setMem(nm);
+  };
+
+  const resetMemory = async () => { if (hasStore) { await clearState(); await clearLive(); } setMem(DEFAULT); setTag("A"); setSummary(null); setPending(null); setConfirm(null); };
+
+  const body = mem.body || {};
+  const unit = mem.unit || "lb";
+  const bw = body.bw || 0;
+  const bwHist = body.bwHist || [];
+  const bwDelta = (() => {
+    if (bwHist.length < 2) return null;
+    const last = bwHist[bwHist.length - 1].w;
+    const cutoff = Date.now() - 30 * 864e5;
+    const prior = [...bwHist].reverse().find((e) => new Date(e.t).getTime() <= cutoff) || bwHist[0];
+    return Math.round((last - prior.w) * 10) / 10;
+  })();
+  const stdRows = STD.map((s) => {
+    const ex = ALL_EX.find((e) => e.name === s.name);
+    const hist = mem.history?.[s.name] || [];
+    const bestE = hist.length ? Math.max(...hist.map((h) => e1rm(h.w, h.r))) : (ex ? e1rm(mem.weights?.[s.name] ?? baseWeight(ex), 5) : 0);
+    const pair = fiveRM(bestE) * 2;
+    const ratio = bw ? pair / bw : 0;
+    let tier = -1; s.ratios.forEach((r, i) => { if (ratio >= r) tier = i; });
+    const nextIdx = Math.min(tier + 1, 2);
+    const top = tier >= 2;
+    const prevRatio = tier >= 0 ? s.ratios[tier] : 0;
+    const nextRatio = s.ratios[nextIdx];
+    const prog = top ? 1 : Math.max(0, Math.min(1, (ratio - prevRatio) / (nextRatio - prevRatio)));
+    const nextTargetPair = Math.round((bw ? nextRatio * bw : 0));
+    return { name: s.name, label: s.label, pair: Math.round(pair), ratio, tier, prog, nextTier: top ? null : TIERS[nextIdx], nextTargetPair, ceiling: nextTargetPair / 2 > 90, hasData: hist.length > 0 };
+  });
+  const waistPct = body.waist && body.height ? body.waist / body.height : 0;
+  let waistTier = -1; WAIST_STD.forEach((r, i) => { if (waistPct > 0 && waistPct <= r) waistTier = i; });
+
+  if (!loaded) return (
+    <div className="flex min-h-screen w-full items-center justify-center" style={{ background: C.bg }}>
+      <span className="font-mono text-xs uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>loading your program…</span>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen w-full" style={{ background: C.bg, color: C.bone }}>
+      <style>{`@keyframes pop{0%{transform:scale(.4);opacity:0}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+        @keyframes fade{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
+        .ggwrap{position:relative;width:140px;height:140px;margin:0 auto}
+        .ggfig{position:absolute;inset:0}
+        .ggground{position:absolute;left:30px;right:30px;bottom:14px;height:2px;background:#2A2418;border-radius:2px}
+        .gglegs,.ggbody{position:absolute;left:70px;top:96px;width:0;height:0;transform-origin:0 0}
+        .ggleg{position:absolute;left:0;top:0;width:3px;height:30px;background:#6E5A1E;border-radius:2px;transform-origin:top center}
+        .ggleg.b{transform:rotate(13deg)}.ggleg.f{transform:rotate(-13deg)}
+        .ggtorso{position:absolute;left:-2px;top:-44px;width:4px;height:44px;background:#C9A227;border-radius:2px}
+        .gghead{position:absolute;left:-9px;top:-62px;width:18px;height:18px;border:3px solid #C9A227;border-radius:50%;box-sizing:border-box}
+        .ggarm{position:absolute;left:0;top:-44px;width:0;height:0;transform-origin:0 0;transform:rotate(80deg)}
+        .ggupper{position:absolute;left:0;top:-2px;width:20px;height:4px;background:#C9A227;border-radius:2px}
+        .ggelbow{position:absolute;left:20px;top:0;width:0;height:0;transform-origin:0 0;transform:rotate(0deg)}
+        .ggfore{position:absolute;left:0;top:-2px;width:18px;height:4px;background:#C9A227;border-radius:2px}
+        .ggdb{position:absolute;left:15px;top:-5px;width:11px;height:11px;background:#ECE6D8;border-radius:2px}
+        @keyframes uaPress{from{transform:rotate(18deg)}to{transform:rotate(-76deg)}}
+        @keyframes faPress{from{transform:rotate(-72deg)}to{transform:rotate(-8deg)}}
+        @keyframes faCurl{from{transform:rotate(4deg)}to{transform:rotate(-150deg)}}
+        @keyframes uaRaise{from{transform:rotate(82deg)}to{transform:rotate(4deg)}}
+        @keyframes uaRow{from{transform:rotate(60deg)}to{transform:rotate(116deg)}}
+        @keyframes faRow{from{transform:rotate(0deg)}to{transform:rotate(-46deg)}}
+        @keyframes faExtend{from{transform:rotate(-80deg)}to{transform:rotate(-6deg)}}
+        @keyframes uaPull{from{transform:rotate(-64deg)}to{transform:rotate(-152deg)}}
+        @keyframes bodyHinge{from{transform:rotate(0deg)}to{transform:rotate(52deg)}}
+        @keyframes calfBob{from{transform:translateY(2px)}to{transform:translateY(-8px)}}
+        @keyframes squatDip{from{transform:translateY(-2px)}to{transform:translateY(13px)}}
+        @keyframes legB{from{transform:rotate(13deg)}to{transform:rotate(33deg)}}
+        @keyframes legF{from{transform:rotate(-13deg)}to{transform:rotate(-33deg)}}
+        @keyframes situpUp{from{transform:rotate(-66deg)}to{transform:rotate(-16deg)}}
+        @keyframes legsUp{from{transform:rotate(2deg)}to{transform:rotate(-64deg)}}
+        .ggfig .ggarm,.ggfig .ggelbow,.ggfig .ggbody{animation-duration:2.2s;animation-timing-function:ease-in-out;animation-iteration-count:infinite;animation-direction:alternate}
+        .press .ggarm{animation-name:uaPress}.press .ggelbow{animation-name:faPress}
+        .curl .ggarm{transform:rotate(84deg)}.curl .ggelbow{animation-name:faCurl}
+        .raise .ggarm{animation-name:uaRaise}.raise .ggelbow{transform:rotate(-6deg)}
+        .row .ggarm{animation-name:uaRow}.row .ggelbow{animation-name:faRow}.row .ggbody{transform:rotate(28deg)}
+        .extend .ggarm{transform:rotate(-82deg)}.extend .ggelbow{animation-name:faExtend}
+        .pullover .ggarm{animation-name:uaPull}.pullover .ggelbow{transform:rotate(-6deg)}
+        .hinge .ggbody{animation-name:bodyHinge}
+        .fly .ggarm{animation-name:uaRaise}.fly .ggelbow{transform:rotate(-6deg)}.fly .ggbody{transform:rotate(44deg)}
+        .calf .ggfig,.ggfig.calf{animation:calfBob 1.4s ease-in-out infinite alternate}
+        .ggfig.squat{animation:squatDip 2s ease-in-out infinite alternate}
+        .squat .ggleg.b{animation:legB 2s ease-in-out infinite alternate}
+        .squat .ggleg.f{animation:legF 2s ease-in-out infinite alternate}
+        .situp .ggbody{animation-name:situpUp}
+        .legraise .ggbody{transform:rotate(-72deg)}
+        .legraise .gglegs{animation:legsUp 2s ease-in-out infinite alternate}
+        .vup .ggbody{animation-name:situpUp}
+        .vup .gglegs{animation:legsUp 2s ease-in-out infinite alternate}
+        .recline .ggbody{transform:rotate(-24deg)}`}</style>
+      <div className="mx-auto max-w-md px-5 pb-24 pt-8">
+        {sessionStarted && (
+          <div className="sticky top-0 z-20 -mx-5 mb-4 px-5 py-2" style={{ background: "rgba(14,13,11,0.93)", backdropFilter: "blur(6px)", borderBottom: `1px solid ${C.edge}` }}>
+            <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider">
+              <span style={{ color: C.gold }}>Workout {tag} · in progress</span>
+              <span style={{ color: C.ash }}>{workDone} / {workTotal} sets</span>
+            </div>
+            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
+              <div className="h-full rounded-full" style={{ width: `${workTotal ? (workDone / workTotal) * 100 : 0}%`, background: C.gold, transition: "width .4s ease" }} />
+            </div>
+          </div>
+        )}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Dumbbell size={15} style={{ color: C.gold }} />
+            <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Greek God · Coach</span>
+          </div>
+          <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>Session {(mem.sessionCount || 0) + 1}</span>
+        </div>
+
+        {pending && (
+          <div className="mt-5 rounded-xl border p-4" style={{ borderColor: C.activeEdge, background: "#1A1609", animation: "fade .4s ease-out" }}>
+            <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>In-progress session found</p>
+            <p className="mt-2 text-[13px]" style={{ color: C.bone }}>You have an unfinished Workout {pending.tag} — {pending.done.length > 0 ? `${pending.done.length} set${pending.done.length === 1 ? "" : "s"} logged` : "a set in progress"}. Pick up where you left off?</p>
+            <div className="mt-3 flex gap-2">
+              <button onClick={resumeSession} className="flex-1 rounded-xl py-2.5 font-mono text-xs font-bold uppercase tracking-wider" style={{ background: C.gold, color: C.bg }}>Resume</button>
+              <button onClick={discardSession} className="flex-1 rounded-xl border py-2.5 font-mono text-xs uppercase tracking-wider" style={{ borderColor: C.edge, color: C.ash }}>Discard</button>
+            </div>
+          </div>
+        )}
+
+        {/* progression summary after finishing */}
+        {summary && (
+          <div className="mt-5 rounded-xl border p-4" style={{ borderColor: C.activeEdge, background: "#1A1609", animation: "fade .4s ease-out" }}>
+            <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>Workout {summary.tag} saved · progress applied</p>
+            {summary.changes.length === 0 ? (
+              <p className="mt-2 text-[13px]" style={{ color: C.ash }}>Weights held — chase one more rep next time to earn the jump.</p>
+            ) : (
+              <div className="mt-2 space-y-1">
+                {summary.changes.map((c) => (
+                  <div key={c.name} className="flex items-center gap-2 text-[13px]" style={{ color: C.bone }}>
+                    {c.dir === "up" ? <TrendingUp size={13} style={{ color: C.sage }} /> : <TrendingDown size={13} style={{ color: C.rust }} />}
+                    <span>{c.name}</span>
+                    <span className="font-mono" style={{ color: C.ash }}>{dispW(c.from, unit)} → {dispW(c.to, unit)} {c.single ? uw(unit) : `${uw(unit)}/hand`}{c.deload ? " · deload" : ""}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button onClick={() => setSummary(null)} className="mt-3 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.goldDim }}>dismiss</button>
+          </div>
+        )}
+
+        <p className="mt-6 font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>{today}</p>
+        <h1 className="mt-1 text-4xl font-bold leading-none" style={{ color: C.bone, fontFamily: "Georgia, serif" }}>Workout {tag}</h1>
+        <p className="mt-2 text-sm" style={{ color: C.ash }}>{WORKOUTS[tag].name} — <span style={{ color: C.ashDim }}>{WORKOUTS[tag].sub}</span></p>
+        <div className="mt-3 flex items-center gap-2">
+          <Clock size={13} style={{ color: C.gold }} />
+          <span className="font-mono text-xs" style={{ color: C.ash }}>≈ {estMin} min</span>
+          <span style={{ color: C.ashDim }}>·</span>
+          <span className="font-mono text-xs" style={{ color: C.ash }}>{plan.length} exercises</span>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
+            {["A", "B"].map((t) => (
+              <button key={t} onClick={() => { setTag(t); setOpenInfo(null); setConfirm(null); if (hasStore) clearLive(); }} className="flex items-center gap-1.5 rounded-full px-4 py-1.5 font-mono text-xs"
+                style={{ background: tag === t ? C.gold : "transparent", color: tag === t ? C.bg : C.ash, fontWeight: tag === t ? 700 : 400 }}>
+                {t === "A" ? <Dumbbell size={12} /> : <ArrowLeftRight size={12} />}{t === "A" ? "Push" : "Pull · Legs"}
+              </button>
+            ))}
+          </div>
+          <div className="inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
+            {["lb", "kg"].map((u) => (
+              <button key={u} onClick={() => setUnit(u)} aria-label={`show weights in ${u === "lb" ? "pounds" : "kilograms"}`} className="rounded-full px-3 py-1.5 font-mono text-xs"
+                style={{ background: unit === u ? C.gold : "transparent", color: unit === u ? C.bg : C.ash, fontWeight: unit === u ? 700 : 400 }}>{u}</button>
+            ))}
+          </div>
+        </div>
+        {mem.lastTag && tag === (mem.lastTag === "A" ? "B" : "A") && <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>auto-picked — you trained {mem.lastTag} last</p>}
+
+        <div className="mt-6 space-y-4">
+          {plan.map((item, exIdx) => {
+            const chg = mem.lastChanges?.[item.ex.name];
+            const px = `${exIdx}-`;
+            const exLocked = (active && active.startsWith(px)) || (rest && rest.key.startsWith(px)) || [...done].some((k) => k.startsWith(px));
+            return (
+            <div key={item.ex.name} className="rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
+              <div className="flex items-baseline gap-3">
+                <span className="font-mono text-xs" style={{ color: C.gold }}>{String(exIdx + 1).padStart(2, "0")}</span>
+                <div className="flex-1">
+                  <h3 className="text-[17px] font-semibold leading-tight" style={{ color: C.bone, fontFamily: "Georgia, serif" }}>{item.ex.name}</h3>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    {item.ex.replaces && (
+                      <span className="flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[9px]" style={{ borderColor: C.edge, color: C.ash }}>
+                        <ArrowLeftRight size={9} style={{ color: C.goldDim }} /> replaces {item.ex.replaces} · {item.ex.gap}
+                      </span>
+                    )}
+                    {item.ex.optional && <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>optional</span>}
+                    {(mem.stalls?.[item.ex.name] || 0) >= 2 && <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.rust }}>stalling — deload soon</span>}
+                    {chg && (
+                      <span className="flex items-center gap-1 font-mono text-[10px]" style={{ color: chg.dir === "up" ? C.sage : C.rust }}>
+                        {chg.dir === "up" ? <TrendingUp size={10} /> : <TrendingDown size={10} />} {dispW(chg.to, unit)}{chg.single ? ` ${uw(unit)}` : `${uw(unit)}/hand`} (was {dispW(chg.from, unit)})
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button onClick={() => setOpenInfo(openInfo === exIdx ? null : exIdx)} aria-label={`${openInfo === exIdx ? "hide" : "show"} form animation`} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border active:scale-90"
+                  style={{ borderColor: openInfo === exIdx ? C.goldDim : C.edge, color: openInfo === exIdx ? C.gold : C.ash }}>
+                  <Info size={14} />
+                </button>
+              </div>
+
+              {openInfo === exIdx && (
+                <div className="mt-3 rounded-xl border py-2" style={{ borderColor: C.activeEdge, background: "#15120A", animation: "fade .25s ease-out" }}>
+                  <ExerciseAnim kind={ANIM[item.ex.name] || "press"} />
+                  <p className="mt-1 text-center font-mono text-[10px] uppercase tracking-[0.15em]" style={{ color: C.ashDim }}>{item.ex.name}</p>
+                </div>
+              )}
+
+              <p className="mt-3 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>{item.ex.basic}</p>
+
+              {item.ex.variantSlot && (
+                <div className="mt-3">
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {item.ex.variants.map((v, vi) => {
+                      const onv = item.ex.slotIndex === vi;
+                      return (
+                        <button key={v.name} aria-label={`select ${v.name}`} onClick={() => !exLocked && setVariant(item.ex.slotKey, vi)} disabled={exLocked && !onv}
+                          className="rounded-lg border px-2 py-1.5 font-mono text-[10px]"
+                          style={{ borderColor: onv ? C.goldDim : C.edge, background: onv ? "#241F12" : "transparent", color: onv ? C.gold : C.ash, opacity: exLocked && !onv ? 0.35 : 1 }}>
+                          {SHORT[v.name] || v.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {exLocked && <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>locked — this exercise has started</p>}
+                </div>
+              )}
+
+              <div className="mt-4 space-y-2">
+                {item.sets.map((set, setIdx) => {
+                  const key = `${exIdx}-${setIdx}`;
+                  const log = logs[key] ?? { weight: set.load, reps: set.repsNum };
+                  const isActive = active === key, isResting = rest?.key === key, isDone = done.has(key), isWarm = set.kind === "warmup";
+                  const edited = log.weight !== set.load || log.reps !== set.repsNum;
+                  const rp = item.ex.repProgress;
+                  const recs = mem.setHistory?.[item.ex.name]?.[set.label] || [];
+                  const showPct = set.kind === "work" && recs.length > 0;
+                  const curE = e1rm(log.weight, log.reps);
+                  const overallPct = !showPct ? 0 : rp ? (log.reps / recs[0].r - 1) * 100 : (curE / e1rm(recs[0].w, recs[0].r) - 1) * 100;
+                  const lastPct = !showPct ? 0 : rp ? (log.reps / recs[recs.length - 1].r - 1) * 100 : (curE / e1rm(recs[recs.length - 1].w, recs[recs.length - 1].r) - 1) * 100;
+                  return (
+                    <div key={key} className="rounded-xl border" style={{ borderColor: isActive ? C.activeEdge : "transparent", background: isActive ? "#1F1A0E" : "transparent" }}>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-2 px-2 py-2">
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-2">
+                          <span className="w-5 shrink-0 text-center font-mono text-[11px]" style={{ color: isWarm ? C.ashDim : C.gold }}>{set.label}</span>
+                          {rp ? (
+                            <span className="font-mono text-[10px] uppercase tracking-wide" style={{ color: C.ashDim }}>bodyweight</span>
+                          ) : (
+                            <>
+                              <Stepper value={log.weight} onStep={(d) => stepW(key, d, set)} minW={34} disabled={isDone} label="weight" fmt={(v) => dispW(v, unit)} />
+                              <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{item.ex.single ? `${uw(unit)} · 1 DB` : `${uw(unit)}/hand`}</span>
+                              <span className="font-mono text-xs" style={{ color: C.ash }}>×</span>
+                            </>
+                          )}
+                          <Stepper value={log.reps} onStep={(d) => stepR(key, d, set)} minW={20} disabled={isDone} label="reps" />
+                          <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>reps</span>
+                        </div>
+                        <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
+                          {isDone ? (
+                            <button onClick={() => undoSet(key)} aria-label="undo this set" title="tap to undo" className="flex items-center gap-1 rounded-full px-2.5 py-1.5 active:scale-90" style={{ background: "#20301C" }}>
+                              <Check size={15} style={{ color: C.sage }} /><Undo2 size={11} style={{ color: C.ashDim }} />
+                            </button>
+                          ) : isActive ? (
+                            <>
+                              <button onClick={cancelSet} aria-label="cancel set" className="flex h-9 w-9 items-center justify-center rounded-full border active:scale-90" style={{ borderColor: C.edge, color: C.ash }}><X size={14} /></button>
+                              <button onClick={() => finishSet(set)} className="flex items-center gap-1.5 rounded-full px-4 py-1.5 font-mono text-xs font-bold active:scale-95" style={{ background: C.gold, color: C.bg }}><Check size={13} /> Finish</button>
+                            </>
+                          ) : isResting ? null : (
+                            <button onClick={() => startSet(key)} disabled={busy} aria-label="start set" className="flex items-center gap-1.5 rounded-full border px-4 py-1.5 font-mono text-xs active:scale-95"
+                              style={{ borderColor: busy ? C.edge : C.goldDim, color: busy ? C.ashDim : C.gold, opacity: busy ? 0.5 : 1 }}><Play size={12} /> Start</button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="px-2 pb-1.5 pl-7 font-mono text-[10px]" style={{ color: C.ash }}>
+                        {rp ? "bodyweight" : item.ex.single ? `${dispW(log.weight, unit)} ${uw(unit)}` : `${dispW(log.weight * 2, unit)} ${uw(unit)} total`}{isWarm ? " · warm-up" : `  ·  target ${set.repsLabel}`}
+                        <span style={{ color: C.ashDim }}>{edited && !rp ? `  ·  proj ${dispW(set.load, unit)} × ${set.repsNum}` : ""}</span>
+                      </div>
+                      {showPct && (
+                        <div className="flex gap-4 px-2 pb-1.5 pl-7 font-mono text-[10px]">
+                          <span style={{ color: C.ashDim }}>overall <span style={{ color: pctColor(overallPct) }}>{fmtPct(overallPct)}</span></span>
+                          <span style={{ color: C.ashDim }}>vs last <span style={{ color: pctColor(lastPct) }}>{fmtPct(lastPct)}</span></span>
+                        </div>
+                      )}
+
+                      {isActive && (
+                        <button onClick={advance} className="mb-2 ml-2 mr-2 block w-[calc(100%-1rem)] rounded-lg p-3 text-left" style={{ background: "#15120A" }}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.goldDim }}>coaching · live</span>
+                            <span className="flex items-center gap-1 font-mono text-[9px]" style={{ color: C.ashDim }}>next <ChevronRight size={10} /></span>
+                          </div>
+                          <p key={cue} className="mt-1.5 text-[14px] leading-snug" style={{ color: C.bone, animation: "fade .35s ease-out", fontFamily: "Georgia, serif" }}>{cue}</p>
+                        </button>
+                      )}
+                      {isResting && (
+                        <div className="mb-2 ml-2 mr-2 rounded-lg p-3" style={{ background: "#15120A" }}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.goldDim }}>rest</span>
+                            <span className="font-mono text-lg font-bold" style={{ color: C.gold }}>{fmtClock(restLeft)}</span>
+                          </div>
+                          <div className="mt-2 h-1 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
+                            <div className="h-full rounded-full" style={{ width: `${rest.total ? (restLeft / rest.total) * 100 : 0}%`, background: C.gold, transition: "width .5s linear" }} />
+                          </div>
+                          <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>logged {rp ? "bodyweight" : `${dispW(log.weight, unit)} ${uw(unit)}${item.ex.single ? "" : "/hand"}`} × {log.reps} reps — adjust above if that's off</p>
+                          <div className="mt-2 flex gap-2">
+                            <button onClick={addRest} aria-label="add 30 seconds rest" className="rounded-full border px-3 py-1 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>+30s</button>
+                            <button onClick={skipRest} aria-label="skip rest" className="flex items-center gap-1 rounded-full border px-3 py-1 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}><SkipForward size={11} /> Skip</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <p className="mt-3 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>
+                {item.ex.type === "rpt" ? "reverse pyramid · −10% per set · rest " : "straight sets · rest "}{fmtRest(item.ex.rest)}
+                {exIdx === 0 && item.ex.type === "rpt" ? " · warm-up ramp first" : exIdx === 1 && item.ex.type === "rpt" ? " · one ramp set" : ""}
+              </p>
+            </div>
+          );})}
+        </div>
+
+        <SyncPanel sync={sync} msg={syncMsg} onConnect={connectSync} onDisconnect={disconnectSync} onSyncNow={syncNow} />
+
+        {/* finish + progress */}
+        {confirm === "finish" ? (
+          <div className="mt-6 rounded-2xl border p-4" style={{ borderColor: C.activeEdge, background: "#1A1609", animation: "fade .3s ease-out" }}>
+            <p className="text-[13px] leading-relaxed" style={{ color: C.bone }}>Finish Workout {tag}? This saves your {workDone} logged set{workDone === 1 ? "" : "s"}, applies weight progression, and switches you to the other day.</p>
+            <div className="mt-3 flex gap-2">
+              <button onClick={() => setConfirm(null)} className="flex-1 rounded-xl border py-3 font-mono text-xs uppercase tracking-wider" style={{ borderColor: C.edge, color: C.ash }}>Cancel</button>
+              <button onClick={() => { setConfirm(null); finishWorkout(); }} className="flex flex-1 items-center justify-center gap-2 rounded-xl py-3 font-mono text-xs font-bold uppercase tracking-wider" style={{ background: C.gold, color: C.bg }}><Save size={15} /> Finish &amp; save</button>
+            </div>
+          </div>
+        ) : (
+          <button onClick={() => workDoneCount > 0 && setConfirm("finish")} disabled={workDoneCount === 0}
+            className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl py-4 font-mono text-sm font-bold uppercase tracking-wider"
+            style={{ background: workDoneCount === 0 ? C.card : C.gold, color: workDoneCount === 0 ? C.ashDim : C.bg, opacity: workDoneCount === 0 ? 0.6 : 1 }}>
+            <Save size={16} /> Finish workout · save & progress
+          </button>
+        )}
+
+        <ProgressChart mem={mem} />
+
+        <div className="mt-6 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
+          <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Strength standards</span>
+
+          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <NumberField value={unit === "kg" ? Math.round((bw || 0) * KG * 10) / 10 : (bw || 0)} step={unit === "kg" ? 0.5 : 1} label="bodyweight" placeholder={unit === "kg" ? "kg" : "lb"}
+              onChange={(disp) => setBody({ bw: unit === "kg" ? Math.round((disp / KG) * 100) / 100 : Math.round(disp * 100) / 100 })} />
+            <span className="font-mono text-[11px]" style={{ color: C.ash }}>{uw(unit)}{bw ? ` · ${unit === "kg" ? Math.round(bw) + " lb" : lbToKg(bw) + " kg"}` : ""}</span>
+            <button onClick={logBW} disabled={!bw} aria-label="log today's bodyweight" className="ml-auto rounded-full border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: bw ? C.gold : C.ashDim, opacity: bw ? 1 : 0.5 }}>log today</button>
+          </div>
+          {bwDelta !== null && <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>{bwHist.length} weigh-ins · <span style={{ color: pctColor(bwDelta) }}>{bwDelta > 0 ? "+" : ""}{unit === "kg" ? Math.round(bwDelta * KG * 10) / 10 : bwDelta} {uw(unit)}</span> over ~30 days</p>}
+
+          {!bw ? (
+            <p className="mt-4 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>Set your bodyweight to see where your lifts land against the Good / Great / Godlike standards — relative strength is the program's whole scorecard.</p>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {stdRows.map((r) => (
+                <div key={r.name}>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-[13px]" style={{ color: C.bone }}>{r.label}</span>
+                    <span className="font-mono text-[11px]" style={{ color: r.tier >= 0 ? C.gold : C.ashDim }}>{r.tier >= 0 ? TIERS[r.tier] : "Building"}{r.hasData ? "" : " · est"}</span>
+                  </div>
+                  <div className="mt-1 flex items-center gap-2">
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
+                      <div className="h-full rounded-full" style={{ width: `${r.prog * 100}%`, background: r.tier >= 2 ? C.sage : C.gold, transition: "width .4s ease" }} />
+                    </div>
+                    <span className="font-mono text-[10px]" style={{ color: C.ash }}>{dispW(r.pair, unit)} {uw(unit)} · {r.ratio.toFixed(2)}×</span>
+                  </div>
+                  <p className="mt-0.5 font-mono text-[9px]" style={{ color: C.ashDim }}>
+                    {r.nextTier ? `${r.nextTier} at ${dispW(r.nextTargetPair, unit)} ${uw(unit)} pair (≈${dispW(r.nextTargetPair / 2, unit)}/hand)` : "top tier reached"}
+                    {r.ceiling ? ` · exceeds ${dispW(90, unit)} ${uw(unit)}/hand — rep & tempo work from here` : ""}
+                  </p>
+                </div>
+              ))}
+              <p className="font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>load = both DBs ÷ bodyweight at an est. 5-rep max · directional (the book's numbers are barbell-based) · the back/chin standard needs a pull-up bar, so it isn't tracked</p>
+            </div>
+          )}
+
+          <div className="mt-5 border-t pt-4" style={{ borderColor: C.edge }}>
+            <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>Lean-waist standard (optional)</span>
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <div className="flex items-center gap-1.5"><NumberField value={unit === "kg" ? Math.round((body.height || 0) * 2.54 * 10) / 10 : (body.height || 0)} step={unit === "kg" ? 1 : 0.5} label="height" placeholder={ulen(unit)} width={48}
+                onChange={(disp) => setBody({ height: unit === "kg" ? Math.round((disp / 2.54) * 100) / 100 : Math.round(disp * 100) / 100 })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{ulen(unit)} height</span></div>
+              <div className="flex items-center gap-1.5"><NumberField value={unit === "kg" ? Math.round((body.waist || 0) * 2.54 * 10) / 10 : (body.waist || 0)} step={unit === "kg" ? 1 : 0.5} label="waist" placeholder={ulen(unit)} width={48}
+                onChange={(disp) => setBody({ waist: unit === "kg" ? Math.round((disp / 2.54) * 100) / 100 : Math.round(disp * 100) / 100 })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{ulen(unit)} waist</span></div>
+            </div>
+            {body.waist && body.height ? (
+              <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>waist {Math.round(waistPct * 100)}% of height · <span style={{ color: waistTier >= 0 ? C.gold : C.ashDim }}>{waistTier >= 0 ? TIERS[waistTier] : "above Good"}</span> <span style={{ color: C.ashDim }}>(Good ≤47 · Great ≤46 · Godlike ≤45%)</span></p>
+            ) : (
+              <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>add height + waist ({ulen(unit)}) for the lean-waist standard</p>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-6 flex items-center justify-between border-t pt-5" style={{ borderColor: C.edge }}>
+          <p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.goldDim }}>v0.21 · live cross-device sync · github · lb / kg{!hasStore ? " · session-only here" : ""}</p>
+          {confirm === "reset" ? (
+            <span className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider">
+              <span style={{ color: C.rust }}>erase all history?</span>
+              <button onClick={() => { setConfirm(null); resetMemory(); }} style={{ color: C.rust }}>yes</button>
+              <button onClick={() => setConfirm(null)} style={{ color: C.ash }}>no</button>
+            </span>
+          ) : (
+            <button onClick={() => setConfirm("reset")} className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}><RotateCcw size={11} /> reset</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+createRoot(document.getElementById("root")).render(<App />);
+
+</script>
+</body>
+</html>
