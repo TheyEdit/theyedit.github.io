@@ -31,7 +31,7 @@
 <script type="text/babel" data-type="module" data-presets="react">
 const _b = document.getElementById("boot"); if (_b) _b.remove();
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2 } from "lucide-react";
+import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
@@ -180,8 +180,24 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0630-1532";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
-const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb" };
+const BUILD = "b0630-1704";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+// ── diet/nutrition helpers ──
+const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
+const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
+const pruneDays = (days, n = 90) => { const ks = Object.keys(days).sort(); if (ks.length <= n) return days; const out = { ...days }; ks.slice(0, ks.length - n).forEach((k) => delete out[k]); return out; };
+const sleepHours = (bed, wake) => { if (!bed || !wake) return null; const [bh, bm] = bed.split(":").map(Number); const [wh, wm] = wake.split(":").map(Number); let m = (wh * 60 + wm) - (bh * 60 + bm); if (m <= 0) m += 1440; return m / 60; };  // overnight-aware
+const fmtHM = (h) => (h == null ? "—" : `${Math.floor(h)}h ${Math.round((h - Math.floor(h)) * 60)}m`);
+const blankDay = () => ({ kcal: 0, protein: 0, carbs: 0, fat: 0, steps: 0, water: 0, entries: [], waterEntries: [] });
+const DEFAULT_FOODS = [
+  { id: "chicken300", label: "Chicken breast 300g", kcal: 330, protein: 50, carbs: 0, fat: 7 },
+  { id: "rice200", label: "Rice 200g cooked", kcal: 260, protein: 4, carbs: 57, fat: 1 },
+  { id: "eggs3", label: "3 whole eggs", kcal: 210, protein: 18, carbs: 1, fat: 15 },
+  { id: "whites200", label: "Egg whites 200g", kcal: 100, protein: 22, carbs: 1, fat: 0 },
+  { id: "whey1", label: "Whey 1 scoop", kcal: 120, protein: 24, carbs: 3, fat: 2 },
+];
+const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb",
+  nutrition: { goals: { kcal: 2100, protein: 175, carbs: 215, fat: 60, steps: 15000, water: 3000, goalBwLb: 154.32 }, days: {}, foods: DEFAULT_FOODS },
+  sleep: { def: { bed: "23:00", wake: "08:00" }, days: {} } };
 
 /* ───────────────────────── program ───────────────────────── */
 const AB_VARIANTS = [
@@ -374,6 +390,10 @@ const migrateMem = (raw) => {
   m.targets = seedTargets(m);
   m.lastByDay = m.lastByDay || {};
   m.audit = Array.isArray(m.audit) ? m.audit : [];
+  const rn = raw.nutrition && typeof raw.nutrition === "object" ? raw.nutrition : {};
+  m.nutrition = { goals: { ...DEFAULT.nutrition.goals, ...(rn.goals || {}) }, days: rn.days && typeof rn.days === "object" ? rn.days : {}, foods: Array.isArray(rn.foods) && rn.foods.length ? rn.foods : DEFAULT_FOODS.map((f) => ({ ...f })) };
+  const rs = raw.sleep && typeof raw.sleep === "object" ? raw.sleep : {};
+  m.sleep = { def: { ...DEFAULT.sleep.def, ...(rs.def || {}) }, days: rs.days && typeof rs.days === "object" ? rs.days : {} };
   m.version = 2;
   return m;
 };
@@ -704,10 +724,281 @@ function SyncPanel({ sync, msg, log, onConnect, onDisconnect, onSyncNow }) {
   );
 }
 
+/* ───────────────────────── Diet tab ───────────────────────── */
+function NutBar({ icon, label, cur, goal, suffix = "", overIsBad = false }) {
+  const pct = goal > 0 ? Math.min(1, cur / goal) : 0;
+  const over = cur > goal;
+  const fill = overIsBad && over ? C.rust : (pct >= 0.9 && !over ? C.sage : C.gold);
+  return (
+    <div>
+      <div className="flex items-baseline justify-between">
+        <span className="flex items-center gap-1.5 text-[13px]" style={{ color: C.bone }}>{icon}{label}</span>
+        <span className="font-mono text-[11px]" style={{ color: over && overIsBad ? C.rust : C.ash }}>{Math.round(cur).toLocaleString()} / {Math.round(goal).toLocaleString()}{suffix}</span>
+      </div>
+      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
+        <div className="h-full rounded-full" style={{ width: `${pct * 100}%`, background: fill, transition: "width .4s ease" }} />
+      </div>
+      <p className="mt-0.5 font-mono text-[9px]" style={{ color: C.ashDim }}>{over ? `+${Math.round(cur - goal).toLocaleString()} over` : `${Math.round(goal - cur).toLocaleString()} left`}</p>
+    </div>
+  );
+}
+function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, setSteps, addWater, removeWaterEntry, setSleepToday, setSleepDefault, setNutGoals, setBody, logBW }) {
+  const nut = mem.nutrition || DEFAULT.nutrition;
+  const sl = mem.sleep || DEFAULT.sleep;
+  const k = todayKey();
+  const d = { ...blankDay(), ...(nut.days[k] || {}) };
+  const g = nut.goals;
+  const st = sl.days[k] || sl.def;
+  const slH = sleepHours(st.bed, st.wake);
+  const inp = { background: "#100E09", border: `1px solid ${C.edge}`, color: C.bone };
+  const card = "mt-6 rounded-2xl border p-5";
+  const hdr = "font-mono text-[11px] uppercase tracking-[0.2em]";
+  const last7 = [...Array(7)].map((_, i) => { const dt = new Date(); dt.setDate(dt.getDate() - (6 - i)); return { key: dt.toLocaleDateString("en-CA"), lbl: dt.toLocaleDateString("en-US", { weekday: "short" }) }; });
+  const avg = (sel) => { const v = last7.map((x) => (nut.days[x.key] || {})[sel]).filter((n) => n > 0); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0; };
+  const avgKcal = avg("kcal"), avgSteps = avg("steps"), avgWater = avg("water");
+  const slAvg = (() => { const v = last7.map((x) => { const s = sl.days[x.key]; return s ? sleepHours(s.bed, s.wake) : null; }).filter((n) => n != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; })();
+  // bodyweight (canonical lb)
+  const bw = mem.body?.bw, bwHist = mem.body?.bwHist || [];
+  const recent = bwHist.filter((h) => Date.now() - new Date(h.t).getTime() < 32 * 864e5);
+  const bwDelta7 = (() => { const r = bwHist.filter((h) => Date.now() - new Date(h.t).getTime() < 8 * 864e5); return r.length >= 2 ? r[r.length - 1].w - r[0].w : null; })();
+  const bwDelta30 = recent.length >= 2 ? recent[recent.length - 1].w - recent[0].w : null;
+  const dW = (lb) => dispW(lb, unit);
+  const toLb = (disp, div = 1) => (unit === "kg" ? Math.round((disp / (div === 1 ? KG : 2.54)) * 100) / 100 : Math.round(disp * 100) / 100);
+  const fromLb = (lb, mul = 1) => (unit === "kg" ? Math.round(lb * (mul === 1 ? KG : 2.54) * 10) / 10 : lb || 0);
+  const tHM = (iso) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; } };
+
+  const [cf, setCf] = useState({ label: "", kcal: 0, protein: 0, carbs: 0, fat: 0, save: false });
+  const [cw, setCw] = useState(0);
+  const [goalsOpen, setGoalsOpen] = useState(false);
+  const [metric, setMetric] = useState("kcal");
+  // ── 14-day per-metric series ──
+  const last14 = [...Array(14)].map((_, i) => { const dt = new Date(); dt.setDate(dt.getDate() - (13 - i)); return { key: dt.toLocaleDateString("en-CA"), lbl: `${dt.getMonth() + 1}/${dt.getDate()}` }; });
+  const METRICS = [
+    { id: "kcal", label: "Calories", goal: g.kcal, suffix: " kcal", lowerBetter: true },
+    { id: "protein", label: "Protein", goal: g.protein, suffix: " g" },
+    { id: "carbs", label: "Carbs", goal: g.carbs, suffix: " g" },
+    { id: "fat", label: "Fat", goal: g.fat, suffix: " g" },
+    { id: "steps", label: "Steps", goal: g.steps, suffix: "" },
+    { id: "water", label: "Water", goal: g.water, suffix: " ml" },
+    { id: "bw", label: "Bodyweight", goal: null, suffix: ` ${uw(unit)}` },
+    { id: "sleep", label: "Sleep", goal: 8, suffix: "h" },
+  ];
+  const seriesFor = (id) => last14.map((x) => {
+    let v = null;
+    if (id === "bw") { const h = (mem.body?.bwHist || []).filter((b) => b.t && b.t.slice(0, 10) === x.key); v = h.length ? (unit === "kg" ? Math.round(h[h.length - 1].w * KG * 10) / 10 : h[h.length - 1].w) : null; }
+    else if (id === "sleep") { const s = sl.days[x.key]; v = s ? Math.round(sleepHours(s.bed, s.wake) * 10) / 10 : null; }
+    else { v = (nut.days[x.key] || {})[id] || 0; }
+    return { d: x.lbl, v };
+  });
+  const metricAvg = (id) => { const vs = seriesFor(id).map((p) => p.v).filter((n) => n != null && n > 0); return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : 0; };
+  // ── ideal-self forecast (scale-anchored) ──
+  const curLb = mem.body?.bw || null, goalLb = g.goalBwLb || 154.32;
+  const fitRate = (() => { const pts = (mem.body?.bwHist || []).filter((b) => b.t && Date.now() - new Date(b.t).getTime() < 30 * 864e5).map((b) => ({ x: new Date(b.t).getTime() / 864e5, w: b.w })); if (pts.length < 2) return null; const n = pts.length, sx = pts.reduce((s, p) => s + p.x, 0), sy = pts.reduce((s, p) => s + p.w, 0), sxx = pts.reduce((s, p) => s + p.x * p.x, 0), sxy = pts.reduce((s, p) => s + p.x * p.w, 0); const den = n * sxx - sx * sx; return den ? ((n * sxy - sx * sy) / den) * 7 : null; })();
+  const lossWk = fitRate != null && fitRate < -0.1 ? -fitRate : null;   // lb/week being lost (from your real trend)
+  const rateUsed = lossWk || 1.1;                                        // default ≈0.5 kg/wk until enough data
+  const toGo = curLb != null ? curLb - goalLb : null;
+  const weeksToGoal = toGo != null && toGo > 0 ? toGo / rateUsed : null;
+  const eta = weeksToGoal != null ? new Date(Date.now() + weeksToGoal * 7 * 864e5) : null;
+  const wtHR = mem.body?.waist && mem.body?.height ? mem.body.waist / mem.body.height : null;
+  const leanBand = wtHR == null ? null : wtHR < 0.43 ? "ripped" : wtHR < 0.46 ? "athletic" : wtHR < 0.50 ? "fit" : wtHR < 0.53 ? "average" : "soft";
+
+  return (
+    <>
+      {/* Sleep */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <span className={hdr} style={{ color: C.ash }}><Moon size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Sleep</span>
+        <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-3">
+          <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>bed</p>
+            <input type="time" value={st.bed} onChange={(e) => setSleepToday(e.target.value, st.wake)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} /></div>
+          <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>wake</p>
+            <input type="time" value={st.wake} onChange={(e) => setSleepToday(st.bed, e.target.value)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} /></div>
+          <div className="ml-auto text-right"><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>last night</p>
+            <p className="font-mono text-xl font-bold" style={{ color: slH >= 7 && slH <= 9.5 ? C.sage : C.gold }}>{fmtHM(slH)}</p></div>
+        </div>
+        <div className="mt-3 flex items-center justify-between">
+          <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>{slAvg != null ? `7-day avg ${fmtHM(slAvg)}` : "log a few nights for the average"}</p>
+          <button onClick={() => setSleepDefault(st.bed, st.wake)} className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.goldDim }}>set as default</button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <span className={hdr} style={{ color: C.ash }}>Body</span>
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <NumberField value={fromLb(bw || 0, 1)} step={unit === "kg" ? 0.5 : 1} label="bodyweight" placeholder={uw(unit)} onChange={(disp) => setBody({ bw: toLb(disp, 1) })} />
+          <span className="font-mono text-[11px]" style={{ color: C.ash }}>{uw(unit)}</span>
+          <button onClick={logBW} disabled={!bw} className="ml-auto rounded-full border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: bw ? C.gold : C.ashDim, opacity: bw ? 1 : 0.5 }}>log today</button>
+        </div>
+        {bwDelta30 != null && <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>{recent.length} weigh-ins · <span style={{ color: bwDelta30 <= 0 ? C.sage : C.rust }}>{bwDelta30 > 0 ? "+" : ""}{fromLb(bwDelta30, 1)} {uw(unit)}</span> over ~30 days</p>}
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-3" style={{ borderColor: C.edge }}>
+          <div className="flex items-center gap-1.5"><NumberField value={fromLb(mem.body?.height || 0, 2)} step={unit === "kg" ? 1 : 0.5} label="height" placeholder={ulen(unit)} width={48} onChange={(disp) => setBody({ height: toLb(disp, 2) })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{ulen(unit)} height</span></div>
+          <div className="flex items-center gap-1.5"><NumberField value={fromLb(mem.body?.waist || 0, 2)} step={unit === "kg" ? 1 : 0.5} label="waist" placeholder={ulen(unit)} width={48} onChange={(disp) => setBody({ waist: toLb(disp, 2) })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{ulen(unit)} waist</span></div>
+        </div>
+      </div>
+
+      {/* Today — nutrition + steps */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <div className="flex items-center justify-between">
+          <span className={hdr} style={{ color: C.ash }}>Today</span>
+          <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+        </div>
+        <div className="mt-4 space-y-3">
+          <NutBar icon={<Flame size={13} style={{ color: C.gold }} />} label="Calories" cur={d.kcal} goal={g.kcal} suffix=" kcal" overIsBad />
+          <NutBar label="Protein" cur={d.protein} goal={g.protein} suffix=" g" />
+          <NutBar label="Carbs" cur={d.carbs} goal={g.carbs} suffix=" g" />
+          <NutBar label="Fat" cur={d.fat} goal={g.fat} suffix=" g" />
+          <NutBar icon={<Footprints size={13} style={{ color: C.gold }} />} label="Steps" cur={d.steps} goal={g.steps} />
+        </div>
+
+        {/* quick-add staples */}
+        <p className="mt-5 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>quick add</p>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {(nut.foods || []).map((f) => (
+            <button key={f.id} onClick={() => logFood(f)} className="rounded-full border px-3 py-1.5 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.bone }}>
+              {f.label} <span style={{ color: C.ashDim }}>· {f.kcal}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* steps set (absolute) */}
+        <div className="mt-4 flex items-center gap-2">
+          <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>set steps</span>
+          <NumberField value={d.steps} step={1000} label="steps" width={72} onChange={(n) => setSteps(n)} />
+        </div>
+
+        {/* custom add */}
+        <div className="mt-4 border-t pt-4" style={{ borderColor: C.edge }}>
+          <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>custom food</p>
+          <input value={cf.label} onChange={(e) => setCf({ ...cf, label: e.target.value })} placeholder="label" className="mt-2 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={inp} />
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="flex items-center gap-1"><NumberField value={cf.kcal} step={10} label="kcal" width={56} onChange={(n) => setCf({ ...cf, kcal: n })} /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>kcal</span></div>
+            <div className="flex items-center gap-1"><NumberField value={cf.protein} step={1} label="protein" width={44} onChange={(n) => setCf({ ...cf, protein: n })} /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>P</span></div>
+            <div className="flex items-center gap-1"><NumberField value={cf.carbs} step={1} label="carbs" width={44} onChange={(n) => setCf({ ...cf, carbs: n })} /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>C</span></div>
+            <div className="flex items-center gap-1"><NumberField value={cf.fat} step={1} label="fat" width={44} onChange={(n) => setCf({ ...cf, fat: n })} /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>F</span></div>
+          </div>
+          <div className="mt-2 flex items-center gap-3">
+            <button onClick={() => { if (cf.kcal || cf.protein) { logFood(cf); if (cf.save && cf.label) addFood(cf); setCf({ label: "", kcal: 0, protein: 0, carbs: 0, fat: 0, save: false }); } }} className="rounded-full px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Add</button>
+            <button onClick={() => setCf({ ...cf, save: !cf.save })} className="flex items-center gap-1.5 font-mono text-[10px]" style={{ color: cf.save ? C.gold : C.ashDim }}><span style={{ width: 12, height: 12, borderRadius: 3, border: `1px solid ${cf.save ? C.gold : C.edge}`, background: cf.save ? C.gold : "transparent", display: "inline-block" }} />save as staple</button>
+          </div>
+        </div>
+
+        {/* today's entries */}
+        {d.entries.length > 0 && (
+          <div className="mt-4 space-y-1">
+            {d.entries.map((e) => (
+              <div key={e.id} className="flex items-center justify-between gap-2 text-[12px]" style={{ color: C.bone }}>
+                <span className="flex items-center gap-2 min-w-0"><span style={{ color: C.ashDim }} className="font-mono text-[10px]">{tHM(e.t)}</span><span className="truncate">{e.label}</span></span>
+                <span className="flex items-center gap-2 shrink-0"><span className="font-mono text-[10px]" style={{ color: C.ash }}>{e.kcal} kcal · {e.protein}P</span><button onClick={() => removeEntry(e.id)} aria-label="remove" style={{ color: C.ashDim }}><X size={12} /></button></span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* goals editor */}
+        <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
+          <button onClick={() => setGoalsOpen((v) => !v)} className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.goldDim }}>{goalsOpen ? "▾ hide" : "▸ edit"} goals</button>
+          {goalsOpen && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+              {[["kcal", "kcal", 50], ["protein", "P", 5], ["carbs", "C", 5], ["fat", "F", 5], ["steps", "steps", 1000], ["water", "ml", 250]].map(([key, lab, stp]) => (
+                <div key={key} className="flex items-center gap-1"><NumberField value={g[key]} step={stp} label={key} width={60} onChange={(n) => setNutGoals({ [key]: Math.max(0, Math.round(n)) })} /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{lab}</span></div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Water */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <span className={hdr} style={{ color: C.ash }}><Droplet size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Water</span>
+        <div className="mt-3"><NutBar label={`${(d.water / 250).toFixed(0)} glasses`} cur={d.water} goal={g.water} suffix=" ml" /></div>
+        <div className="mt-3 flex items-center gap-2">
+          <button onClick={() => addWater(250)} className="rounded-full border px-4 py-2 font-mono text-[11px] active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>+250 ml</button>
+          <NumberField value={cw} step={50} label="custom ml" width={64} onChange={(n) => setCw(n)} />
+          <button onClick={() => { if (cw > 0) { addWater(cw); setCw(0); } }} className="rounded-full px-3 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Add</button>
+        </div>
+        {d.waterEntries.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {d.waterEntries.slice().reverse().map((w) => (
+              <span key={w.id} className="flex items-center gap-1 rounded-full border px-2 py-1 font-mono text-[10px]" style={{ borderColor: C.edge, color: C.ash }}>{tHM(w.t)} · {w.ml}<button onClick={() => removeWaterEntry(w.id)} aria-label="remove" style={{ color: C.ashDim }}><X size={10} /></button></span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Road to ripped — ideal-self forecast */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <span className={hdr} style={{ color: C.ash }}>Road to ripped</span>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>now → goal</p>
+            <p className="font-mono text-lg font-bold" style={{ color: C.bone }}>{curLb != null ? fromLb(curLb, 1) : "—"} → {fromLb(goalLb, 1)} {uw(unit)}</p>
+          </div>
+          <div className="flex items-center gap-1.5"><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>goal</span>
+            <NumberField value={fromLb(goalLb, 1)} step={unit === "kg" ? 0.5 : 1} label="goal weight" width={56} onChange={(disp) => setNutGoals({ goalBwLb: toLb(disp, 1) })} /></div>
+        </div>
+        {curLb == null ? (
+          <p className="mt-3 text-[12.5px]" style={{ color: C.ash }}>Log your bodyweight in the Body card to start the forecast.</p>
+        ) : toGo <= 0 ? (
+          <p className="mt-3 text-[12.5px]" style={{ color: C.sage }}>You're at your goal weight — reassess: lean enough, or set a new target?</p>
+        ) : (
+          <div className="mt-3 flex flex-wrap items-end gap-x-5 gap-y-2">
+            <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>forecast (ideal world)</p>
+              <p className="font-mono text-xl font-bold" style={{ color: C.gold }}>{eta.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p></div>
+            <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>rate</p>
+              <p className="font-mono text-[13px]" style={{ color: C.ash }}>{(rateUsed * (unit === "kg" ? KG : 1)).toFixed(1)} {uw(unit)}/wk{lossWk ? "" : " est"}</p></div>
+            <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>to lose</p>
+              <p className="font-mono text-[13px]" style={{ color: C.ash }}>{fromLb(toGo, 1)} {uw(unit)} · {Math.ceil(weeksToGoal)} wk</p></div>
+          </div>
+        )}
+        {leanBand && <p className="mt-3 font-mono text-[10px]" style={{ color: C.ashDim }}>leanness now: waist {Math.round(wtHR * 100)}% of height → <span style={{ color: leanBand === "ripped" || leanBand === "athletic" ? C.sage : leanBand === "soft" ? C.rust : C.gold }}>{leanBand}</span> <span style={{ color: C.ashDim }}>(ripped &lt;43% · athletic &lt;46%)</span></p>}
+        <p className="mt-2 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>ideal-world ETA — assumes you hold the plan; fat loss slows near the end, so let your waist + the mirror confirm "ripped," not just the scale. Strength is tracked on the Workout tab's projection.</p>
+      </div>
+
+      {/* Trends — per metric (14 days) */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <span className={hdr} style={{ color: C.ash }}>Trends · 14 days</span>
+        <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+          {METRICS.map((m) => (
+            <button key={m.id} onClick={() => setMetric(m.id)} className="shrink-0 rounded-full border px-3 py-1.5 font-mono text-[11px] whitespace-nowrap" style={{ borderColor: metric === m.id ? C.goldDim : C.edge, background: metric === m.id ? "#241F12" : "transparent", color: metric === m.id ? C.gold : C.ash }}>{m.label}</button>
+          ))}
+        </div>
+        {(() => {
+          const m = METRICS.find((x) => x.id === metric);
+          const series = seriesFor(metric), avg = metricAvg(metric), goal = m.goal;
+          let verdict = null, vcol = C.ash;
+          if (goal && avg > 0) { const ratio = avg / goal; if (m.lowerBetter) { verdict = avg <= goal ? "avg under goal ✓" : `avg ${Math.round(avg - goal)} over`; vcol = avg <= goal ? C.sage : C.rust; } else { verdict = ratio >= 0.9 ? "hitting goal ✓" : `${Math.round(ratio * 100)}% of goal — slacking`; vcol = ratio >= 0.9 ? C.sage : C.rust; } }
+          else if (metric === "bw") { const vs = series.map((p) => p.v).filter((v) => v != null); const dlt = vs.length >= 2 ? vs[vs.length - 1] - vs[0] : null; verdict = dlt == null ? "need 2+ weigh-ins" : dlt < 0 ? `down ${Math.abs(dlt).toFixed(1)} ${uw(unit)} ✓` : dlt > 0 ? `up ${dlt.toFixed(1)} ${uw(unit)}` : "flat"; vcol = dlt != null && dlt <= 0 ? C.sage : C.rust; }
+          else if (metric === "sleep") { verdict = avg > 0 ? `avg ${avg.toFixed(1)}h${avg >= 7 ? " ✓" : " — low"}` : "log sleep"; vcol = avg >= 7 ? C.sage : C.rust; }
+          const avgTxt = metric === "steps" ? `${(avg / 1000).toFixed(1)}k` : metric === "water" ? `${Math.round(avg)} ml` : Math.round(avg * 10) / 10;
+          return (
+            <>
+              <div className="mt-2 font-mono text-[11px]"><span style={{ color: C.ash }}>avg <span style={{ color: C.bone }}>{avgTxt}</span>{metric === "water" ? "" : m.suffix}</span>{verdict ? <span className="ml-3" style={{ color: vcol }}>{verdict}</span> : null}</div>
+              <div className="mt-3" style={{ height: 130, width: "100%" }}>
+                <ResponsiveContainer>
+                  <LineChart data={series} margin={{ top: 6, right: 8, bottom: 0, left: -20 }}>
+                    <CartesianGrid stroke="#221E15" vertical={false} />
+                    <XAxis dataKey="d" tick={{ fill: C.ashDim, fontSize: 8, fontFamily: "monospace" }} stroke="#2A2418" interval={2} />
+                    <YAxis tick={{ fill: C.ashDim, fontSize: 9, fontFamily: "monospace" }} stroke="#2A2418" width={34} domain={metric === "bw" ? ["auto", "auto"] : [0, "auto"]} />
+                    <Tooltip contentStyle={{ background: "#15120A", border: `1px solid ${C.edge}`, borderRadius: 8, fontFamily: "monospace", fontSize: 11 }} labelStyle={{ color: C.ash }} itemStyle={{ color: C.bone }} formatter={(v) => [`${v}${m.suffix}`, m.label]} />
+                    {goal ? <ReferenceLine y={goal} stroke={C.goldDim} strokeDasharray="2 4" /> : null}
+                    <Line type="monotone" dataKey="v" stroke={C.gold} strokeWidth={2} dot={{ r: 2, fill: C.gold }} connectNulls isAnimationActive={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </>
+          );
+        })()}
+      </div>
+    </>
+  );
+}
+
 function App() {
   const [loaded, setLoaded] = useState(false);
   const [mem, setMem] = useState(DEFAULT);
   const [day, setDay] = useState(1);
+  const [tab, setTabState] = useState(() => { try { return localStorage.getItem("gg:tab") || "workout"; } catch (e) { return "workout"; } });
+  const setTab = (t) => { setTabState(t); try { localStorage.setItem("gg:tab", t); } catch (e) {} };   // remembered per device, not synced
   const [sync, setSync] = useState(null);          // {url,key,code} or null
   const [syncMsg, setSyncMsg] = useState("");       // human-readable status
   const [syncLocked, setSyncLocked] = useState(CIPHER_ACTIVE);   // baked sync waiting for the password on this device
@@ -1113,6 +1404,33 @@ function App() {
 
   const setBody = async (patch) => { const body = { ...(mem.body || {}), ...patch }; const nm = { ...mem, body }; if (hasStore) await saveState(nm); setMem(nm); };
   const setUnit = async (u) => { const nm = { ...mem, unit: u }; if (hasStore) await saveState(nm); setMem(nm); };
+
+  // ── diet handlers (each persists locally + rides the existing sync, like setBody) ──
+  const persistMem = async (nm) => { if (hasStore) await saveState(nm); setMem(nm); };
+  const nutOf = () => mem.nutrition || DEFAULT.nutrition;
+  const dayOf = (nut, k) => ({ ...blankDay(), ...(nut.days[k] || {}) });
+  const setNutGoals = async (patch) => { const nut = nutOf(); await persistMem({ ...mem, nutrition: { ...nut, goals: { ...nut.goals, ...patch } } }); };
+  const logFood = async (food) => { const nut = nutOf(), k = todayKey(), d = dayOf(nut, k);
+    const e = { id: uid(), label: food.label || "food", kcal: +food.kcal || 0, protein: +food.protein || 0, carbs: +food.carbs || 0, fat: +food.fat || 0, t: new Date().toISOString() };
+    const nd = { ...d, kcal: d.kcal + e.kcal, protein: d.protein + e.protein, carbs: d.carbs + e.carbs, fat: d.fat + e.fat, entries: [...d.entries, e] };
+    await persistMem({ ...mem, nutrition: { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) } }); };
+  const removeEntry = async (id) => { const nut = nutOf(), k = todayKey(), d = dayOf(nut, k); const e = d.entries.find((x) => x.id === id); if (!e) return;
+    const nd = { ...d, kcal: d.kcal - e.kcal, protein: d.protein - e.protein, carbs: d.carbs - e.carbs, fat: d.fat - e.fat, entries: d.entries.filter((x) => x.id !== id) };
+    await persistMem({ ...mem, nutrition: { ...nut, days: { ...nut.days, [k]: nd } } }); };
+  const addFood = async (food) => { const nut = nutOf(); const f = { id: uid(), label: food.label, kcal: +food.kcal || 0, protein: +food.protein || 0, carbs: +food.carbs || 0, fat: +food.fat || 0 };
+    await persistMem({ ...mem, nutrition: { ...nut, foods: [...(nut.foods || []), f] } }); };
+  const removeFood = async (id) => { const nut = nutOf(); await persistMem({ ...mem, nutrition: { ...nut, foods: (nut.foods || []).filter((f) => f.id !== id) } }); };
+  const setSteps = async (n) => { const nut = nutOf(), k = todayKey(), d = dayOf(nut, k); const nd = { ...d, steps: Math.max(0, Math.round(+n || 0)) };
+    await persistMem({ ...mem, nutrition: { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) } }); };
+  const addWater = async (ml) => { const amt = Math.round(+ml || 0); if (!amt) return; const nut = nutOf(), k = todayKey(), d = dayOf(nut, k);
+    const w = { id: uid(), ml: amt, t: new Date().toISOString() }; const nd = { ...d, water: Math.max(0, d.water + amt), waterEntries: [...d.waterEntries, w] };
+    await persistMem({ ...mem, nutrition: { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) } }); };
+  const removeWaterEntry = async (id) => { const nut = nutOf(), k = todayKey(), d = dayOf(nut, k); const e = d.waterEntries.find((x) => x.id === id); if (!e) return;
+    const nd = { ...d, water: Math.max(0, d.water - e.ml), waterEntries: d.waterEntries.filter((x) => x.id !== id) };
+    await persistMem({ ...mem, nutrition: { ...nut, days: { ...nut.days, [k]: nd } } }); };
+  const setSleepToday = async (bed, wake) => { const sl = mem.sleep || DEFAULT.sleep, k = todayKey();
+    await persistMem({ ...mem, sleep: { ...sl, days: pruneDays({ ...sl.days, [k]: { bed, wake } }) } }); };
+  const setSleepDefault = async (bed, wake) => { const sl = mem.sleep || DEFAULT.sleep; await persistMem({ ...mem, sleep: { ...sl, def: { bed, wake } } }); };
   const logBW = async () => {
     const body = { ...(mem.body || {}) };
     if (!body.bw) return;
@@ -1211,7 +1529,7 @@ function App() {
         .vup .gglegs{animation:legsUp 2s ease-in-out infinite alternate}
         .recline .ggbody{transform:rotate(-24deg)}`}</style>
       <div className="mx-auto max-w-md px-5 pb-24 pt-8">
-        {sessionStarted && (
+        {sessionStarted && tab === "workout" && (
           <div className="sticky top-0 z-20 -mx-5 mb-4 px-5 py-2" style={{ background: "rgba(14,13,11,0.93)", backdropFilter: "blur(6px)", borderBottom: `1px solid ${C.edge}` }}>
             <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider">
               <span style={{ color: C.gold }}>Day {day} · in progress</span>
@@ -1230,6 +1548,16 @@ function App() {
           <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>Session {(mem.sessionCount || 0) + 1}</span>
         </div>
 
+        <div className="mt-5 inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
+          {[["workout", "Workout", Dumbbell], ["diet", "Diet", Apple]].map(([t, lab, Icon]) => (
+            <button key={t} onClick={() => { setTab(t); setOpenInfo(null); }} className="flex items-center gap-1.5 rounded-full px-5 py-1.5 font-mono text-xs active:scale-95"
+              style={{ background: tab === t ? C.gold : "transparent", color: tab === t ? C.bg : C.ash, fontWeight: tab === t ? 700 : 400 }}>
+              <Icon size={12} />{lab}{t === "workout" && sessionStarted && <span style={{ width: 6, height: 6, borderRadius: 9, background: tab === t ? C.bg : C.gold, display: "inline-block" }} />}
+            </button>
+          ))}
+        </div>
+
+        {tab === "workout" && (<>
         {pending && (
           <div className="mt-5 rounded-xl border p-4" style={{ borderColor: C.activeEdge, background: "#1A1609", animation: "fade .4s ease-out" }}>
             <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>In-progress session found</p>
@@ -1465,23 +1793,6 @@ function App() {
           );})}
         </div>
 
-        {CIPHER_ACTIVE ? (
-          syncLocked ? (
-            <SyncLock onUnlock={unlockSync} msg={syncMsg} />
-          ) : (
-            <div className="mt-6 flex items-center justify-between rounded-2xl border px-5 py-3" style={{ background: C.card, borderColor: C.edge }}>
-              <div className="flex flex-col">
-                <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Cross-device sync</span>
-                <span className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px]" style={{ color: C.sage }}><Check size={11} /> {syncMsg && /error|fail|offline|wrong/i.test(syncMsg) ? <span style={{ color: C.rust }}>{syncMsg}</span> : (syncMsg || "on · auto")}</span>
-                <span className="mt-0.5 font-mono text-[9px]" style={{ color: C.ashDim }}>build {BUILD}</span>
-              </div>
-              <button onClick={forceSync} className="flex items-center gap-1.5 rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}><RefreshCw size={12} /> Refresh</button>
-            </div>
-          )
-        ) : (
-          <SyncPanel sync={sync} msg={syncMsg} log={syncLog} onConnect={connectSync} onDisconnect={disconnectSync} onSyncNow={syncNow} />
-        )}
-
         {/* finish + progress */}
         {confirm === "finish" ? (
           <div className="mt-6 rounded-2xl border p-4" style={{ borderColor: C.activeEdge, background: "#1A1609", animation: "fade .3s ease-out" }}>
@@ -1504,16 +1815,12 @@ function App() {
         <div className="mt-6 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
           <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Strength standards</span>
 
-          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-            <NumberField value={unit === "kg" ? Math.round((bw || 0) * KG * 10) / 10 : (bw || 0)} step={unit === "kg" ? 0.5 : 1} label="bodyweight" placeholder={unit === "kg" ? "kg" : "lb"}
-              onChange={(disp) => setBody({ bw: unit === "kg" ? Math.round((disp / KG) * 100) / 100 : Math.round(disp * 100) / 100 })} />
-            <span className="font-mono text-[11px]" style={{ color: C.ash }}>{uw(unit)}{bw ? ` · ${unit === "kg" ? Math.round(bw) + " lb" : lbToKg(bw) + " kg"}` : ""}</span>
-            <button onClick={logBW} disabled={!bw} aria-label="log today's bodyweight" className="ml-auto rounded-full border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: bw ? C.gold : C.ashDim, opacity: bw ? 1 : 0.5 }}>log today</button>
-          </div>
-          {bwDelta !== null && <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>{bwHist.length} weigh-ins · <span style={{ color: pctColor(bwDelta) }}>{bwDelta > 0 ? "+" : ""}{unit === "kg" ? Math.round(bwDelta * KG * 10) / 10 : bwDelta} {uw(unit)}</span> over ~30 days</p>}
+          {bw ? (
+            <p className="mt-2 font-mono text-[11px]" style={{ color: C.ash }}>bodyweight <span style={{ color: C.bone }}>{unit === "kg" ? Math.round(bw * KG * 10) / 10 : bw} {uw(unit)}</span> <span style={{ color: C.ashDim }}>· edit in the Diet tab</span></p>
+          ) : null}
 
           {!bw ? (
-            <p className="mt-4 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>Set your bodyweight to see where your lifts land against the Good / Great / Godlike standards — relative strength is the program's whole scorecard.</p>
+            <p className="mt-4 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>Set your bodyweight in the <span style={{ color: C.gold }}>Diet</span> tab to see where your lifts land against the Good / Great / Godlike standards — relative strength is the program's whole scorecard.</p>
           ) : (
             <div className="mt-4 space-y-3">
               {stdRows.map((r) => (
@@ -1540,19 +1847,36 @@ function App() {
 
           <div className="mt-5 border-t pt-4" style={{ borderColor: C.edge }}>
             <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>Lean-waist standard (optional)</span>
-            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-              <div className="flex items-center gap-1.5"><NumberField value={unit === "kg" ? Math.round((body.height || 0) * 2.54 * 10) / 10 : (body.height || 0)} step={unit === "kg" ? 1 : 0.5} label="height" placeholder={ulen(unit)} width={48}
-                onChange={(disp) => setBody({ height: unit === "kg" ? Math.round((disp / 2.54) * 100) / 100 : Math.round(disp * 100) / 100 })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{ulen(unit)} height</span></div>
-              <div className="flex items-center gap-1.5"><NumberField value={unit === "kg" ? Math.round((body.waist || 0) * 2.54 * 10) / 10 : (body.waist || 0)} step={unit === "kg" ? 1 : 0.5} label="waist" placeholder={ulen(unit)} width={48}
-                onChange={(disp) => setBody({ waist: unit === "kg" ? Math.round((disp / 2.54) * 100) / 100 : Math.round(disp * 100) / 100 })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{ulen(unit)} waist</span></div>
-            </div>
             {body.waist && body.height ? (
               <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>waist {Math.round(waistPct * 100)}% of height · <span style={{ color: waistTier >= 0 ? C.gold : C.ashDim }}>{waistTier >= 0 ? TIERS[waistTier] : "above Good"}</span> <span style={{ color: C.ashDim }}>(Good ≤47 · Great ≤46 · Godlike ≤45%)</span></p>
             ) : (
-              <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>add height + waist ({ulen(unit)}) for the lean-waist standard</p>
+              <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>add height + waist in the <span style={{ color: C.gold }}>Diet</span> tab for the lean-waist standard</p>
             )}
           </div>
         </div>
+        </>)}
+
+        {tab === "diet" && (
+          <DietView mem={mem} unit={unit} logFood={logFood} removeEntry={removeEntry} addFood={addFood} removeFood={removeFood} setSteps={setSteps} addWater={addWater} removeWaterEntry={removeWaterEntry} setSleepToday={setSleepToday} setSleepDefault={setSleepDefault} setNutGoals={setNutGoals} setBody={setBody} logBW={logBW} />
+        )}
+
+        {/* shared cross-device sync (app-wide, both tabs) */}
+        {CIPHER_ACTIVE ? (
+          syncLocked ? (
+            <SyncLock onUnlock={unlockSync} msg={syncMsg} />
+          ) : (
+            <div className="mt-6 flex items-center justify-between rounded-2xl border px-5 py-3" style={{ background: C.card, borderColor: C.edge }}>
+              <div className="flex flex-col">
+                <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Cross-device sync</span>
+                <span className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px]" style={{ color: C.sage }}><Check size={11} /> {syncMsg && /error|fail|offline|wrong/i.test(syncMsg) ? <span style={{ color: C.rust }}>{syncMsg}</span> : (syncMsg || "on · auto")}</span>
+                <span className="mt-0.5 font-mono text-[9px]" style={{ color: C.ashDim }}>build {BUILD}</span>
+              </div>
+              <button onClick={forceSync} className="flex items-center gap-1.5 rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}><RefreshCw size={12} /> Refresh</button>
+            </div>
+          )
+        ) : (
+          <SyncPanel sync={sync} msg={syncMsg} log={syncLog} onConnect={connectSync} onDisconnect={disconnectSync} onSyncNow={syncNow} />
+        )}
 
         <div className="mt-6 flex items-center justify-between border-t pt-5" style={{ borderColor: C.edge }}>
           <p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.goldDim }}>v0.21 · live cross-device sync · github · lb / kg{!hasStore ? " · session-only here" : ""}</p>
