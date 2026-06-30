@@ -762,7 +762,7 @@ function App() {
     await LS.set(KEY, rmem);
     await LS.set(TSKEY, adoptTs);        // local "change" clock == what we just adopted
     await setSyncedTs(adoptTs);          // ...and we are in sync with it
-    if (setTagToo) setTag(rmem.lastTag ? (rmem.lastTag === "A" ? "B" : "A") : "A");
+    if (setTagToo) setDay(rmem.lastDay ? nextDayId(rmem.lastDay) : 1);   // adopted: suggest next day (auto-resume overrides to the live session's day if present)
     const liveOk = rlive && Array.isArray(rlive.done) && (rlive.done.length > 0 || rlive.active);
     if (liveOk) { liveRef.current = rlive; if (hasStore) await LS.set(LIVE, rlive); setPending(rlive); }
     else { liveRef.current = null; if (hasStore) await LS.del(LIVE); setPending(null); }
