@@ -31,7 +31,7 @@
 <script type="text/babel" data-type="module" data-presets="react">
 const _b = document.getElementById("boot"); if (_b) _b.remove();
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon } from "lucide-react";
+import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
@@ -180,9 +180,11 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0630-1704";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0630-2127";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
+const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
+const relDay = (key) => { const t = todayKey(); if (key === t) return "Today"; if (key === shiftDate(t, -1)) return "Yesterday"; if (key === shiftDate(t, 1)) return "Tomorrow"; const [y, m, d] = key.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }); };
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
 const pruneDays = (days, n = 90) => { const ks = Object.keys(days).sort(); if (ks.length <= n) return days; const out = { ...days }; ks.slice(0, ks.length - n).forEach((k) => delete out[k]); return out; };
 const sleepHours = (bed, wake) => { if (!bed || !wake) return null; const [bh, bm] = bed.split(":").map(Number); const [wh, wm] = wake.split(":").map(Number); let m = (wh * 60 + wm) - (bh * 60 + bm); if (m <= 0) m += 1440; return m / 60; };  // overnight-aware
@@ -745,7 +747,9 @@ function NutBar({ icon, label, cur, goal, suffix = "", overIsBad = false }) {
 function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, setSteps, addWater, removeWaterEntry, setSleepToday, setSleepDefault, setNutGoals, setBody, logBW }) {
   const nut = mem.nutrition || DEFAULT.nutrition;
   const sl = mem.sleep || DEFAULT.sleep;
-  const k = todayKey();
+  const [viewDate, setViewDate] = useState(todayKey());   // which day the log cards (sleep/food/water) read & write
+  const isToday = viewDate === todayKey();
+  const k = viewDate;
   const d = { ...blankDay(), ...(nut.days[k] || {}) };
   const g = nut.goals;
   const st = sl.days[k] || sl.def;
@@ -804,14 +808,28 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, setSte
 
   return (
     <>
+      {/* Day selector — the Sleep / Today / Water cards below log for this day */}
+      <div className="mt-6 flex items-center justify-between rounded-2xl border px-2 py-2" style={{ background: C.card, borderColor: C.edge }}>
+        <button onClick={() => setViewDate(shiftDate(viewDate, -1))} aria-label="previous day" className="flex h-8 w-8 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronLeft size={18} /></button>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[12px] font-bold" style={{ color: isToday ? C.gold : C.bone }}>{relDay(viewDate)}</span>
+          <label className="flex items-center gap-1 rounded-lg border px-2 py-1" style={{ borderColor: C.edge }}>
+            <CalendarDays size={12} style={{ color: C.ashDim }} />
+            <input type="date" value={viewDate} onChange={(e) => e.target.value && setViewDate(e.target.value)} className="bg-transparent font-mono text-[11px] outline-none" style={{ color: C.ash, colorScheme: "dark" }} />
+          </label>
+          {!isToday && <button onClick={() => setViewDate(todayKey())} className="rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider" style={{ borderColor: C.goldDim, color: C.gold }}>today</button>}
+        </div>
+        <button onClick={() => setViewDate(shiftDate(viewDate, 1))} aria-label="next day" className="flex h-8 w-8 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronRight size={18} /></button>
+      </div>
+
       {/* Sleep */}
       <div className={card} style={{ background: C.card, borderColor: C.edge }}>
         <span className={hdr} style={{ color: C.ash }}><Moon size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Sleep</span>
         <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-3">
           <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>bed</p>
-            <input type="time" value={st.bed} onChange={(e) => setSleepToday(e.target.value, st.wake)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} /></div>
+            <input type="time" value={st.bed} onChange={(e) => setSleepToday(e.target.value, st.wake, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} /></div>
           <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>wake</p>
-            <input type="time" value={st.wake} onChange={(e) => setSleepToday(st.bed, e.target.value)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} /></div>
+            <input type="time" value={st.wake} onChange={(e) => setSleepToday(st.bed, e.target.value, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} /></div>
           <div className="ml-auto text-right"><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>last night</p>
             <p className="font-mono text-xl font-bold" style={{ color: slH >= 7 && slH <= 9.5 ? C.sage : C.gold }}>{fmtHM(slH)}</p></div>
         </div>
@@ -839,8 +857,8 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, setSte
       {/* Today — nutrition + steps */}
       <div className={card} style={{ background: C.card, borderColor: C.edge }}>
         <div className="flex items-center justify-between">
-          <span className={hdr} style={{ color: C.ash }}>Today</span>
-          <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+          <span className={hdr} style={{ color: C.ash }}>{isToday ? "Today" : relDay(viewDate)}</span>
+          <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{viewDate}</span>
         </div>
         <div className="mt-4 space-y-3">
           <NutBar icon={<Flame size={13} style={{ color: C.gold }} />} label="Calories" cur={d.kcal} goal={g.kcal} suffix=" kcal" overIsBad />
@@ -854,7 +872,7 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, setSte
         <p className="mt-5 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>quick add</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
           {(nut.foods || []).map((f) => (
-            <button key={f.id} onClick={() => logFood(f)} className="rounded-full border px-3 py-1.5 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.bone }}>
+            <button key={f.id} onClick={() => logFood(f, viewDate)} className="rounded-full border px-3 py-1.5 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.bone }}>
               {f.label} <span style={{ color: C.ashDim }}>· {f.kcal}</span>
             </button>
           ))}
@@ -863,7 +881,7 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, setSte
         {/* steps set (absolute) */}
         <div className="mt-4 flex items-center gap-2">
           <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>set steps</span>
-          <NumberField value={d.steps} step={1000} label="steps" width={72} onChange={(n) => setSteps(n)} />
+          <NumberField value={d.steps} step={1000} label="steps" width={72} onChange={(n) => setSteps(n, viewDate)} />
         </div>
 
         {/* custom add */}
@@ -877,7 +895,7 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, setSte
             <div className="flex items-center gap-1"><NumberField value={cf.fat} step={1} label="fat" width={44} onChange={(n) => setCf({ ...cf, fat: n })} /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>F</span></div>
           </div>
           <div className="mt-2 flex items-center gap-3">
-            <button onClick={() => { if (cf.kcal || cf.protein) { logFood(cf); if (cf.save && cf.label) addFood(cf); setCf({ label: "", kcal: 0, protein: 0, carbs: 0, fat: 0, save: false }); } }} className="rounded-full px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Add</button>
+            <button onClick={() => { if (cf.kcal || cf.protein) { logFood(cf, viewDate); if (cf.save && cf.label) addFood(cf); setCf({ label: "", kcal: 0, protein: 0, carbs: 0, fat: 0, save: false }); } }} className="rounded-full px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Add</button>
             <button onClick={() => setCf({ ...cf, save: !cf.save })} className="flex items-center gap-1.5 font-mono text-[10px]" style={{ color: cf.save ? C.gold : C.ashDim }}><span style={{ width: 12, height: 12, borderRadius: 3, border: `1px solid ${cf.save ? C.gold : C.edge}`, background: cf.save ? C.gold : "transparent", display: "inline-block" }} />save as staple</button>
           </div>
         </div>
@@ -888,7 +906,7 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, setSte
             {d.entries.map((e) => (
               <div key={e.id} className="flex items-center justify-between gap-2 text-[12px]" style={{ color: C.bone }}>
                 <span className="flex items-center gap-2 min-w-0"><span style={{ color: C.ashDim }} className="font-mono text-[10px]">{tHM(e.t)}</span><span className="truncate">{e.label}</span></span>
-                <span className="flex items-center gap-2 shrink-0"><span className="font-mono text-[10px]" style={{ color: C.ash }}>{e.kcal} kcal · {e.protein}P</span><button onClick={() => removeEntry(e.id)} aria-label="remove" style={{ color: C.ashDim }}><X size={12} /></button></span>
+                <span className="flex items-center gap-2 shrink-0"><span className="font-mono text-[10px]" style={{ color: C.ash }}>{e.kcal} kcal · {e.protein}P</span><button onClick={() => removeEntry(e.id, viewDate)} aria-label="remove" style={{ color: C.ashDim }}><X size={12} /></button></span>
               </div>
             ))}
           </div>
@@ -912,14 +930,14 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, setSte
         <span className={hdr} style={{ color: C.ash }}><Droplet size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Water</span>
         <div className="mt-3"><NutBar label={`${(d.water / 250).toFixed(0)} glasses`} cur={d.water} goal={g.water} suffix=" ml" /></div>
         <div className="mt-3 flex items-center gap-2">
-          <button onClick={() => addWater(250)} className="rounded-full border px-4 py-2 font-mono text-[11px] active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>+250 ml</button>
+          <button onClick={() => addWater(250, viewDate)} className="rounded-full border px-4 py-2 font-mono text-[11px] active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>+250 ml</button>
           <NumberField value={cw} step={50} label="custom ml" width={64} onChange={(n) => setCw(n)} />
-          <button onClick={() => { if (cw > 0) { addWater(cw); setCw(0); } }} className="rounded-full px-3 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Add</button>
+          <button onClick={() => { if (cw > 0) { addWater(cw, viewDate); setCw(0); } }} className="rounded-full px-3 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Add</button>
         </div>
         {d.waterEntries.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {d.waterEntries.slice().reverse().map((w) => (
-              <span key={w.id} className="flex items-center gap-1 rounded-full border px-2 py-1 font-mono text-[10px]" style={{ borderColor: C.edge, color: C.ash }}>{tHM(w.t)} · {w.ml}<button onClick={() => removeWaterEntry(w.id)} aria-label="remove" style={{ color: C.ashDim }}><X size={10} /></button></span>
+              <span key={w.id} className="flex items-center gap-1 rounded-full border px-2 py-1 font-mono text-[10px]" style={{ borderColor: C.edge, color: C.ash }}>{tHM(w.t)} · {w.ml}<button onClick={() => removeWaterEntry(w.id, viewDate)} aria-label="remove" style={{ color: C.ashDim }}><X size={10} /></button></span>
             ))}
           </div>
         )}
@@ -1410,25 +1428,25 @@ function App() {
   const nutOf = () => mem.nutrition || DEFAULT.nutrition;
   const dayOf = (nut, k) => ({ ...blankDay(), ...(nut.days[k] || {}) });
   const setNutGoals = async (patch) => { const nut = nutOf(); await persistMem({ ...mem, nutrition: { ...nut, goals: { ...nut.goals, ...patch } } }); };
-  const logFood = async (food) => { const nut = nutOf(), k = todayKey(), d = dayOf(nut, k);
+  const logFood = async (food, dk) => { const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k);
     const e = { id: uid(), label: food.label || "food", kcal: +food.kcal || 0, protein: +food.protein || 0, carbs: +food.carbs || 0, fat: +food.fat || 0, t: new Date().toISOString() };
     const nd = { ...d, kcal: d.kcal + e.kcal, protein: d.protein + e.protein, carbs: d.carbs + e.carbs, fat: d.fat + e.fat, entries: [...d.entries, e] };
     await persistMem({ ...mem, nutrition: { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) } }); };
-  const removeEntry = async (id) => { const nut = nutOf(), k = todayKey(), d = dayOf(nut, k); const e = d.entries.find((x) => x.id === id); if (!e) return;
+  const removeEntry = async (id, dk) => { const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k); const e = d.entries.find((x) => x.id === id); if (!e) return;
     const nd = { ...d, kcal: d.kcal - e.kcal, protein: d.protein - e.protein, carbs: d.carbs - e.carbs, fat: d.fat - e.fat, entries: d.entries.filter((x) => x.id !== id) };
     await persistMem({ ...mem, nutrition: { ...nut, days: { ...nut.days, [k]: nd } } }); };
   const addFood = async (food) => { const nut = nutOf(); const f = { id: uid(), label: food.label, kcal: +food.kcal || 0, protein: +food.protein || 0, carbs: +food.carbs || 0, fat: +food.fat || 0 };
     await persistMem({ ...mem, nutrition: { ...nut, foods: [...(nut.foods || []), f] } }); };
   const removeFood = async (id) => { const nut = nutOf(); await persistMem({ ...mem, nutrition: { ...nut, foods: (nut.foods || []).filter((f) => f.id !== id) } }); };
-  const setSteps = async (n) => { const nut = nutOf(), k = todayKey(), d = dayOf(nut, k); const nd = { ...d, steps: Math.max(0, Math.round(+n || 0)) };
+  const setSteps = async (n, dk) => { const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k); const nd = { ...d, steps: Math.max(0, Math.round(+n || 0)) };
     await persistMem({ ...mem, nutrition: { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) } }); };
-  const addWater = async (ml) => { const amt = Math.round(+ml || 0); if (!amt) return; const nut = nutOf(), k = todayKey(), d = dayOf(nut, k);
+  const addWater = async (ml, dk) => { const amt = Math.round(+ml || 0); if (!amt) return; const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k);
     const w = { id: uid(), ml: amt, t: new Date().toISOString() }; const nd = { ...d, water: Math.max(0, d.water + amt), waterEntries: [...d.waterEntries, w] };
     await persistMem({ ...mem, nutrition: { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) } }); };
-  const removeWaterEntry = async (id) => { const nut = nutOf(), k = todayKey(), d = dayOf(nut, k); const e = d.waterEntries.find((x) => x.id === id); if (!e) return;
+  const removeWaterEntry = async (id, dk) => { const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k); const e = d.waterEntries.find((x) => x.id === id); if (!e) return;
     const nd = { ...d, water: Math.max(0, d.water - e.ml), waterEntries: d.waterEntries.filter((x) => x.id !== id) };
     await persistMem({ ...mem, nutrition: { ...nut, days: { ...nut.days, [k]: nd } } }); };
-  const setSleepToday = async (bed, wake) => { const sl = mem.sleep || DEFAULT.sleep, k = todayKey();
+  const setSleepToday = async (bed, wake, dk) => { const sl = mem.sleep || DEFAULT.sleep, k = dk || todayKey();
     await persistMem({ ...mem, sleep: { ...sl, days: pruneDays({ ...sl.days, [k]: { bed, wake } }) } }); };
   const setSleepDefault = async (bed, wake) => { const sl = mem.sleep || DEFAULT.sleep; await persistMem({ ...mem, sleep: { ...sl, def: { bed, wake } } }); };
   const logBW = async () => {
