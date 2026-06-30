@@ -180,8 +180,8 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0630-1503";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
-const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb" };
+const BUILD = "b0630-1532";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb" };
 
 /* ───────────────────────── program ───────────────────────── */
 const AB_VARIANTS = [
@@ -373,6 +373,7 @@ const migrateMem = (raw) => {
   }
   m.targets = seedTargets(m);
   m.lastByDay = m.lastByDay || {};
+  m.audit = Array.isArray(m.audit) ? m.audit : [];
   m.version = 2;
   return m;
 };
@@ -720,6 +721,7 @@ function App() {
   const quietRef = useRef(0);   // suppress push echoes right after adopting a remote copy
   const liveClearedRef = useRef(false);   // true only when WE intentionally ended the session (finish/discard/day-switch)
   const syncedLiveSig = useRef("null");   // signature of the live session as last synced — stops re-pushing an adopted session
+  const lastFinishRef = useRef(null);     // { key, at } of the most recently finished set — used to measure REAL rest taken
 
   // mirror the module-level sync debug ring buffer into React state so it renders
   useEffect(() => { setSyncLog(SYNCLOG.slice()); SYNCLOG_NOTIFY = (lines) => setSyncLog(lines); return () => { SYNCLOG_NOTIFY = null; }; }, []);
@@ -962,7 +964,9 @@ function App() {
     const check = () => {
       if (stopped) return;
       const left = Math.round((rest.endAt - Date.now()) / 1000);
-      if (left <= 0) { fireAlert(); setDone((d) => new Set(d).add(rest.key)); setRest(null); return; }
+      if (left <= 0) { fireAlert(); const k = rest.key, now = Date.now();
+        setLogs((L) => ({ ...L, [k]: { ...(L[k] || {}), restEndedVia: "timer", restAppElapsed: L[k]?.finishedAt ? Math.round((now - L[k].finishedAt) / 1000) : rest.total } }));
+        setDone((d) => new Set(d).add(rest.key)); setRest(null); return; }
       setRestLeft(left);
     };
     check();
@@ -1012,9 +1016,19 @@ function App() {
   });
   const stepR = (key, d, set) => setLogs((L) => { const cur = L[key]?.reps ?? set.repsNum; return { ...L, [key]: { ...(L[key] || {}), weight: L[key]?.weight ?? set.load, reps: Math.max(0, cur + d) } }; });
   const setEffort = (key, e) => setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), e: L[key]?.e === e ? undefined : e } }));
-  const startSet = (key) => { if (!busy) { primeAudio(); setActive(key); setOpenInfo(null); } };
-  const finishSet = (set) => { const key = active; primeAudio(); setActive(null); setCue(""); setRestLeft(set.rest); setRest({ key, endAt: Date.now() + set.rest * 1000, total: set.rest }); setOpenInfo(null); };
-  const skipRest = () => { setDone((d) => new Set(d).add(rest.key)); setRest(null); setOpenInfo(null); };
+  const startSet = (key) => { if (!busy) { primeAudio();
+    const now = Date.now();
+    const lf = lastFinishRef.current;
+    if (lf && lf.key !== key) setLogs((L) => (L[lf.key] && L[lf.key].restActual == null ? { ...L, [lf.key]: { ...L[lf.key], restActual: Math.round((now - lf.at) / 1000) } } : L));   // real rest since the last set finished
+    setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), startedAt: now } }));
+    setActive(key); setOpenInfo(null); } };
+  const finishSet = (set) => { const key = active; const now = Date.now(); primeAudio();
+    setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), finishedAt: now, restPrescribed: set.rest } }));
+    lastFinishRef.current = { key, at: now };
+    setActive(null); setCue(""); setRestLeft(set.rest); setRest({ key, endAt: now + set.rest * 1000, total: set.rest }); setOpenInfo(null); };
+  const skipRest = () => { const key = rest.key, now = Date.now();
+    setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), restEndedVia: "skip", restAppElapsed: L[key]?.finishedAt ? Math.round((now - L[key].finishedAt) / 1000) : null } }));
+    setDone((d) => new Set(d).add(rest.key)); setRest(null); setOpenInfo(null); };
   const addRest = () => setRest((r) => (r ? { ...r, endAt: r.endAt + 30000, total: r.total + 30 } : null));
   const cancelSet = () => { setActive(null); setCue(""); setOpenInfo(null); };
   const undoSet = (key) => setDone((dn) => { const n = new Set(dn); n.delete(key); return n; });
@@ -1059,9 +1073,23 @@ function App() {
     const assessment = assess(snap.lifts, prevSnap?.lifts || null);
     const newLastByDay = { ...(mem.lastByDay || {}), [day]: snap };
     const lastChanges = {}; changes.forEach((c) => { lastChanges[c.name] = c; });
-    const newMem = { ...mem, version: 2, lastDay: day, sessionCount: (mem.sessionCount || 0) + 1, weights: newWeights, targets: newTargets, stalls: newStalls, lastByDay: newLastByDay, recentCues, lastChanges, history: newHistory, setHistory: newSetHistory };
+    // ground-truth audit: the REAL timings of this session (rest taken vs prescribed, skip-early vs ring, etc.)
+    const isoOrNull = (ms) => (ms ? new Date(ms).toISOString() : null);
+    const auditSets = [];
+    plan.forEach((item, exIdx) => {
+      const work = item.sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "work");
+      work.forEach((x) => { const k = `${exIdx}-${x.si}`; if (done.has(k)) { const lg = logs[k] || {};
+        auditSets.push({ ex: item.ex.name, set: x.s.label, w: lg.weight, r: lg.reps, e: lg.e || null,
+          startedAt: isoOrNull(lg.startedAt), finishedAt: isoOrNull(lg.finishedAt),
+          restPrescribed: lg.restPrescribed ?? null, restEndedVia: lg.restEndedVia ?? null,
+          restAppElapsed: lg.restAppElapsed ?? null, restActual: lg.restActual ?? null }); } });
+    });
+    const firstStart = auditSets.map((s) => s.startedAt).filter(Boolean).sort()[0] || stamp;
+    const auditRec = { day, date: stamp, startedAt: firstStart, finishedAt: stamp, durationS: Math.round((Date.parse(stamp) - Date.parse(firstStart)) / 1000), sets: auditSets };
+    const newAudit = [...(mem.audit || []), auditRec].slice(-20);
+    const newMem = { ...mem, version: 2, lastDay: day, sessionCount: (mem.sessionCount || 0) + 1, weights: newWeights, targets: newTargets, stalls: newStalls, lastByDay: newLastByDay, audit: newAudit, recentCues, lastChanges, history: newHistory, setHistory: newSetHistory };
     if (hasStore) { await saveState(newMem); await clearLive(); }
-    liveRef.current = null; liveClearedRef.current = true; syncedLiveSig.current = "null";   // session genuinely finished → propagate the clear
+    liveRef.current = null; liveClearedRef.current = true; syncedLiveSig.current = "null"; lastFinishRef.current = null;   // session genuinely finished → propagate the clear
     setPending(null);
     setSummary({ day, changes, assessment });
     setMem(newMem);
