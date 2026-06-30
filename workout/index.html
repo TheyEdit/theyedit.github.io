@@ -157,7 +157,7 @@ const REMOTE = {
 };
 const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
-const DEFAULT = { version: 1, lastTag: null, sessionCount: 0, weights: {}, recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb" };
+const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb" };
 
 /* ───────────────────────── program ───────────────────────── */
 const AB_VARIANTS = [
@@ -232,6 +232,128 @@ const WORKOUTS = {
 
 const baseWeight = (ex) => (ex.type === "rpt" ? ex.heavy : ex.load);
 
+/* ─────────────── data-driven program (5-day) ───────────────
+   EXERCISES = the movement library (one entry per lift; all exercise knowledge lives here).
+   PROGRAM   = an array of days, each a list of slots referencing EXERCISES by name with
+               optional per-slot sets/range overrides. Engine/assessment/projection are generic
+               over these two objects — no day or exercise name is hardcoded in logic. Swapping a
+               lift or rewriting the schedule = editing only these objects. History keys by name,
+               so a lift keeps its history regardless of which day it sits in. */
+const _SRC = (() => {                       // index existing exercise objects by name to reuse cues/basic/startLoad
+  const m = {};
+  [...WORKOUTS.A.exercises, ...WORKOUTS.B.exercises].forEach((e) => (e.variantSlot ? e.variants : [e]).forEach((x) => { m[x.name] = x; }));
+  AB_VARIANTS.forEach((x) => { m[x.name] = x; });
+  return m;
+})();
+// ex(name, muscle, opts): opts may carry sets/range (canonical for this lift) and, for NEW lifts, basic+cues+startLoad.
+const _ex = (name, muscle, o = {}) => ({
+  name, muscle,
+  sets: o.sets, range: o.range,                                   // canonical volume (PROGRAM slot may override)
+  rest: o.rest ?? _SRC[name]?.rest ?? 120,
+  single: o.single ?? _SRC[name]?.single ?? false,
+  repProgress: o.repProgress ?? _SRC[name]?.repProgress ?? false, // bodyweight/rep-only lifts
+  startLoad: o.startLoad ?? _SRC[name]?.heavy ?? _SRC[name]?.load ?? 0,
+  basic: o.basic ?? _SRC[name]?.basic ?? "",
+  cues: o.cues ?? _SRC[name]?.cues ?? [],
+});
+const EXERCISES = {
+  // ── reused from the existing program (cues/basic/startLoad carried over) ──
+  "Incline DB Bench Press": _ex("Incline DB Bench Press", "Upper chest", { sets: 4, range: [6, 10] }),
+  "Standing DB Shoulder Press": _ex("Standing DB Shoulder Press", "Front delts", { sets: 3, range: [8, 12] }),
+  "DB Lateral Raises": _ex("DB Lateral Raises", "Side delts", { sets: 4, range: [12, 20] }),
+  "DB Skull Crushers": _ex("DB Skull Crushers", "Triceps", { sets: 2, range: [10, 15] }),
+  "Chest-Supported DB Row": _ex("Chest-Supported DB Row", "Mid back", { sets: 4, range: [8, 12] }),
+  "DB Romanian Deadlift": _ex("DB Romanian Deadlift", "Hamstrings", { sets: 4, range: [8, 12] }),
+  "Bent-Over DB Flyes": _ex("Bent-Over DB Flyes", "Rear delts", { sets: 4, range: [12, 20] }),
+  "Incline DB Curls": _ex("Incline DB Curls", "Biceps", { sets: 4, range: [8, 12] }),
+  "Single-Leg Calf Raises": _ex("Single-Leg Calf Raises", "Calves", { sets: 3, range: [12, 15] }),
+  "Bench-Supported DB Pullover": _ex("Bench-Supported DB Pullover", "Lats", { sets: 2, range: [12, 15] }),
+  "Bulgarian Split Squat": _ex("Bulgarian Split Squat", "Quads", { sets: 4, range: [8, 12] }),
+  "DB Goblet Squat": _ex("DB Goblet Squat", "Quads", { sets: 3, range: [10, 15] }),
+  "Weighted DB Crunch": _ex("Weighted DB Crunch", "Abs", { sets: 3, range: [10, 15] }),
+  // ── new lifts the 5-day split adds ──
+  "Flat DB Press": _ex("Flat DB Press", "Mid chest", { sets: 3, range: [10, 15], rest: 120, startLoad: 35,
+    basic: "Lie flat on the bench, dumbbells at the sides of your mid-chest, wrists stacked over elbows. Press up and slightly together to just short of lockout, then lower under control until you feel a stretch across the chest.",
+    cues: ["Lower the dumbbells to the sides of your mid-chest, not up by your shoulders.","Press up and slightly together, stopping just short of locking out.","Keep your shoulder blades pinned back and down into the bench.","Feel a deep stretch across the chest at the bottom of each rep.","Drive your feet into the floor for a stable, powerful press.","Keep your forearms stacked vertically under the weight the whole time.","Push your chest up to meet the dumbbells instead of rounding your shoulders forward.","Lower under control for a two-count; don't just drop into the bottom.","Squeeze the dumbbells together at the top to fire the inner chest.","Keep a hard grip and brace your core before each rep.","Don't clack them at the top — stop short and keep the pecs loaded.","Leave one clean rep in the tank rather than grinding and losing form."] }),
+  "Overhead DB Triceps Extension": _ex("Overhead DB Triceps Extension", "Triceps", { sets: 3, range: [10, 15], rest: 90, single: true, startLoad: 30,
+    basic: "Hold one dumbbell overhead with both hands cupping the top end, upper arms vertical by your ears. Lower it behind your head until you feel a deep stretch in the triceps, then extend back to the top without flaring the elbows.",
+    cues: ["Keep your upper arms vertical and close to your ears the entire set.","Lower the dumbbell behind your head until the triceps stretch deeply.","Extend by straightening the elbows, not by swinging the arms forward.","Keep your elbows pointed up and in — don't let them flare out wide.","Brace your core so your lower back doesn't arch as you reach overhead.","Control the lowering for a three-count; the overhead stretch is the point.","Squeeze the triceps hard at the top of each rep.","Keep your ribs down and stacked over your hips throughout.","Cup the top end of the dumbbell securely with both hands.","Pause a beat at the bottom stretch before driving back up.","Keep the movement all in the elbows; the shoulders stay still.","Lighter and deeper beats heavy and short here — chase the stretch."] }),
+  "One-Arm DB Row": _ex("One-Arm DB Row", "Lats", { sets: 3, range: [8, 12], rest: 120, single: true, startLoad: 45,
+    basic: "One hand and knee on the bench, flat back, the working arm hanging straight down with a dumbbell. Row it to your hip by driving the elbow back and squeezing the lat, then lower to a full stretch. Finish all reps, then switch sides.",
+    cues: ["Drive your elbow toward your back pocket, not out to the side.","Let the dumbbell hang to a full stretch at the bottom of every rep.","Squeeze the lat hard at the top and pause for a beat.","Keep your back flat and your hips square — don't twist to lift.","Pull with your elbow and let your hand be a passive hook.","Row the dumbbell toward your waistline in a slight arc.","Keep your shoulder down and away from your ear as you pull.","Lower for a three-count and feel the lat load up.","Brace your core so your spine stays neutral throughout.","Keep your neck long and gaze at the bench, not the mirror.","Match the reps and depth on both sides exactly.","Pull through your hand, sourcing the force from your back."] }),
+  "Hammer Curl": _ex("Hammer Curl", "Brachialis", { sets: 3, range: [10, 15], rest: 90, startLoad: 25,
+    basic: "Stand tall, a dumbbell in each hand with palms facing in (neutral grip). Curl without swinging the upper arms, keeping the thumbs up the whole way, then lower to a full stretch. Builds the brachialis and forearm for arm thickness.",
+    cues: ["Keep your palms facing each other, thumbs up, the whole rep.","Pin your elbows at your sides; don't let them swing forward.","Curl your forearm to your shoulder, not the dumbbell to your face.","Lower all the way to a full stretch — never cut the bottom.","Keep your wrists firm and straight, like holding two hammers.","Squeeze at the top for a beat before lowering slow.","Stand tall and braced; no heaving with the back or hips.","Control the negative for a two- to three-count.","Keep tension on the arms; don't rest at the bottom.","Move both arms in mirrored time, or alternate cleanly.","Keep your shoulders down and chest proud as you fatigue.","The last reps slow down — never swing to finish a rep."] }),
+  "Single-Leg RDL": _ex("Single-Leg RDL", "Hamstrings", { sets: 2, range: [10, 12], rest: 120, single: true, startLoad: 30,
+    basic: "Stand on one leg, a dumbbell in the opposite hand. Hinge at the hip, reaching the dumbbell down toward the floor as the free leg extends straight behind you, until you feel a deep hamstring stretch, then drive the hip forward to stand. Switch sides.",
+    cues: ["Hinge at the hip and reach the dumbbell toward the floor, not your chest down.","Let the free leg extend straight behind you as a counterbalance.","Keep a soft, fixed bend in the standing knee throughout.","Stop when the hamstring stretches deeply — that's your depth.","Keep your hips square to the floor; don't let the back hip open up.","Drive the standing hip forward to stand tall and squeeze the glute.","Keep your spine long and flat like a broomstick the whole hinge.","Move slowly and own your balance before adding speed.","Reach the dumbbell close to your standing shin on the way down.","Brace your core so your lower back stays neutral.","Match the reps and depth on both legs.","Stay patient — control beats load on this one."] }),
+  "Reverse Lunge": _ex("Reverse Lunge", "Quads", { sets: 4, range: [8, 12], rest: 150, single: true, startLoad: 30,
+    basic: "Stand tall with a dumbbell in each hand. Step one foot straight back and drop until both knees are ~90°, front shin near vertical, then drive through the front heel to return to standing. Finish all reps on one leg, then switch.",
+    cues: ["Step straight back and drop the back knee toward the floor.","Keep most of your weight on the front heel to drive up.","Keep your front shin close to vertical; don't let the knee shoot forward.","Stay tall through the torso with only a slight forward lean.","Control the descent — lower the back knee, don't drop it.","Drive up by pushing the floor away through the front heel.","Front knee tracks over the toes, never caving inward.","Let the dumbbells hang at your sides, grip relaxed.","Brace your core so your lower back stays neutral.","Squeeze the front glute at the top of each rep.","Keep your hips square; don't rotate as you step back.","Finish all reps on one leg before switching, matching the count."] }),
+  "DB Hip Thrust": _ex("DB Hip Thrust", "Glutes", { sets: 4, range: [10, 15], rest: 120, startLoad: 50,
+    basic: "Upper back against the bench, a dumbbell across your hips, feet flat and shin vertical at the top. Drive through your heels to lift your hips until your torso is parallel to the floor, squeezing the glutes hard, then lower under control.",
+    cues: ["Drive through your heels to lift the hips, not through your toes.","Squeeze your glutes hard at the top until your torso is parallel to the floor.","Tuck your chin and keep your ribs down — don't arch your lower back to finish.","Aim for vertical shins at the top of each rep.","Pause a full beat at the top with the glutes locked.","Lower under control; don't just drop the hips.","Keep the dumbbell pinned across your hip crease with your hands.","Push your knees out slightly in line with your toes.","Keep your core braced so the work stays in the glutes.","Move through a full range — deep at the bottom, locked at the top.","Keep your gaze forward and neck neutral, not cranked back.","Finish every rep with a hard glute squeeze, not a back arch."] }),
+  "Standing Calf Raise": _ex("Standing Calf Raise", "Calves", { sets: 4, range: [10, 15], rest: 90, startLoad: 50,
+    basic: "Balls of both feet on a step's edge, a dumbbell in each hand (add the vest to stack load). Drop the heels below the step for a deep stretch, then press all the way up onto the big toes. Slow and full, with a pause at both ends.",
+    cues: ["Sink the heels as far below the step as they'll go before pressing.","Press all the way up onto the tips of your big toes.","Pause a full second at the top and a full second at the bottom.","Drive up through the big-toe side to keep the ankles honest.","Keep the knees straight but unlocked to bias the gastrocnemius.","Lower slow and controlled; never bounce off the Achilles.","Hold the dumbbells at your sides and stand tall and balanced.","Feel the stretch at the bottom as much as the squeeze up top.","Keep your ankles tracking straight, not rolling outward.","Run the rhythm 'stretch, pause, press, squeeze' every rep.","Stack load with the vest plus dumbbells when bodyweight gets easy.","Full, patient reps beat fast and shallow every time."] }),
+};
+// PROGRAM — 5 days. Slot = { exercise } with optional { sets, range } override for that day.
+const PROGRAM = [
+  { id: 1, focus: "Upper — push", sub: "Chest · Shoulders · Triceps", slots: [
+    { exercise: "Incline DB Bench Press" }, { exercise: "Standing DB Shoulder Press" }, { exercise: "Flat DB Press" },
+    { exercise: "DB Lateral Raises" }, { exercise: "Overhead DB Triceps Extension" }, { exercise: "DB Skull Crushers" } ] },
+  { id: 2, focus: "Lower", sub: "Quads · Hamstrings · Calves", slots: [
+    { exercise: "Bulgarian Split Squat" }, { exercise: "DB Romanian Deadlift" }, { exercise: "DB Goblet Squat" },
+    { exercise: "Single-Leg RDL" }, { exercise: "Standing Calf Raise" } ] },
+  { id: 3, focus: "Upper — pull", sub: "Back · Rear delts · Biceps", slots: [
+    { exercise: "Chest-Supported DB Row" }, { exercise: "One-Arm DB Row" }, { exercise: "Bent-Over DB Flyes" },
+    { exercise: "Incline DB Curls" }, { exercise: "Hammer Curl" }, { exercise: "Bench-Supported DB Pullover" } ] },
+  { id: 4, focus: "Lower + delts", sub: "Glutes · Quads · Side delts · Calves", slots: [
+    { exercise: "Reverse Lunge" }, { exercise: "DB Hip Thrust" }, { exercise: "DB Goblet Squat", sets: 3, range: [12, 20] },
+    { exercise: "DB Lateral Raises" }, { exercise: "Single-Leg Calf Raises" } ] },
+  { id: 5, focus: "Upper — arms/delts/chest", sub: "Arms · Side delts · Chest", slots: [
+    { exercise: "Incline DB Bench Press", sets: 3, range: [8, 12] }, { exercise: "DB Lateral Raises" },
+    { exercise: "Chest-Supported DB Row", sets: 3, range: [10, 15] }, { exercise: "Incline DB Curls", sets: 3, range: [10, 12] },
+    { exercise: "Overhead DB Triceps Extension" }, { exercise: "Bent-Over DB Flyes", sets: 3, range: [15, 20] },
+    { exercise: "Weighted DB Crunch" } ] },
+];
+// how many days per cycle a lift appears (used by projection + volume reasoning; never hardcoded)
+const exerciseFreq = (name) => PROGRAM.reduce((n, d) => n + d.slots.filter((s) => s.exercise === name).length, 0);
+// resolve a day's slots into { ex, sets, range } with per-slot overrides merged over the library defaults
+const daySlots = (dayId) => {
+  const day = PROGRAM.find((d) => d.id === dayId) || PROGRAM[0];
+  return day.slots.map((s) => { const ex = EXERCISES[s.exercise]; return { ex, sets: s.sets ?? ex.sets, range: s.range ?? ex.range }; });
+};
+// dev hook: exposes the static program (NOT user data) so progress tooling / debugging can read it
+if (typeof window !== "undefined") window.__wk = { EXERCISES, PROGRAM, exerciseFreq, daySlots };
+
+// fill any missing per-lift prescription from logged weight (or library start), at range bottom
+const seedTargets = (mem) => {
+  const t = { ...(mem.targets || {}) };
+  Object.values(EXERCISES).forEach((ex) => {
+    if (!t[ex.name]) {
+      const load = mem.weights && mem.weights[ex.name] != null ? mem.weights[ex.name] : ex.startLoad;
+      t[ex.name] = { load, reps: ex.range[0] };
+    }
+  });
+  return t;
+};
+// migrate any stored/synced mem blob up to v2. Idempotent: v2 in → v2 out unchanged. Never drops history.
+const migrateMem = (raw) => {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT, targets: seedTargets({}) };
+  const m = { ...DEFAULT, ...raw };
+  m.body = { ...DEFAULT.body, ...(raw.body || {}) };
+  if ((raw.version || 1) < 2) {            // v1 → v2: keep weights/history/setHistory/stalls; add rotation + prescriptions
+    m.lastDay = raw.lastTag ? 1 : 0;
+    m.lastByDay = {};
+  }
+  m.targets = seedTargets(m);
+  m.lastByDay = m.lastByDay || {};
+  m.version = 2;
+  return m;
+};
+if (typeof window !== "undefined" && window.__wk) window.__wk.migrateMem = migrateMem;
+
 /* ─────────────── build sets ─────────────── */
 function buildSets(ex, exIndex, w) {
   const sets = [];
@@ -245,6 +367,91 @@ function buildSets(ex, exIndex, w) {
   else { const [bot, top] = parseRange(ex.range); for (let k = 0; k < ex.sets; k++) sets.push(mk("work", `${k + 1}`, w, top, `${bot}–${top}`, ex.rest, [bot, top])); }
   return sets;
 }
+
+// v2 straight-set builder for double progression: all work sets at one load (target.load),
+// prefilled to the day's rep goal (target.reps); a light warm-up ramp before the first loaded compound.
+function buildStraightSets(ex, exIndex, nSets, range, target) {
+  const sets = [];
+  const [bot, top] = range;
+  const mk = (kind, label, load, prefill, repsLabel, rest, rangeArr, aim) => ({ kind, label, load, repsNum: prefill, repsLabel, rest, range: rangeArr, aim });
+  if (exIndex === 0 && !ex.repProgress && target.load >= 20)
+    [[0.55, 5], [0.8, 3]].forEach(([p, r], k) => sets.push(mk("warmup", `W${k + 1}`, nearest(target.load * p), r, String(r), 90, null, null)));
+  for (let k = 0; k < nSets; k++) sets.push(mk("work", `${k + 1}`, target.load, target.reps, `${bot}–${top}`, ex.rest, [bot, top], target.reps));
+  return sets;
+}
+// build a full day's plan from PROGRAM + per-lift prescription in mem.targets
+function buildDayPlan(dayId, mem) {
+  return daySlots(dayId).map((slot, i) => {
+    const ex = slot.ex;
+    const target = (mem.targets && mem.targets[ex.name]) || { load: ex.startLoad, reps: slot.range[0] };
+    return { ex, w: target.load, target, sets: buildStraightSets(ex, i, slot.sets, slot.range, target), order: buildOrder(ex.cues, mem.recentCues[ex.name]) };
+  });
+}
+const dayMeta = (dayId) => PROGRAM.find((d) => d.id === dayId) || PROGRAM[0];
+const nextDayId = (dayId) => { const ids = PROGRAM.map((d) => d.id); const i = ids.indexOf(dayId); return ids[(i + 1) % ids.length]; };
+
+// ── double-progression engine (pure) ──
+// Given this session's completed work sets + the same lift's last-same-day work sets, decide the
+// NEXT prescription. work/last = [{ w, r, e }] (e = "easy"|"good"|"hard"|"fail"|undefined).
+function nextPrescription({ range, target, work, last, stall }) {
+  const [bot, top] = range; stall = stall || 0;
+  if (!work || work.length === 0) return { load: target.load, reps: target.reps, stall, decision: "skip" };
+  const reps = work.map((s) => s.r || 0);
+  const efforts = work.map((s) => s.e).filter(Boolean);
+  const allTop = reps.every((r) => r >= top);
+  const minReps = Math.min(...reps);
+  const belowBottom = reps[0] < bot;                                  // top/first work set under the range → too heavy
+  const lastTotal = last && last.length ? last.reduce((a, s) => a + (s.r || 0), 0) : null;
+  const thisTotal = reps.reduce((a, r) => a + r, 0);
+  const sameLoad = last && last.length ? Math.abs((last[0]?.w ?? target.load) - target.load) < 1e-6 : true;
+  const regressed = (lastTotal != null && sameLoad && thisTotal < lastTotal) || belowBottom;
+  const allHardMaxed = efforts.length === work.length && efforts.every((e) => e === "hard" || e === "fail");
+  const allEasy = efforts.length === work.length && efforts.every((e) => e === "easy");
+  if (allTop) return { load: stepPlate(target.load, 1), reps: bot, stall: 0, decision: allEasy ? "add-load-overdue" : "add-load" };
+  if (regressed) { const ns = stall + 1; return ns >= 3 ? { load: stepPlate(target.load, -2), reps: bot, stall: 0, decision: "deload" } : { load: target.load, reps: target.reps, stall: ns, decision: "hold" }; }
+  if (allHardMaxed && minReps >= target.reps) return { load: target.load, reps: target.reps, stall, decision: "hold-effort" };
+  const nextReps = Math.min(top, Math.max(target.reps, minReps) + 1);  // base goal on weakest set so all sets reach it
+  return { load: target.load, reps: nextReps, stall: 0, decision: "add-rep" };
+}
+
+// ── honest assessment (pure) ── thisLifts/lastLifts = { name: { top:{w,r}, tonnage } } snapshots
+function assess(thisLifts, lastLifts) {
+  const rows = []; let tThis = 0, tLast = 0, down = 0; const pcts = [];
+  Object.keys(thisLifts).forEach((name) => {
+    const cur = thisLifts[name], prev = lastLifts && lastLifts[name];
+    tThis += cur.tonnage || 0;
+    const eNew = e1rm(cur.top.w, cur.top.r);
+    let pct = null, dir = "flat", eOld = null;
+    if (prev) {
+      eOld = e1rm(prev.top.w, prev.top.r); tLast += prev.tonnage || 0;
+      if (eOld > 0) { pct = ((eNew - eOld) / eOld) * 100; dir = pct > 0.5 ? "up" : pct < -0.5 ? "down" : "flat"; if (dir === "down") down++; pcts.push(pct); }
+    }
+    rows.push({ name, eOld, eNew, pct, dir });
+  });
+  const strengthPct = pcts.length ? pcts.reduce((a, b) => a + b, 0) / pcts.length : null;
+  const volumePct = tLast > 0 ? ((tThis - tLast) / tLast) * 100 : null;
+  const f1 = (x) => `${x >= 0 ? "+" : ""}${x.toFixed(1)}%`, f0 = (x) => `${x >= 0 ? "+" : ""}${x.toFixed(0)}%`;
+  let tone, text;
+  if (strengthPct == null) { tone = "yellow"; text = "Baseline set — this becomes your benchmark for this day."; }
+  else if (strengthPct < 0 || down >= 2) { const dn = rows.filter((r) => r.dir === "down").map((r) => r.name); tone = "red"; text = `Regressed — hard-set strength ${f1(strengthPct)}${dn.length ? `, weaker on ${dn.slice(0, 3).join(", ")}` : ""}.`; }
+  else if (strengthPct > 1) { tone = "green"; text = `Strong session — hard-set strength ${f1(strengthPct)}${volumePct != null ? `, volume ${f0(volumePct)}` : ""} vs last time.`; }
+  else { tone = "yellow"; text = `Held the line — strength ${f1(strengthPct)}${volumePct != null ? `, volume ${f0(volumePct)}` : ""}.`; }
+  return { strengthPct, volumePct, rows, tone, text };
+}
+// ── plan-driven projection (pure) ── fast-forward the double-progression rules assuming every
+// target is hit, using the lift's real weekly frequency. Returns weekly { week, load, reps, e1rm }.
+function planForward(range, target, freq, weeks = 26) {
+  const [bot, top] = range;
+  const perWeek = Math.max(1, Math.round(freq));
+  let load = target.load, reps = Math.max(bot, Math.min(top, target.reps || bot));
+  const out = [{ week: 0, load, reps, e1rm: e1rm(load, reps) }];
+  for (let i = 1; i <= perWeek * weeks; i++) {
+    if (reps >= top) { load = stepPlate(load, 1); reps = bot; } else { reps += 1; }
+    if (i % perWeek === 0) out.push({ week: i / perWeek, load, reps, e1rm: e1rm(load, reps) });
+  }
+  return out;
+}
+if (typeof window !== "undefined" && window.__wk) { window.__wk.nextPrescription = nextPrescription; window.__wk.assess = assess; window.__wk.planForward = planForward; }
 
 const SET_EXEC = 40, TRANSITION = 90;
 const fmtClock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -315,18 +522,13 @@ function ExerciseAnim({ kind }) {
 }
 
 /* ───────────────────────── progress + projection chart ───────────────────────── */
-const ALL_EX = (() => {
-  const seen = new Set(); const out = [];
-  [...WORKOUTS.A.exercises, ...WORKOUTS.B.exercises].forEach((e) => {
-    (e.variantSlot ? e.variants : [e]).forEach((x) => { if (!seen.has(x.name)) { seen.add(x.name); out.push(x); } });
-  });
-  return out;
-})();
+const ALL_EX = Object.values(EXERCISES);      // chips derive from the library → swaps/additions appear automatically
 const SHORT = {
-  "Incline DB Bench Press": "Incline Press", "Standing DB Shoulder Press": "Shoulder Press", "DB Lateral Raises": "Lateral Raise", "DB Skull Crushers": "Skull Crusher",
-  "Chest-Supported DB Row": "Row", "DB Romanian Deadlift": "RDL", "Bent-Over DB Flyes": "Rear Fly", "Incline DB Curls": "Incline Curl", "Single-Leg Calf Raises": "Calf Raise",
-  "Bench-Supported DB Pullover": "Pullover", "Bulgarian Split Squat": "Bulgarian", "DB Squat": "DB Squat", "DB Goblet Squat": "Goblet Squat", "Pistol Squat": "Pistol",
-  "V-ups": "V-ups", "DB Russian Twist": "Russian Twist", "Bicycle Crunch": "Bicycle", "Reverse Crunch": "Reverse Crunch", "Weighted DB Crunch": "Weighted Crunch",
+  "Incline DB Bench Press": "Incline Press", "Standing DB Shoulder Press": "Shoulder Press", "Flat DB Press": "Flat Press", "DB Lateral Raises": "Lateral Raise",
+  "Overhead DB Triceps Extension": "OH Ext", "DB Skull Crushers": "Skull Crusher", "Chest-Supported DB Row": "Row", "One-Arm DB Row": "1-Arm Row",
+  "DB Romanian Deadlift": "RDL", "Single-Leg RDL": "SL-RDL", "Bent-Over DB Flyes": "Rear Fly", "Incline DB Curls": "Incline Curl", "Hammer Curl": "Hammer Curl",
+  "Single-Leg Calf Raises": "SL Calf", "Standing Calf Raise": "Calf Raise", "Bench-Supported DB Pullover": "Pullover", "Bulgarian Split Squat": "Bulgarian",
+  "DB Goblet Squat": "Goblet", "Reverse Lunge": "Reverse Lunge", "DB Hip Thrust": "Hip Thrust", "Weighted DB Crunch": "Weighted Crunch",
 };
 const ProgressChart = React.memo(function ProgressChart({ mem }) {
   const [sel, setSel] = useState(ALL_EX[0].name);
@@ -336,41 +538,27 @@ const ProgressChart = React.memo(function ProgressChart({ mem }) {
   const D = (v) => (rp ? v : dispW(v, pref));                 // convert weights for display; reps pass through
   const unit = rp ? " reps" : ` ${uw(pref)}`;
   const hist = (mem.history?.[ex.name]) || [];
-  const w0 = rp ? (hist.length ? hist[hist.length - 1].r : parseRange(ex.range)[0]) : (mem.weights?.[ex.name] ?? baseWeight(ex));
+  const target = mem.targets?.[ex.name] || { load: ex.startLoad, reps: ex.range[0] };
+  const freq = exerciseFreq(ex.name);
+  const w0 = rp ? (hist.length ? hist[hist.length - 1].r : ex.range[0]) : target.load;
   const nowMs = Date.now();
   const histPts = hist.map((h) => ({ week: Math.round((new Date(h.t).getTime() - nowMs) / (7 * 864e5)), w: rp ? h.r : h.w, r: h.r }));
 
-  // calibrate the forecast to how YOU actually progress: linear fit on logged weight vs time,
-  // blended with the program's expected pace until you've logged enough to trust your own slope
-  const core = ex.type === "rpt"; const bookR0 = core ? 1.75 : 0.8, tau = core ? 18 : 16;
-  const reg = new Map(); histPts.forEach((p) => reg.set(p.week, p.w)); reg.set(0, w0);
-  const pts = [...reg.entries()].map(([week, w]) => ({ week, w }));
-  let r0 = bookR0, personalized = false;
-  if (pts.length >= 2) {
-    const n = pts.length;
-    const sx = pts.reduce((s, p) => s + p.week, 0), sy = pts.reduce((s, p) => s + p.w, 0);
-    const sxx = pts.reduce((s, p) => s + p.week * p.week, 0), sxy = pts.reduce((s, p) => s + p.week * p.w, 0);
-    const den = n * sxx - sx * sx;
-    let slope = den !== 0 ? (n * sxy - sx * sy) / den : 0;     // lb/hand per week, from YOUR data
-    slope = Math.max(0, Math.min(3, slope));                    // clamp out noise / deloads
-    const span = Math.abs(Math.min(...pts.map((p) => p.week)));
-    const conf = Math.min(1, (n - 1) / 4) * Math.min(1, span / 6);  // trust grows with points + time
-    r0 = conf * slope + (1 - conf) * bookR0;
-    personalized = conf >= 0.34;
-  }
-  const gain = (t) => r0 * tau * (1 - Math.exp(-t / tau));
-
+  // PLAN-DRIVEN forecast: fast-forward the actual progression rules if every target is hit, 26 weeks.
+  const fwd = planForward(ex.range, target, freq);
+  const fwdAt = (wk) => fwd[Math.min(wk, fwd.length - 1)];
   const minW = Math.min(0, ...histPts.map((p) => p.week));
   const map = new Map();
   for (let wk = minW; wk <= 26; wk++) map.set(wk, { week: wk });
-  for (let wk = 0; wk <= 26; wk++) map.get(wk).projected = Math.round((w0 + gain(wk)) * 10) / 10;
+  for (let wk = 0; wk <= 26; wk++) { const f = fwdAt(wk); map.get(wk).projected = rp ? f.reps : Math.round(f.load * 10) / 10; }
   histPts.forEach((p) => { const o = map.get(p.week) || { week: p.week }; o.actual = p.w; o.reps = p.r; map.set(p.week, o); });
-  map.get(0).actual = w0;
+  map.get(0).actual = rp ? w0 : target.load;
   const data = [...map.values()].sort((a, b) => a.week - b.week).map((d) => ({ week: d.week, actual: d.actual != null ? D(d.actual) : undefined, projected: d.projected != null ? D(d.projected) : undefined, reps: d.reps }));
 
   const best = rp ? hist.reduce((b, h) => (!b || h.r > b.r ? h : b), null) : hist.reduce((b, h) => (!b || h.w > b.w || (h.w === b.w && h.r > b.r) ? h : b), null);
   const bestVal = best ? (rp ? best.r : best.w) : w0;
-  const milestones = [[1, "1 wk"], [4, "1 mo"], [12, "3 mo"], [26, "6 mo"]].map(([wk, label]) => ({ label, val: rp ? Math.round(w0 + gain(wk)) : nearest(w0 + gain(wk)) }));
+  const personalized = hist.length >= 2;
+  const milestones = [[0, "today"], [4, "1 mo"], [12, "3 mo"], [26, "6 mo"]].map(([wk, label]) => { const f = fwdAt(wk); return { label, val: rp ? f.reps : f.load, e1: Math.round(f.e1rm) }; });
 
   return (
     <div className="mt-8 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
@@ -378,7 +566,7 @@ const ProgressChart = React.memo(function ProgressChart({ mem }) {
         <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Progress & projection</span>
         <span className="flex items-center gap-3 font-mono text-[9px]" style={{ color: C.ashDim }}>
           <span className="flex items-center gap-1"><span style={{ width: 14, height: 2, background: C.gold, display: "inline-block" }} />logged</span>
-          <span className="flex items-center gap-1"><span style={{ width: 14, borderTop: `2px dotted ${C.goldDim}`, display: "inline-block" }} />forecast</span>
+          <span className="flex items-center gap-1"><span style={{ width: 14, borderTop: `2px dotted ${C.goldDim}`, display: "inline-block" }} />plan</span>
         </span>
       </div>
 
@@ -424,10 +612,11 @@ const ProgressChart = React.memo(function ProgressChart({ mem }) {
           <div key={m.label} className="rounded-lg border p-2 text-center" style={{ borderColor: C.edge }}>
             <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>{m.label}</p>
             <p className="font-mono text-sm font-bold" style={{ color: C.bone }}>{D(m.val)}<span className="text-[10px] font-normal" style={{ color: C.ash }}>{rp ? "" : ` ${uw(pref)}`}</span></p>
+            {!rp && <p className="font-mono text-[8px]" style={{ color: C.ashDim }}>e1RM {D(m.e1)}</p>}
           </div>
         ))}
       </div>
-      <p className="mt-3 font-mono text-[9px]" style={{ color: C.ashDim }}>{personalized ? "forecast fitted to your logged trend" : "forecast on the program's expected pace — your logs reshape it as you go"} · {rp ? "reps" : ex.single ? "single DB" : "per hand"} · estimate</p>
+      <p className="mt-3 font-mono text-[9px]" style={{ color: C.ashDim }}>plan = if you hit every target ({freq}×/week) · {rp ? "reps" : ex.single ? "single DB" : "per hand"} · theoretical ceiling, your logged line shows reality</p>
     </div>
   );
 });
@@ -479,7 +668,7 @@ function SyncPanel({ sync, msg, log, onConnect, onDisconnect, onSyncNow }) {
 function App() {
   const [loaded, setLoaded] = useState(false);
   const [mem, setMem] = useState(DEFAULT);
-  const [tag, setTag] = useState("A");
+  const [day, setDay] = useState(1);
   const [sync, setSync] = useState(null);          // {url,key,code} or null
   const [syncMsg, setSyncMsg] = useState("");       // human-readable status
   const [syncLog, setSyncLog] = useState([]);       // verbose, on-screen debug log
@@ -502,13 +691,13 @@ function App() {
     (async () => {
       const s = hasStore ? await loadState() : null;
       if (!alive) return;
-      const m = s || DEFAULT;
+      const m = migrateMem(s);
       setMem(m); memRef.current = m;
       // Migration: an existing local copy with no change-clock yet (legacy / pre-sync data)
       // must count as unsynced content so reconcile seeds it to the repo instead of risking
       // it being silently overwritten by the other device.
       if (s && hasStore && !(await localTs())) await bumpChange();
-      setTag(m.lastTag ? (m.lastTag === "A" ? "B" : "A") : "A");
+      setDay(m.lastDay ? nextDayId(m.lastDay) : 1);
       const live = hasStore ? await loadLive() : null;
       const liveOk = live && Array.isArray(live.done) && (live.done.length > 0 || live.active);
       if (liveOk && Date.now() - (live.ts || 0) < 86400000) { setPending(live); liveRef.current = live; }
@@ -528,7 +717,7 @@ function App() {
   // After adopting we set BOTH localTs and syncedTs to the remote ts, so this device
   // now reports "no unsynced changes" and won't immediately push the copy back (echo).
   const applyBlob = async (blob, sha, ts, setTagToo) => {
-    const rmem = blob && blob.mem ? blob.mem : blob;                 // tolerate older mem-only files
+    const rmem = migrateMem(blob && blob.mem ? blob.mem : blob);     // tolerate + upgrade older mem-only / v1 files
     const rlive = blob && blob.mem ? blob.live : null;
     const adoptTs = ts || Date.now();
     quietRef.current = Date.now() + 1800;
@@ -633,16 +822,8 @@ function App() {
 
   const plan = useMemo(() => {
     if (!loaded) return [];
-    return WORKOUTS[tag].exercises.map((ex, i) => {
-      let realEx = ex;
-      if (ex.variantSlot) {
-        const choice = mem[ex.slotKey + "Choice"] ?? 0;
-        realEx = { ...ex.variants[choice], variantSlot: true, slotKey: ex.slotKey, variants: ex.variants, slotIndex: choice };
-      }
-      const w = mem.weights[realEx.name] ?? baseWeight(realEx);
-      return { ex: realEx, w, sets: buildSets(realEx, i, w), order: buildOrder(realEx.cues, mem.recentCues[realEx.name]) };
-    });
-  }, [tag, mem, loaded]);
+    return buildDayPlan(day, mem);
+  }, [day, mem, loaded]);
 
   const estMin = useMemo(() => { let t = 0; plan.forEach((it) => { it.sets.forEach((s) => { t += SET_EXEC + s.rest; }); t += TRANSITION; }); return Math.round(t / 60); }, [plan]);
 
@@ -717,7 +898,7 @@ function App() {
   useEffect(() => {
     if (!loaded) return;
     const started = done.size > 0 || active !== null;
-    const liveObj = started ? { tag, logs, done: [...done], active, ts: Date.now() } : (pending || null);
+    const liveObj = started ? { day, logs, done: [...done], active, ts: Date.now() } : (pending || null);
     liveRef.current = liveObj;
     if (hasStore && started) saveLive(liveObj);
     // A live-session edit is a genuine local change — advance the change clock so reconcile()
@@ -748,7 +929,8 @@ function App() {
     }
     return next;
   });
-  const stepR = (key, d, set) => setLogs((L) => { const cur = L[key]?.reps ?? set.repsNum; return { ...L, [key]: { weight: L[key]?.weight ?? set.load, reps: Math.max(0, cur + d) } }; });
+  const stepR = (key, d, set) => setLogs((L) => { const cur = L[key]?.reps ?? set.repsNum; return { ...L, [key]: { ...(L[key] || {}), weight: L[key]?.weight ?? set.load, reps: Math.max(0, cur + d) } }; });
+  const setEffort = (key, e) => setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), e: L[key]?.e === e ? undefined : e } }));
   const startSet = (key) => { if (!busy) { primeAudio(); setActive(key); setOpenInfo(null); } };
   const finishSet = (set) => { const key = active; primeAudio(); setActive(null); setCue(""); setRestLeft(set.rest); setRest({ key, endAt: Date.now() + set.rest * 1000, total: set.rest }); setOpenInfo(null); };
   const skipRest = () => { setDone((d) => new Set(d).add(rest.key)); setRest(null); setOpenInfo(null); };
@@ -756,68 +938,59 @@ function App() {
   const cancelSet = () => { setActive(null); setCue(""); setOpenInfo(null); };
   const undoSet = (key) => setDone((dn) => { const n = new Set(dn); n.delete(key); return n; });
 
-  /* progression engine — reads what you actually did */
+  /* progression engine — double progression from what you actually logged (reps + effort) */
   const finishWorkout = async () => {
-    const newWeights = { ...mem.weights };
+    const stamp = new Date().toISOString();
+    const prevSnap = mem.lastByDay?.[day] || null;
+    const newTargets = { ...(mem.targets || {}) };
+    const newWeights = { ...(mem.weights || {}) };
     const newStalls = { ...(mem.stalls || {}) };
-    const changes = [];
-    plan.forEach((item, exIdx) => {
-      const { ex, w, sets } = item;
-      const work = sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "work");
-      let nw = w, deload = false;
-      if (ex.type === "rpt") {
-        const heavy = work[0]; const key = `${exIdx}-${heavy.si}`;
-        if (done.has(key)) {
-          const r = logs[key]?.reps ?? heavy.s.repsNum; const [bot, top] = heavy.s.range;
-          if (r >= top) nw = stepPlate(w, 1); else if (r < bot) nw = stepPlate(w, -1);
-          // stall watch: 3 sessions stuck at the same weight without reaching the top → deload ~10% and rebuild
-          let st = newStalls[ex.name] || 0;
-          if (nw !== w) st = 0;
-          else { st += 1; if (st >= 3) { nw = stepPlate(w, -2); st = 0; deload = true; } }
-          newStalls[ex.name] = st;
-        }
-      } else if (!ex.repProgress) {
-        const keys = work.map((x) => `${exIdx}-${x.si}`);
-        if (keys.every((k) => done.has(k))) {
-          const reps = keys.map((k) => logs[k]?.reps ?? 0); const [bot, top] = work[0].s.range;
-          if (Math.min(...reps) >= top) nw = stepPlate(w, 1); else if (reps[0] < bot) nw = stepPlate(w, -1);
-        }
-      }
-      newWeights[ex.name] = nw;
-      if (nw !== w) changes.push({ name: ex.name, from: w, to: nw, dir: nw > w ? "up" : "down", single: !!ex.single, deload });
-    });
-
     const recentCues = { ...mem.recentCues };
     const newHistory = { ...(mem.history || {}) };
     const newSetHistory = { ...(mem.setHistory || {}) };
-    const stamp = new Date().toISOString();
-    plan.forEach((item, exIdx) => {
-      const c = cursors.current[exIdx] ?? 0; recentCues[item.ex.name] = item.order.slice(0, c);
-      const work = item.sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "work");
-      let rec = null;
-      if (item.ex.type === "rpt") { const h = work[0]; const k = `${exIdx}-${h.si}`; if (done.has(k)) rec = { t: stamp, w: logs[k].weight, r: logs[k].reps }; }
-      else { const ks = work.map((x) => `${exIdx}-${x.si}`).filter((k) => done.has(k)); if (ks.length) rec = { t: stamp, w: logs[ks[0]].weight, r: Math.max(...ks.map((k) => logs[k].reps)) }; }
-      if (rec) newHistory[item.ex.name] = [...(newHistory[item.ex.name] || []), rec].slice(-40);
-      // per-set progression history (work sets only)
-      const sh = { ...(newSetHistory[item.ex.name] || {}) };
-      work.forEach((x) => { const k = `${exIdx}-${x.si}`; if (done.has(k)) sh[x.s.label] = [...(sh[x.s.label] || []), { t: stamp, w: logs[k].weight, r: logs[k].reps }].slice(-30); });
-      newSetHistory[item.ex.name] = sh;
-    });
-    const lastChanges = {}; changes.forEach((c) => { lastChanges[c.name] = c; });
+    const changes = [];
+    const snap = { date: stamp, lifts: {} };
 
-    const newMem = { ...mem, version: 1, lastTag: tag, sessionCount: (mem.sessionCount || 0) + 1, weights: newWeights, recentCues, lastChanges, history: newHistory, setHistory: newSetHistory, stalls: newStalls };
+    plan.forEach((item, exIdx) => {
+      const name = item.ex.name;
+      const work = item.sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "work");
+      const range = work[0]?.s.range || item.ex.range;
+      const loggedKeys = work.map((x) => `${exIdx}-${x.si}`).filter((k) => done.has(k));
+      const logged = loggedKeys.map((k) => ({ w: logs[k].weight, r: logs[k].reps, e: logs[k].e }));
+      const c = cursors.current[exIdx] ?? 0; recentCues[name] = item.order.slice(0, c);   // cue rotation memory
+      if (!logged.length) return;                                                          // skip lifts you didn't log
+      const target = newTargets[name] || { load: item.target.load, reps: range[0] };
+      const res = nextPrescription({ range, target, work: logged, last: prevSnap?.lifts?.[name]?.sets || null, stall: newStalls[name] || 0 });
+      newTargets[name] = { load: res.load, reps: res.reps };
+      newWeights[name] = res.load;
+      newStalls[name] = res.stall;
+      changes.push({ name, decision: res.decision, fromLoad: target.load, toLoad: res.load, fromReps: target.reps, toReps: res.reps, single: !!item.ex.single });
+      const single = !!item.ex.single;
+      const tonnage = logged.reduce((a, s) => a + s.w * s.r * (single ? 2 : 1), 0);
+      const topS = logged.reduce((b, s) => (!b || e1rm(s.w, s.r) > e1rm(b.w, b.r) ? s : b), null);
+      snap.lifts[name] = { sets: logged, top: { w: topS.w, r: topS.r, e: topS.e }, tonnage };
+      newHistory[name] = [...(newHistory[name] || []), { t: stamp, w: topS.w, r: topS.r }].slice(-40);
+      const sh = { ...(newSetHistory[name] || {}) };
+      work.forEach((x) => { const k = `${exIdx}-${x.si}`; if (done.has(k)) sh[x.s.label] = [...(sh[x.s.label] || []), { t: stamp, w: logs[k].weight, r: logs[k].reps, e: logs[k].e }].slice(-30); });
+      newSetHistory[name] = sh;
+    });
+
+    const assessment = assess(snap.lifts, prevSnap?.lifts || null);
+    const newLastByDay = { ...(mem.lastByDay || {}), [day]: snap };
+    const lastChanges = {}; changes.forEach((c) => { lastChanges[c.name] = c; });
+    const newMem = { ...mem, version: 2, lastDay: day, sessionCount: (mem.sessionCount || 0) + 1, weights: newWeights, targets: newTargets, stalls: newStalls, lastByDay: newLastByDay, recentCues, lastChanges, history: newHistory, setHistory: newSetHistory };
     if (hasStore) { await saveState(newMem); await clearLive(); }
     setPending(null);
-    setSummary({ tag, changes });
+    setSummary({ day, changes, assessment });
     setMem(newMem);
-    setTag(tag === "A" ? "B" : "A");
+    setDay(nextDayId(day));
     setOpenInfo(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const resumeSession = () => {
     if (!pending) return;
-    if (pending.tag !== tag) { skipNextReset.current = true; setTag(pending.tag); }
+    if (pending.day !== day) { skipNextReset.current = true; setDay(pending.day); }
     setLogs(pending.logs || {});
     setDone(new Set(pending.done || []));
     setPending(null);
@@ -835,7 +1008,7 @@ function App() {
     const nm = { ...mem, body }; if (hasStore) await saveState(nm); setMem(nm);
   };
 
-  const resetMemory = async () => { if (hasStore) { await clearState(); await clearLive(); } setMem(DEFAULT); setTag("A"); setSummary(null); setPending(null); setConfirm(null); };
+  const resetMemory = async () => { if (hasStore) { await clearState(); await clearLive(); } setMem(migrateMem(null)); setDay(1); setSummary(null); setPending(null); setConfirm(null); };
 
   const body = mem.body || {};
   const unit = mem.unit || "lb";
@@ -927,7 +1100,7 @@ function App() {
         {sessionStarted && (
           <div className="sticky top-0 z-20 -mx-5 mb-4 px-5 py-2" style={{ background: "rgba(14,13,11,0.93)", backdropFilter: "blur(6px)", borderBottom: `1px solid ${C.edge}` }}>
             <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider">
-              <span style={{ color: C.gold }}>Workout {tag} · in progress</span>
+              <span style={{ color: C.gold }}>Day {day} · in progress</span>
               <span style={{ color: C.ash }}>{workDone} / {workTotal} sets</span>
             </div>
             <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
@@ -946,7 +1119,7 @@ function App() {
         {pending && (
           <div className="mt-5 rounded-xl border p-4" style={{ borderColor: C.activeEdge, background: "#1A1609", animation: "fade .4s ease-out" }}>
             <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>In-progress session found</p>
-            <p className="mt-2 text-[13px]" style={{ color: C.bone }}>You have an unfinished Workout {pending.tag} — {pending.done.length > 0 ? `${pending.done.length} set${pending.done.length === 1 ? "" : "s"} logged` : "a set in progress"}. Pick up where you left off?</p>
+            <p className="mt-2 text-[13px]" style={{ color: C.bone }}>You have an unfinished Day {pending.day} — {pending.done.length > 0 ? `${pending.done.length} set${pending.done.length === 1 ? "" : "s"} logged` : "a set in progress"}. Pick up where you left off?</p>
             <div className="mt-3 flex gap-2">
               <button onClick={resumeSession} className="flex-1 rounded-xl py-2.5 font-mono text-xs font-bold uppercase tracking-wider" style={{ background: C.gold, color: C.bg }}>Resume</button>
               <button onClick={discardSession} className="flex-1 rounded-xl border py-2.5 font-mono text-xs uppercase tracking-wider" style={{ borderColor: C.edge, color: C.ash }}>Discard</button>
@@ -954,30 +1127,42 @@ function App() {
           </div>
         )}
 
-        {/* progression summary after finishing */}
-        {summary && (
+        {/* honest assessment after finishing */}
+        {summary && (() => {
+          const a = summary.assessment || { tone: "yellow", text: "", rows: [], strengthPct: null, volumePct: null };
+          const toneC = a.tone === "green" ? C.sage : a.tone === "red" ? C.rust : C.gold;
+          const decLabel = { "add-load": "+ load", "add-load-overdue": "+ load · overdue", "add-rep": "+1 rep goal", "hold": "repeat — slipped", "hold-effort": "hold — high effort", "deload": "deload", "skip": "—" };
+          const byName = {}; (summary.changes || []).forEach((c) => { byName[c.name] = c; });
+          return (
           <div className="mt-5 rounded-xl border p-4" style={{ borderColor: C.activeEdge, background: "#1A1609", animation: "fade .4s ease-out" }}>
-            <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>Workout {summary.tag} saved · progress applied</p>
-            {summary.changes.length === 0 ? (
-              <p className="mt-2 text-[13px]" style={{ color: C.ash }}>Weights held — chase one more rep next time to earn the jump.</p>
-            ) : (
-              <div className="mt-2 space-y-1">
-                {summary.changes.map((c) => (
-                  <div key={c.name} className="flex items-center gap-2 text-[13px]" style={{ color: C.bone }}>
-                    {c.dir === "up" ? <TrendingUp size={13} style={{ color: C.sage }} /> : <TrendingDown size={13} style={{ color: C.rust }} />}
-                    <span>{c.name}</span>
-                    <span className="font-mono" style={{ color: C.ash }}>{dispW(c.from, unit)} → {dispW(c.to, unit)} {c.single ? uw(unit) : `${uw(unit)}/hand`}{c.deload ? " · deload" : ""}</span>
-                  </div>
-                ))}
+            <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>Day {summary.day} saved</p>
+            <p className="mt-2 text-[14px] font-semibold leading-snug" style={{ color: toneC }}>{a.text}</p>
+            {(a.strengthPct != null || a.volumePct != null) && (
+              <div className="mt-2 flex gap-4">
+                {a.strengthPct != null && <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>hard-set strength</p><p className="font-mono text-lg" style={{ color: a.strengthPct >= 0 ? C.sage : C.rust }}>{a.strengthPct >= 0 ? "+" : ""}{a.strengthPct.toFixed(1)}%</p></div>}
+                {a.volumePct != null && <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>volume</p><p className="font-mono text-lg" style={{ color: a.volumePct >= 0 ? C.sage : C.rust }}>{a.volumePct >= 0 ? "+" : ""}{a.volumePct.toFixed(0)}%</p></div>}
               </div>
             )}
+            <div className="mt-3 space-y-1">
+              {a.rows.map((r) => { const c = byName[r.name]; return (
+                <div key={r.name} className="flex items-center justify-between gap-2 text-[12px]" style={{ color: C.bone }}>
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    {r.dir === "up" ? <TrendingUp size={12} style={{ color: C.sage }} /> : r.dir === "down" ? <TrendingDown size={12} style={{ color: C.rust }} /> : <span style={{ width: 12 }} />}
+                    <span className="truncate">{r.name}</span>
+                  </span>
+                  <span className="font-mono shrink-0" style={{ color: C.ash }}>
+                    {r.pct != null ? `${r.pct >= 0 ? "+" : ""}${r.pct.toFixed(1)}%` : "new"}{c ? ` · ${decLabel[c.decision] || c.decision}` : ""}
+                  </span>
+                </div>
+              ); })}
+            </div>
             <button onClick={() => setSummary(null)} className="mt-3 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.goldDim }}>dismiss</button>
           </div>
-        )}
+          ); })()}
 
         <p className="mt-6 font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>{today}</p>
-        <h1 className="mt-1 text-4xl font-bold leading-none" style={{ color: C.bone, fontFamily: "Georgia, serif" }}>Workout {tag}</h1>
-        <p className="mt-2 text-sm" style={{ color: C.ash }}>{WORKOUTS[tag].name} — <span style={{ color: C.ashDim }}>{WORKOUTS[tag].sub}</span></p>
+        <h1 className="mt-1 text-4xl font-bold leading-none" style={{ color: C.bone, fontFamily: "Georgia, serif" }}>Day {day}</h1>
+        <p className="mt-2 text-sm" style={{ color: C.ash }}>{dayMeta(day).focus} — <span style={{ color: C.ashDim }}>{dayMeta(day).sub}</span></p>
         <div className="mt-3 flex items-center gap-2">
           <Clock size={13} style={{ color: C.gold }} />
           <span className="font-mono text-xs" style={{ color: C.ash }}>≈ {estMin} min</span>
@@ -987,10 +1172,10 @@ function App() {
 
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
-            {["A", "B"].map((t) => (
-              <button key={t} onClick={() => { setTag(t); setOpenInfo(null); setConfirm(null); if (hasStore) clearLive(); }} className="flex items-center gap-1.5 rounded-full px-4 py-1.5 font-mono text-xs"
-                style={{ background: tag === t ? C.gold : "transparent", color: tag === t ? C.bg : C.ash, fontWeight: tag === t ? 700 : 400 }}>
-                {t === "A" ? <Dumbbell size={12} /> : <ArrowLeftRight size={12} />}{t === "A" ? "Push" : "Pull · Legs"}
+            {PROGRAM.map((d) => (
+              <button key={d.id} onClick={() => { setDay(d.id); setOpenInfo(null); setConfirm(null); if (hasStore) clearLive(); }} className="flex items-center gap-1 rounded-full px-3 py-1.5 font-mono text-xs"
+                style={{ background: day === d.id ? C.gold : "transparent", color: day === d.id ? C.bg : C.ash, fontWeight: day === d.id ? 700 : 400 }}>
+                {d.id}
               </button>
             ))}
           </div>
@@ -1001,7 +1186,7 @@ function App() {
             ))}
           </div>
         </div>
-        {mem.lastTag && tag === (mem.lastTag === "A" ? "B" : "A") && <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>auto-picked — you trained {mem.lastTag} last</p>}
+        {mem.lastDay > 0 && day === nextDayId(mem.lastDay) && <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>auto-picked — you trained Day {mem.lastDay} last</p>}
 
         <div className="mt-6 space-y-4">
           {plan.map((item, exIdx) => {
@@ -1022,9 +1207,9 @@ function App() {
                     )}
                     {item.ex.optional && <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>optional</span>}
                     {(mem.stalls?.[item.ex.name] || 0) >= 2 && <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.rust }}>stalling — deload soon</span>}
-                    {chg && (
-                      <span className="flex items-center gap-1 font-mono text-[10px]" style={{ color: chg.dir === "up" ? C.sage : C.rust }}>
-                        {chg.dir === "up" ? <TrendingUp size={10} /> : <TrendingDown size={10} />} {dispW(chg.to, unit)}{chg.single ? ` ${uw(unit)}` : `${uw(unit)}/hand`} (was {dispW(chg.from, unit)})
+                    {chg && chg.toLoad !== chg.fromLoad && (
+                      <span className="flex items-center gap-1 font-mono text-[10px]" style={{ color: chg.toLoad > chg.fromLoad ? C.sage : C.rust }}>
+                        {chg.toLoad > chg.fromLoad ? <TrendingUp size={10} /> : <TrendingDown size={10} />} {dispW(chg.toLoad, unit)}{chg.single ? ` ${uw(unit)}` : `${uw(unit)}/hand`} (was {dispW(chg.fromLoad, unit)})
                       </span>
                     )}
                   </div>
@@ -1108,9 +1293,19 @@ function App() {
                         </div>
                       </div>
                       <div className="px-2 pb-1.5 pl-7 font-mono text-[10px]" style={{ color: C.ash }}>
-                        {rp ? "bodyweight" : item.ex.single ? `${dispW(log.weight, unit)} ${uw(unit)}` : `${dispW(log.weight * 2, unit)} ${uw(unit)} total`}{isWarm ? " · warm-up" : `  ·  target ${set.repsLabel}`}
+                        {rp ? "bodyweight" : item.ex.single ? `${dispW(log.weight, unit)} ${uw(unit)}` : `${dispW(log.weight * 2, unit)} ${uw(unit)} total`}{isWarm ? " · warm-up" : `  ·  ${set.repsLabel}${set.aim ? ` · aim ${set.aim}` : ""}`}
                         <span style={{ color: C.ashDim }}>{edited && !rp ? `  ·  proj ${dispW(set.load, unit)} × ${set.repsNum}` : ""}</span>
                       </div>
+                      {isDone && !isWarm && (
+                        <div className="flex items-center gap-1 px-2 pb-2 pl-7">
+                          <span className="mr-1 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>effort</span>
+                          {[["easy", "Easy", C.sage], ["good", "Good", C.gold], ["hard", "Hard", C.rust], ["fail", "Failed", C.rust]].map(([v, lab, col]) => {
+                            const on = log.e === v;
+                            return <button key={v} onClick={() => setEffort(key, v)} aria-label={`effort ${lab}`} className="rounded-full border px-2 py-0.5 font-mono text-[9px] active:scale-95"
+                              style={{ borderColor: on ? col : C.edge, background: on ? col : "transparent", color: on ? C.bg : C.ash, fontWeight: on ? 700 : 400 }}>{lab}</button>;
+                          })}
+                        </div>
+                      )}
                       {showPct && (
                         <div className="flex gap-4 px-2 pb-1.5 pl-7 font-mono text-[10px]">
                           <span style={{ color: C.ashDim }}>overall <span style={{ color: pctColor(overallPct) }}>{fmtPct(overallPct)}</span></span>
@@ -1161,7 +1356,7 @@ function App() {
         {/* finish + progress */}
         {confirm === "finish" ? (
           <div className="mt-6 rounded-2xl border p-4" style={{ borderColor: C.activeEdge, background: "#1A1609", animation: "fade .3s ease-out" }}>
-            <p className="text-[13px] leading-relaxed" style={{ color: C.bone }}>Finish Workout {tag}? This saves your {workDone} logged set{workDone === 1 ? "" : "s"}, applies weight progression, and switches you to the other day.</p>
+            <p className="text-[13px] leading-relaxed" style={{ color: C.bone }}>Finish Day {day}? This saves your {workDone} logged set{workDone === 1 ? "" : "s"}, applies progression, and advances to the next day.</p>
             <div className="mt-3 flex gap-2">
               <button onClick={() => setConfirm(null)} className="flex-1 rounded-xl border py-3 font-mono text-xs uppercase tracking-wider" style={{ borderColor: C.edge, color: C.ash }}>Cancel</button>
               <button onClick={() => { setConfirm(null); finishWorkout(); }} className="flex flex-1 items-center justify-center gap-2 rounded-xl py-3 font-mono text-xs font-bold uppercase tracking-wider" style={{ background: C.gold, color: C.bg }}><Save size={15} /> Finish &amp; save</button>
