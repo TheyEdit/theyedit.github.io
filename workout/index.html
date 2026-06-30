@@ -157,12 +157,17 @@ const REMOTE = {
   // (not "when the PUT happened"). Returns the new sha and the ts that was written.
   async push(cfg, data, sha, ts) {
     const stamp = ts || Date.now();
+    const url = `https://api.github.com/repos/${cfg.repo}/contents/${encodeURIComponent(cfg.path).replace(/%2F/g, "/")}`;
     const mk = (s) => ({ method: "PUT", headers: { ...ghHeaders(cfg), "Content-Type": "application/json" }, body: JSON.stringify({ message: `coach sync ${new Date().toISOString()}`, content: b64enc(JSON.stringify({ ts: stamp, data })), branch: cfg.branch || "main", ...(s ? { sha: s } : {}) }) });
-    let r = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${encodeURIComponent(cfg.path).replace(/%2F/g, "/")}`, mk(sha));
+    let r = await fetch(url, mk(sha));
     if (r.status === 409 || r.status === 422) {
-      dbg(`push → HTTP ${r.status} (stale sha ${shortSha(sha)}); re-pulling sha and retrying`);
-      const cur = await this.pull(cfg);
-      r = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${encodeURIComponent(cfg.path).replace(/%2F/g, "/")}`, mk(cur.sha));
+      const cur = await this.pull(cfg);          // someone else wrote between our read and write
+      if ((cur.ts || 0) >= stamp) {              // their write is newer-or-equal → DO NOT overwrite it; report conflict
+        dbg(`push → HTTP ${r.status} conflict: remote ts=${tsLabel(cur.ts)} ≥ ours=${tsLabel(stamp)} → abort, adopt remote`);
+        return { conflict: true, remote: cur };
+      }
+      dbg(`push → HTTP ${r.status} stale sha but our write is newer; retry with sha=${shortSha(cur.sha)}`);
+      r = await fetch(url, mk(cur.sha));
     }
     if (!r.ok) { const body = await r.text().catch(() => ""); dbg(`push → HTTP ${r.status} FAILED ${body.slice(0, 140)}`); throw new Error("write " + r.status); }
     const j = await r.json();
@@ -173,6 +178,9 @@ const REMOTE = {
 };
 const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
+// signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
+const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
+const BUILD = "b0630-1503";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb" };
 
 /* ───────────────────────── program ───────────────────────── */
@@ -710,6 +718,8 @@ function App() {
   const syncReady = useRef(false);
   const reconciling = useRef(false);   // serialize pull/push so they can't race each other
   const quietRef = useRef(0);   // suppress push echoes right after adopting a remote copy
+  const liveClearedRef = useRef(false);   // true only when WE intentionally ended the session (finish/discard/day-switch)
+  const syncedLiveSig = useRef("null");   // signature of the live session as last synced — stops re-pushing an adopted session
 
   // mirror the module-level sync debug ring buffer into React state so it renders
   useEffect(() => { setSyncLog(SYNCLOG.slice()); SYNCLOG_NOTIFY = (lines) => setSyncLog(lines); return () => { SYNCLOG_NOTIFY = null; }; }, []);
@@ -767,14 +777,30 @@ function App() {
     const liveOk = rlive && Array.isArray(rlive.done) && (rlive.done.length > 0 || rlive.active);
     if (liveOk) { liveRef.current = rlive; if (hasStore) await LS.set(LIVE, rlive); setPending(rlive); }
     else { liveRef.current = null; if (hasStore) await LS.del(LIVE); setPending(null); }
+    liveClearedRef.current = false;                 // we adopted remote state, not a local clear
+    syncedLiveSig.current = liveSig(liveOk ? rlive : null);   // remember it so we don't re-push this adopted session
   };
 
-  // push this device's current copy to remote, stamping the file with our local change ts.
-  const pushLocal = async (cfg, reason) => {
+  // push this device's current copy to remote. `remote` = the just-pulled remote (from reconcile) so we can
+  // MERGE the in-progress session: never carry a null/stale live over a remote session unless WE ended it.
+  const pushLocal = async (cfg, reason, remote) => {
     const lt = await localTs();
-    const out = await REMOTE.push(cfg, { mem: memRef.current, live: liveRef.current }, shaRef.current, lt);
+    const remoteLive = remote && remote.data ? remote.data.live : null;
+    let live = liveRef.current;
+    if (!live && !liveClearedRef.current && remoteLive && Array.isArray(remoteLive.done) && (remoteLive.done.length > 0 || remoteLive.active)) {
+      live = remoteLive; liveRef.current = remoteLive; if (hasStore) await LS.set(LIVE, remoteLive); setPending(remoteLive);   // adopt the other device's session locally too, so it shows here as well
+    }
+    if (liveClearedRef.current) live = null;
+    const out = await REMOTE.push(cfg, { mem: memRef.current, live }, shaRef.current, lt);
+    if (out.conflict) {                              // someone wrote a newer copy mid-flight → adopt it instead of clobbering
+      await applyBlob(out.remote.data, out.remote.sha, out.remote.ts, false);
+      dbg(`pushLocal(${reason}): conflict → adopted remote instead of overwriting`);
+      return out;
+    }
     shaRef.current = out.sha || shaRef.current;
     await setSyncedTs(out.ts);            // we are now in sync at the ts we just wrote
+    liveClearedRef.current = false;
+    syncedLiveSig.current = liveSig(live);
     return out;
   };
 
@@ -797,15 +823,15 @@ function App() {
       const localNewer = lt > st;                         // we changed since we last synced
       dbg(`reconcile(${reason}): localTs=${tsLabel(lt)} syncedTs=${tsLabel(st)} remoteTs=${tsLabel(remoteTs)} → remoteNewer=${remoteNewer} localNewer=${localNewer}`);
 
-      if (remoteNewer && (!localNewer || remoteTs >= lt)) {
+      if (remoteNewer && (!localNewer || remoteTs > lt)) {     // strictly-newer remote wins; a tie keeps our local edit (push it)
         await applyBlob(res.data, res.sha, remoteTs, setTagToo);
         dbg(`reconcile(${reason}): ADOPT remote (sha=${shortSha(res.sha)})`);
         setSyncMsg("pulled latest · " + new Date().toLocaleTimeString());
       } else if (localNewer) {
         shaRef.current = res.sha || shaRef.current;       // adopt latest sha before writing
-        const out = await pushLocal(cfg, reason);
-        dbg(`reconcile(${reason}): PUSH local (wroteTs=${tsLabel(out.ts)} sha=${shortSha(out.sha)})`);
-        setSyncMsg("pushed · " + new Date().toLocaleTimeString());
+        const out = await pushLocal(cfg, reason, res);     // pass remote so live-merge can preserve the other device's session
+        dbg(`reconcile(${reason}): ${out.conflict ? "PUSH→conflict, adopted" : "PUSH local (wroteTs=" + tsLabel(out.ts) + " sha=" + shortSha(out.sha) + ")"}`);
+        setSyncMsg((out.conflict ? "pulled latest · " : "pushed · ") + new Date().toLocaleTimeString());
       } else {
         shaRef.current = res.sha || shaRef.current;
         if (hasRemote && remoteTs > st) await setSyncedTs(remoteTs);
@@ -820,7 +846,7 @@ function App() {
     }
   };
 
-  // debounced local→remote: only fires when there are GENUINE unsynced local changes.
+  // debounced local→remote: pull-then-decide (via reconcile) so a save can't blind-overwrite the other device.
   const schedulePush = () => {
     if (!sync || !syncReady.current || Date.now() < quietRef.current) return;
     if (pushTimer.current) clearTimeout(pushTimer.current);
@@ -828,10 +854,7 @@ function App() {
       if (reconciling.current) { schedulePush(); return; }   // retry after the in-flight reconcile
       const lt = await localTs(); const st = await syncedTs();
       if (lt <= st) { dbg(`schedulePush: nothing unsynced (localTs=${tsLabel(lt)} ≤ syncedTs=${tsLabel(st)}) — skip`); return; }
-      reconciling.current = true;
-      try { setSyncMsg("saving…"); const out = await pushLocal(sync, "debounced-save"); dbg(`schedulePush: PUSH ok (wroteTs=${tsLabel(out.ts)} sha=${shortSha(out.sha)})`); setSyncMsg("saved · " + new Date().toLocaleTimeString()); }
-      catch (e) { dbg(`schedulePush: ERROR ${e.message}`); setSyncMsg("save failed — kept on device"); }
-      finally { reconciling.current = false; }
+      await reconcile(sync, "debounced-save", false);
     }, 3500);
   };
 
@@ -843,7 +866,7 @@ function App() {
     const onFocus = () => { if (document.visibilityState !== "hidden") reconcile(sync, "focus", false); };
     // leaving the app (background/close): flush any unsynced local changes NOW so the other device
     // sees them on its next open, instead of waiting out the debounce.
-    const flush = async () => { try { const lt = await localTs(), st = await syncedTs(); if (lt > st && !reconciling.current) { if (pushTimer.current) clearTimeout(pushTimer.current); reconciling.current = true; try { await pushLocal(sync, "flush-on-hide"); } finally { reconciling.current = false; } } } catch (e) {} };
+    const flush = async () => { try { const lt = await localTs(), st = await syncedTs(); if (lt > st && !reconciling.current) { if (pushTimer.current) clearTimeout(pushTimer.current); await reconcile(sync, "flush-on-hide", false); } } catch (e) {} };
     const onVis = () => { if (document.visibilityState === "visible") reconcile(sync, "visibility", false); else flush(); };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVis);
@@ -957,10 +980,12 @@ function App() {
     const liveObj = started ? { day, logs, done: [...done], active, ts: Date.now() } : (pending || null);
     liveRef.current = liveObj;
     if (hasStore && started) saveLive(liveObj);
-    // A live-session edit is a genuine local change — advance the change clock so reconcile()
-    // knows this device has unsynced work (previously only mem-saves bumped it, so logging
-    // sets never marked the device "dirty" and the in-progress session failed to transfer).
-    if (started) { bumpChange().then(schedulePush); } else { schedulePush(); }
+    // Only mark the device "dirty" (bump the change clock + push) when the session GENUINELY changed —
+    // not when this effect re-fires because we just ADOPTED a session from another device. Comparing the
+    // content signature to the last-synced one stops the two devices ping-ponging the same session forever.
+    const sig = liveSig(liveObj);
+    if (sig !== syncedLiveSig.current) { bumpChange().then(schedulePush); }
+    else { schedulePush(); }
   }, [done, active, loaded, pending]);
 
   const workKeys = useMemo(() => { const ks = []; plan.forEach((it, ei) => { if (it.ex.optional) return; it.sets.forEach((s, si) => { if (s.kind === "work") ks.push(`${ei}-${si}`); }); }); return ks; }, [plan]);
@@ -1036,6 +1061,7 @@ function App() {
     const lastChanges = {}; changes.forEach((c) => { lastChanges[c.name] = c; });
     const newMem = { ...mem, version: 2, lastDay: day, sessionCount: (mem.sessionCount || 0) + 1, weights: newWeights, targets: newTargets, stalls: newStalls, lastByDay: newLastByDay, recentCues, lastChanges, history: newHistory, setHistory: newSetHistory };
     if (hasStore) { await saveState(newMem); await clearLive(); }
+    liveRef.current = null; liveClearedRef.current = true; syncedLiveSig.current = "null";   // session genuinely finished → propagate the clear
     setPending(null);
     setSummary({ day, changes, assessment });
     setMem(newMem);
@@ -1051,7 +1077,7 @@ function App() {
     setDone(new Set(pending.done || []));
     setPending(null);
   };
-  const discardSession = async () => { if (hasStore) await clearLive(); setPending(null); };
+  const discardSession = async () => { if (hasStore) await clearLive(); liveRef.current = null; liveClearedRef.current = true; setPending(null); };
   // Auto-restore an in-progress session (saved locally, or just pulled from another device) into the
   // live view — one seamless session, no "Resume" click. This is what makes a refresh (here or on
   // another device) show your logged sets immediately, like a shared doc.
@@ -1233,7 +1259,7 @@ function App() {
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
             {PROGRAM.map((d) => (
-              <button key={d.id} onClick={() => { setDay(d.id); setOpenInfo(null); setConfirm(null); if (hasStore) clearLive(); }} className="flex items-center gap-1 rounded-full px-3 py-1.5 font-mono text-xs"
+              <button key={d.id} onClick={() => { setDay(d.id); setOpenInfo(null); setConfirm(null); if (hasStore) clearLive(); liveRef.current = null; liveClearedRef.current = true; }} className="flex items-center gap-1 rounded-full px-3 py-1.5 font-mono text-xs"
                 style={{ background: day === d.id ? C.gold : "transparent", color: day === d.id ? C.bg : C.ash, fontWeight: day === d.id ? 700 : 400 }}>
                 {d.id}
               </button>
@@ -1419,6 +1445,7 @@ function App() {
               <div className="flex flex-col">
                 <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Cross-device sync</span>
                 <span className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px]" style={{ color: C.sage }}><Check size={11} /> {syncMsg && /error|fail|offline|wrong/i.test(syncMsg) ? <span style={{ color: C.rust }}>{syncMsg}</span> : (syncMsg || "on · auto")}</span>
+                <span className="mt-0.5 font-mono text-[9px]" style={{ color: C.ashDim }}>build {BUILD}</span>
               </div>
               <button onClick={forceSync} className="flex items-center gap-1.5 rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}><RefreshCw size={12} /> Refresh</button>
             </div>
