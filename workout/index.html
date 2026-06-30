@@ -31,7 +31,7 @@
 <script type="text/babel" data-type="module" data-presets="react">
 const _b = document.getElementById("boot"); if (_b) _b.remove();
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, Minus, Plus, Save, RotateCcw, TrendingUp, TrendingDown, Info, X, Undo2 } from "lucide-react";
+import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2 } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
@@ -733,12 +733,13 @@ function App() {
       const liveOk = live && Array.isArray(live.done) && (live.done.length > 0 || live.active);
       if (liveOk && Date.now() - (live.ts || 0) < 86400000) { setPending(live); liveRef.current = live; }
       const saved = hasStore ? await loadSyncCfg() : null;
-      let cfg = saved && saved.repo && saved.token ? saved : null;
-      if (!cfg && CIPHER_ACTIVE) {                       // baked sync: decrypt the token with the saved password
+      let cfg = saved && saved.repo && saved.token ? saved : null;   // a prior unlock persisted the cfg here → no password needed again
+      if (!cfg && CIPHER_ACTIVE) {                       // first time on this device: decrypt the token with the saved password
         const pw = hasStore ? await LS.get(PWKEY) : null;
-        if (pw) { try { cfg = { ...BAKED_SYNC, token: await decryptToken(SYNC_CIPHER, pw) }; if (alive) setSyncLocked(false); } catch (e) { if (alive) setSyncLocked(true); } }
+        if (pw) { try { cfg = { ...BAKED_SYNC, token: await decryptToken(SYNC_CIPHER, pw) }; if (hasStore) await saveSyncCfg(cfg); } catch (e) {} }
       }
       if (cfg && cfg.repo && cfg.token) {
+        if (alive) setSyncLocked(false);   // we have a working config (saved or decrypted) → not locked
         setSync(cfg);
         syncReady.current = true;   // reconcile() may push genuine local changes during boot
         await reconcile(cfg, "boot", true);
@@ -864,7 +865,7 @@ function App() {
     try {
       const token = await decryptToken(SYNC_CIPHER, password);
       const cfg = { ...BAKED_SYNC, token };
-      if (hasStore) await LS.set(PWKEY, password);
+      if (hasStore) { await LS.set(PWKEY, password); await saveSyncCfg(cfg); }   // persist cfg too → never asks for the password again on this device
       shaRef.current = null; setSync(cfg); setSyncLocked(false); syncReady.current = true;
       dbg("sync unlocked with password");
       await reconcile(cfg, "unlock", true);
@@ -872,6 +873,8 @@ function App() {
     } catch (e) { dbg("unlock failed: wrong password"); setSyncMsg("wrong password"); }
   };
   const syncNow = async () => { if (!sync) return; setSyncMsg("syncing…"); await reconcile(sync, "sync-now", false); };
+  // manual force-refresh button: pull the shared state right now
+  const forceSync = async () => { if (!sync) return; setSyncMsg("refreshing…"); await reconcile(sync, "manual-refresh", false); };
 
   const plan = useMemo(() => {
     if (!loaded) return [];
@@ -1413,8 +1416,11 @@ function App() {
             <SyncLock onUnlock={unlockSync} msg={syncMsg} />
           ) : (
             <div className="mt-6 flex items-center justify-between rounded-2xl border px-5 py-3" style={{ background: C.card, borderColor: C.edge }}>
-              <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Cross-device sync</span>
-              <span className="flex items-center gap-2 font-mono text-[11px]" style={{ color: C.sage }}><Check size={13} /> {syncMsg && /error|fail|offline/i.test(syncMsg) ? <span style={{ color: C.rust }}>{syncMsg}</span> : "on · auto"}</span>
+              <div className="flex flex-col">
+                <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Cross-device sync</span>
+                <span className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px]" style={{ color: C.sage }}><Check size={11} /> {syncMsg && /error|fail|offline|wrong/i.test(syncMsg) ? <span style={{ color: C.rust }}>{syncMsg}</span> : (syncMsg || "on · auto")}</span>
+              </div>
+              <button onClick={forceSync} className="flex items-center gap-1.5 rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}><RefreshCw size={12} /> Refresh</button>
             </div>
           )
         ) : (
