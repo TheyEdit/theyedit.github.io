@@ -109,12 +109,22 @@ async function saveLive(s) { await LS.set(LIVE, s); }
 async function clearLive() { await LS.del(LIVE); }
 async function loadSyncCfg() { return LS.get(SYNCKEY); }
 async function saveSyncCfg(c) { return LS.set(SYNCKEY, c); }
-// Baked-in sync config. repo/path/branch are safe to embed (not secret). The token is INJECTED at
-// deploy time (replacing the placeholder) ONLY into the access-gated build that is never public —
-// it is never committed here. When the token is still the placeholder, the app falls back to the
-// manual sync panel (today's behavior on the public URL).
-const BAKED_SYNC = { repo: "TheyEdit/workout-data", path: "data.json", branch: "main", token: "__SYNC_TOKEN__" };
-const BAKED_ACTIVE = typeof BAKED_SYNC.token === "string" && BAKED_SYNC.token.indexOf("__SYNC_") !== 0 && BAKED_SYNC.token.length > 10;
+// Baked-in cross-device sync, GitHub-only. repo/path/branch are safe to embed (not secret).
+// SYNC_CIPHER = the sync token AES-GCM-encrypted with your password, as base64(salt|iv|ciphertext).
+// Only ciphertext lives in the public file — it matches no token pattern, so GitHub never revokes it,
+// and it's useless without your password. Type the password once per device to unlock sync.
+const BAKED_SYNC = { repo: "TheyEdit/workout-data", path: "data.json", branch: "main" };
+const SYNC_CIPHER = "aFWeYEU/EQ9vNx3o0OFqm4t3Rmg60f5XhLbUFOl6Xo368enDtBtqfxcfomRkcwk5BLSoHhhfYlNEBNMg7BxWmAnC5jMLfOzAZUxcG4Y+2XWJIZuqC7KjNVTDbR0topAHu2dC2JZhOlbszEhQ9nRBvFxlRu1PFx8GbdnqWdeX/R0mhcCrymKI6Bc=";
+const CIPHER_ACTIVE = typeof SYNC_CIPHER === "string" && SYNC_CIPHER.indexOf("__SYNC_") !== 0 && SYNC_CIPHER.length > 24;
+const PWKEY = "gg:pw";
+async function decryptToken(cipherB64, password) {
+  const raw = Uint8Array.from(atob(cipherB64), (c) => c.charCodeAt(0));
+  const salt = raw.slice(0, 16), iv = raw.slice(16, 28), data = raw.slice(28);
+  const km = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" }, km, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+  return new TextDecoder().decode(pt);
+}
 // localTs = last *genuine local change* (mem save or live-session edit).
 // syncedTs = the remote `ts` we last reconciled with (adopted or pushed).
 // We have unsynced local work iff localTs > syncedTs. We must adopt iff remoteTs > syncedTs.
@@ -628,6 +638,20 @@ const ProgressChart = React.memo(function ProgressChart({ mem }) {
 });
 
 /* ───────────────────────── app ───────────────────────── */
+function SyncLock({ onUnlock, msg }) {
+  const [pw, setPw] = useState("");
+  return (
+    <div className="mt-6 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
+      <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Cross-device sync</span>
+      <p className="mt-2 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>Enter your sync password to turn on cross-device sync on this device. You only do this once here.</p>
+      <div className="mt-3 flex gap-2">
+        <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && pw) onUnlock(pw); }} placeholder="sync password" autoCapitalize="off" autoCorrect="off" spellCheck="false" className="flex-1 rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={{ background: "#100E09", border: `1px solid ${C.edge}`, color: C.bone }} />
+        <button onClick={() => pw && onUnlock(pw)} className="rounded-full px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Unlock</button>
+      </div>
+      {msg && <p className="mt-2 font-mono text-[10px]" style={{ color: /wrong/i.test(msg) ? C.rust : C.ash }}>{msg}</p>}
+    </div>
+  );
+}
 function SyncPanel({ sync, msg, log, onConnect, onDisconnect, onSyncNow }) {
   const [f, setF] = useState({ repo: sync?.repo || "", token: sync?.token || "", path: sync?.path || "data.json", branch: sync?.branch || "main" });
   const [showLog, setShowLog] = useState(false);
@@ -640,7 +664,7 @@ function SyncPanel({ sync, msg, log, onConnect, onDisconnect, onSyncNow }) {
       <p className="mt-2 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>Keeps one JSON file in your own GitHub repo so every device shares the same data. {sync ? <span style={{ color: C.sage }}>connected to {sync.repo}</span> : "not connected — this device is local-only."}</p>
       <div className="mt-3 space-y-2">
         <div><p className={lbl} style={{ color: C.ashDim }}>repo (owner/name)</p><input value={f.repo} onChange={(e) => setF({ ...f, repo: e.target.value.trim() })} placeholder="dima/workout-data" autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={base} /></div>
-        <div><p className={lbl} style={{ color: C.ashDim }}>fine-grained token (contents: read & write)</p><input value={f.token} onChange={(e) => setF({ ...f, token: e.target.value.trim() })} type="password" placeholder="github_pat_…" autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={base} /></div>
+        <div><p className={lbl} style={{ color: C.ashDim }}>fine-grained token (contents: read & write)</p><input value={f.token} onChange={(e) => setF({ ...f, token: e.target.value.trim() })} type="password" placeholder="fine-grained token…" autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={base} /></div>
         <div className="flex gap-2">
           <div className="flex-1"><p className={lbl} style={{ color: C.ashDim }}>file path</p><input value={f.path} onChange={(e) => setF({ ...f, path: e.target.value.trim() })} autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={base} /></div>
           <div className="w-24"><p className={lbl} style={{ color: C.ashDim }}>branch</p><input value={f.branch} onChange={(e) => setF({ ...f, branch: e.target.value.trim() })} autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={base} /></div>
@@ -677,6 +701,7 @@ function App() {
   const [day, setDay] = useState(1);
   const [sync, setSync] = useState(null);          // {url,key,code} or null
   const [syncMsg, setSyncMsg] = useState("");       // human-readable status
+  const [syncLocked, setSyncLocked] = useState(CIPHER_ACTIVE);   // baked sync waiting for the password on this device
   const [syncLog, setSyncLog] = useState([]);       // verbose, on-screen debug log
   const pushTimer = useRef(null);
   const memRef = useRef(DEFAULT);
@@ -708,7 +733,11 @@ function App() {
       const liveOk = live && Array.isArray(live.done) && (live.done.length > 0 || live.active);
       if (liveOk && Date.now() - (live.ts || 0) < 86400000) { setPending(live); liveRef.current = live; }
       const saved = hasStore ? await loadSyncCfg() : null;
-      const cfg = saved && saved.repo && saved.token ? saved : (BAKED_ACTIVE ? BAKED_SYNC : null);   // baked-in config wins when no manual one is saved
+      let cfg = saved && saved.repo && saved.token ? saved : null;
+      if (!cfg && CIPHER_ACTIVE) {                       // baked sync: decrypt the token with the saved password
+        const pw = hasStore ? await LS.get(PWKEY) : null;
+        if (pw) { try { cfg = { ...BAKED_SYNC, token: await decryptToken(SYNC_CIPHER, pw) }; if (alive) setSyncLocked(false); } catch (e) { if (alive) setSyncLocked(true); } }
+      }
       if (cfg && cfg.repo && cfg.token) {
         setSync(cfg);
         syncReady.current = true;   // reconcile() may push genuine local changes during boot
@@ -825,6 +854,19 @@ function App() {
     await reconcile(cfg, "connect", true);
   };
   const disconnectSync = async () => { await LS.del(SYNCKEY); setSync(null); shaRef.current = null; setSyncMsg(""); dbg("disconnected (config cleared on this device)"); };
+  // baked sync: decrypt the token with the entered password, remember it on this device, then sync
+  const unlockSync = async (password) => {
+    setSyncMsg("unlocking…");
+    try {
+      const token = await decryptToken(SYNC_CIPHER, password);
+      const cfg = { ...BAKED_SYNC, token };
+      if (hasStore) await LS.set(PWKEY, password);
+      shaRef.current = null; setSync(cfg); setSyncLocked(false); syncReady.current = true;
+      dbg("sync unlocked with password");
+      await reconcile(cfg, "unlock", true);
+      setSyncMsg("synced · " + new Date().toLocaleTimeString());
+    } catch (e) { dbg("unlock failed: wrong password"); setSyncMsg("wrong password"); }
+  };
   const syncNow = async () => { if (!sync) return; setSyncMsg("syncing…"); await reconcile(sync, "sync-now", false); };
 
   const plan = useMemo(() => {
@@ -1358,11 +1400,15 @@ function App() {
           );})}
         </div>
 
-        {BAKED_ACTIVE ? (
-          <div className="mt-6 flex items-center justify-between rounded-2xl border px-5 py-3" style={{ background: C.card, borderColor: C.edge }}>
-            <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Cross-device sync</span>
-            <span className="flex items-center gap-2 font-mono text-[11px]" style={{ color: C.sage }}><Check size={13} /> {syncMsg && /error|fail|offline/i.test(syncMsg) ? <span style={{ color: C.rust }}>{syncMsg}</span> : "on · auto"}</span>
-          </div>
+        {CIPHER_ACTIVE ? (
+          syncLocked ? (
+            <SyncLock onUnlock={unlockSync} msg={syncMsg} />
+          ) : (
+            <div className="mt-6 flex items-center justify-between rounded-2xl border px-5 py-3" style={{ background: C.card, borderColor: C.edge }}>
+              <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Cross-device sync</span>
+              <span className="flex items-center gap-2 font-mono text-[11px]" style={{ color: C.sage }}><Check size={13} /> {syncMsg && /error|fail|offline/i.test(syncMsg) ? <span style={{ color: C.rust }}>{syncMsg}</span> : "on · auto"}</span>
+            </div>
+          )
         ) : (
           <SyncPanel sync={sync} msg={syncMsg} log={syncLog} onConnect={connectSync} onDisconnect={disconnectSync} onSyncNow={syncNow} />
         )}
