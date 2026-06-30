@@ -840,11 +840,15 @@ function App() {
   useEffect(() => {
     if (!sync) return;
     const onFocus = () => { if (document.visibilityState !== "hidden") reconcile(sync, "focus", false); };
-    const onVis = () => { if (document.visibilityState === "visible") reconcile(sync, "visibility", false); };
+    // leaving the app (background/close): flush any unsynced local changes NOW so the other device
+    // sees them on its next open, instead of waiting out the debounce.
+    const flush = async () => { try { const lt = await localTs(), st = await syncedTs(); if (lt > st && !reconciling.current) { if (pushTimer.current) clearTimeout(pushTimer.current); reconciling.current = true; try { await pushLocal(sync, "flush-on-hide"); } finally { reconciling.current = false; } } } catch (e) {} };
+    const onVis = () => { if (document.visibilityState === "visible") reconcile(sync, "visibility", false); else flush(); };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pagehide", flush);
     const poll = setInterval(() => { if (document.visibilityState === "visible") reconcile(sync, "poll", false); }, 20000);
-    return () => { window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVis); clearInterval(poll); };
+    return () => { window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("pagehide", flush); clearInterval(poll); };
   }, [sync]);
 
   const connectSync = async (cfg) => {
@@ -1045,6 +1049,10 @@ function App() {
     setPending(null);
   };
   const discardSession = async () => { if (hasStore) await clearLive(); setPending(null); };
+  // Auto-restore an in-progress session (saved locally, or just pulled from another device) into the
+  // live view — one seamless session, no "Resume" click. This is what makes a refresh (here or on
+  // another device) show your logged sets immediately, like a shared doc.
+  useEffect(() => { if (loaded && pending) resumeSession(); }, [loaded, pending]);
 
   const setBody = async (patch) => { const body = { ...(mem.body || {}), ...patch }; const nm = { ...mem, body }; if (hasStore) await saveState(nm); setMem(nm); };
   const setUnit = async (u) => { const nm = { ...mem, unit: u }; if (hasStore) await saveState(nm); setMem(nm); };
