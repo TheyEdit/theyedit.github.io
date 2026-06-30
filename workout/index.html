@@ -109,6 +109,12 @@ async function saveLive(s) { await LS.set(LIVE, s); }
 async function clearLive() { await LS.del(LIVE); }
 async function loadSyncCfg() { return LS.get(SYNCKEY); }
 async function saveSyncCfg(c) { return LS.set(SYNCKEY, c); }
+// Baked-in sync config. repo/path/branch are safe to embed (not secret). The token is INJECTED at
+// deploy time (replacing the placeholder) ONLY into the access-gated build that is never public —
+// it is never committed here. When the token is still the placeholder, the app falls back to the
+// manual sync panel (today's behavior on the public URL).
+const BAKED_SYNC = { repo: "TheyEdit/workout-data", path: "data.json", branch: "main", token: "__SYNC_TOKEN__" };
+const BAKED_ACTIVE = typeof BAKED_SYNC.token === "string" && BAKED_SYNC.token.indexOf("__SYNC_") !== 0 && BAKED_SYNC.token.length > 10;
 // localTs = last *genuine local change* (mem save or live-session edit).
 // syncedTs = the remote `ts` we last reconciled with (adopted or pushed).
 // We have unsynced local work iff localTs > syncedTs. We must adopt iff remoteTs > syncedTs.
@@ -701,7 +707,8 @@ function App() {
       const live = hasStore ? await loadLive() : null;
       const liveOk = live && Array.isArray(live.done) && (live.done.length > 0 || live.active);
       if (liveOk && Date.now() - (live.ts || 0) < 86400000) { setPending(live); liveRef.current = live; }
-      const cfg = hasStore ? await loadSyncCfg() : null;
+      const saved = hasStore ? await loadSyncCfg() : null;
+      const cfg = saved && saved.repo && saved.token ? saved : (BAKED_ACTIVE ? BAKED_SYNC : null);   // baked-in config wins when no manual one is saved
       if (cfg && cfg.repo && cfg.token) {
         setSync(cfg);
         syncReady.current = true;   // reconcile() may push genuine local changes during boot
@@ -1351,7 +1358,14 @@ function App() {
           );})}
         </div>
 
-        <SyncPanel sync={sync} msg={syncMsg} log={syncLog} onConnect={connectSync} onDisconnect={disconnectSync} onSyncNow={syncNow} />
+        {BAKED_ACTIVE ? (
+          <div className="mt-6 flex items-center justify-between rounded-2xl border px-5 py-3" style={{ background: C.card, borderColor: C.edge }}>
+            <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Cross-device sync</span>
+            <span className="flex items-center gap-2 font-mono text-[11px]" style={{ color: C.sage }}><Check size={13} /> {syncMsg && /error|fail|offline/i.test(syncMsg) ? <span style={{ color: C.rust }}>{syncMsg}</span> : "on · auto"}</span>
+          </div>
+        ) : (
+          <SyncPanel sync={sync} msg={syncMsg} log={syncLog} onConnect={connectSync} onDisconnect={disconnectSync} onSyncNow={syncNow} />
+        )}
 
         {/* finish + progress */}
         {confirm === "finish" ? (
