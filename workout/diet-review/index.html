@@ -32,7 +32,7 @@
 <script type="text/babel" data-type="module" data-presets="react">
 const _b = document.getElementById("boot"); if (_b) _b.remove();
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star } from "lucide-react";
+import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { readBarcodes } from "zxing-wasm";
@@ -182,7 +182,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0701-review2159";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0701-review2307";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -253,6 +253,7 @@ const NUTRIENTS = [
   { key: "selenium", label: "Selenium", unit: "µg", group: "mineral", rda: 55 },
   { key: "caffeine", label: "Caffeine", unit: "mg", group: "general", rda: 400 },
   { key: "alcohol", label: "Alcohol", unit: "g", group: "general" },
+  { key: "water", label: "Water", unit: "ml", group: "general" },
   { key: "vitA", label: "Vitamin A", unit: "µg", group: "vitamin", rda: 900 },
   { key: "vitC", label: "Vitamin C", unit: "mg", group: "vitamin", rda: 90 },
   { key: "vitD", label: "Vitamin D", unit: "µg", group: "vitamin", rda: 20 },
@@ -270,12 +271,24 @@ const NUTRIENTS = [
 const USDA_MAP = { 1008: "kcal", 1003: "protein", 1005: "carbs", 1004: "fat", 1079: "fiber", 2000: "sugar", 1258: "satFat", 1253: "cholesterol", 1093: "sodium", 1092: "potassium", 1087: "calcium", 1089: "iron", 1090: "magnesium", 1095: "zinc", 1091: "phosphorus", 1098: "copper", 1101: "manganese", 1103: "selenium", 1057: "caffeine", 1018: "alcohol", 1106: "vitA", 1162: "vitC", 1114: "vitD", 1109: "vitE", 1185: "vitK", 1165: "b1", 1166: "b2", 1167: "b3", 1170: "b5", 1175: "b6", 1177: "folate", 1178: "b12" };
 // Open Food Facts nutriments `<field>_100g` → our key. Note: OFF often gives `salt` not `sodium`; derive sodium = salt g ÷ 2.5 in the mapper (Task 3), not here.
 const OFF_MAP = { "energy-kcal": "kcal", proteins: "protein", carbohydrates: "carbs", fat: "fat", fiber: "fiber", sugars: "sugar", "saturated-fat": "satFat", cholesterol: "cholesterol", sodium: "sodium", potassium: "potassium", calcium: "calcium", iron: "iron", magnesium: "magnesium", zinc: "zinc", phosphorus: "phosphorus", copper: "copper", manganese: "manganese", selenium: "selenium", caffeine: "caffeine", "vitamin-a": "vitA", "vitamin-c": "vitC", "vitamin-d": "vitD", "vitamin-e": "vitE", "vitamin-k": "vitK", "vitamin-b1": "b1", "vitamin-b2": "b2", "vitamin-pp": "b3", "pantothenic-acid": "b5", "vitamin-b6": "b6", "vitamin-b9": "folate", "vitamin-b12": "b12" };
-// scale a food's nutr to `grams`. per100 → *grams/100; serving/item with numeric basisGrams → *grams/basisGrams; legacy 'item' (basisGrams null) → unchanged.
+// scale a food's nutr to `grams`. per100 → *grams/100; serving/item with numeric basisGrams>0 → *grams/basisGrams; legacy multiplier (basisGrams null) → *(grams||1). Returns a new object; never mutates food.nutr.
 const entryNutr = (food, grams) => {
   const n = food.nutr || {};
-  if (food.basis === "per100") { const out = {}; for (const k in n) out[k] = n[k] * grams / 100; return out; }
-  if ((food.basis === "serving" || food.basis === "item") && food.basisGrams != null) { const out = {}; for (const k in n) out[k] = n[k] * grams / food.basisGrams; return out; }
-  return { ...n };  // legacy 'item': absolute, grams ignored
+  const out = {};
+  if (food.basis === "per100") { for (const k in n) out[k] = n[k] * grams / 100; return out; }
+  if ((food.basis === "serving" || food.basis === "item") && food.basisGrams != null && food.basisGrams > 0) { for (const k in n) out[k] = n[k] * grams / food.basisGrams; return out; }
+  const mult = grams || 1;   // legacy multiplier: absolute nutr × count (never counts a fraction as full)
+  for (const k in n) out[k] = n[k] * mult;
+  return out;
+};
+// inverse of entryNutr: given a nutr object measured at `grams`, produce the food's per-basis nutr (for "save correction").
+// per100 → *100/grams; serving/item w/ basisGrams → *basisGrams/grams; legacy multiplier (basisGrams null) → /(grams||1).
+const scaleToBasis = (food, nutr, grams) => {
+  const out = {}; const g = grams || 1;
+  if (food.basis === "per100") { for (const k in nutr) out[k] = nutr[k] * 100 / g; return out; }
+  if ((food.basis === "serving" || food.basis === "item") && food.basisGrams != null && food.basisGrams > 0) { for (const k in nutr) out[k] = nutr[k] * food.basisGrams / g; return out; }
+  for (const k in nutr) out[k] = nutr[k] / g;
+  return out;
 };
 // sum entries[].nutr over all keys; add derived netCarbs = carbs - fiber (clamped ≥0).
 const dayTotals = (day) => {
@@ -284,11 +297,16 @@ const dayTotals = (day) => {
   t.netCarbs = Math.max(0, (t.carbs || 0) - (t.fiber || 0));
   return t;
 };
+// subtract one entry's nutr from a totals object (for edit-mode day-impact "before" bars). Returns a new object.
+const subNutr = (tot, nutr) => { const out = { ...(tot || {}) }; const n = nutr || {}; for (const k in n) out[k] = (out[k] || 0) - n[k]; return out; };
 // legacy food {id,label,kcal,protein,carbs,fat} → upgraded shape. Idempotent: already-upgraded (has nutr) returned as-is.
+// A genuinely-legacy food whose id matches a current gram-based staple adopts that staple's shape; otherwise basis 'item' + basisGrams null (multiplier).
 const upgradeFood = (f) => {
   if (!f || typeof f !== "object") return f;
   if (f.nutr) return f;
   const { id, label, kcal, protein, carbs, fat } = f;
+  const staple = DEFAULT_FOODS.find((s) => s.id === id);
+  if (staple) return { ...staple, fav: !!f.fav, lastGrams: f.lastGrams != null ? f.lastGrams : staple.basisGrams };
   return { id, label, basis: "item", basisGrams: null, nutr: { kcal, protein, carbs, fat }, source: "legacy" };
 };
 // legacy entry {id,label,kcal,protein,carbs,fat,t} → {id,label,t,nutr:{...}} (no grams). Idempotent.
@@ -321,26 +339,47 @@ const offProductToFood = (prod) => {
     if (v != null && v !== "") nutr[key] = +v;
   }
   if (nutr.sodium == null && nm.salt_100g != null && nm.salt_100g !== "") nutr.sodium = +nm.salt_100g / 2.5;
-  return { id: "off:" + prod.code, label: prod.product_name, basis: "per100", basisGrams: 100, nutr, source: "off", barcode: prod.code };
+  const brand = (prod.brands || "").split(",")[0].trim() || undefined;
+  return { id: "off:" + prod.code, label: prod.product_name, brand, basis: "per100", basisGrams: 100, nutr, source: "off", barcode: prod.code };
 };
-async function searchUSDA(query) {
+const USDA_DEMO_KEY = "DEMO_KEY";
+// Returns { items, error } where error is null | 'ratelimit' | 'network'. DEMO_KEY is globally rate-limited (429);
+// a user-supplied free USDA FDC key (nutrition.usdaKey) lifts that. On 429/OVER_RATE_LIMIT we flag 'ratelimit' so
+// the UI can prompt for a key instead of silently showing nothing.
+async function searchUSDA(query, key) {
+  const apiKey = (key && key.trim()) || USDA_DEMO_KEY;
   try {
-    // api_key=DEMO_KEY is the interim rate-limited key; a signed free USDA FDC key gets swapped in at deploy.
-    const url = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&dataType=Foundation,SR%20Legacy&pageSize=8&api_key=DEMO_KEY`;
+    const url = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&dataType=Foundation,SR%20Legacy&pageSize=8&api_key=${encodeURIComponent(apiKey)}`;
     const r = await fetch(url);
-    if (!r.ok) return [];
-    const j = await r.json();
-    return (j.foods || []).map(usdaFoodToFood);
-  } catch (e) { return []; }
+    if (r.status === 429) return { items: [], error: "ratelimit" };
+    if (!r.ok) return { items: [], error: r.status >= 500 ? "network" : null };
+    let j;
+    try { j = await r.json(); } catch (e) { return { items: [], error: "network" }; }
+    if (j && j.error && /OVER_RATE_LIMIT/i.test(j.error.code || "")) return { items: [], error: "ratelimit" };
+    return { items: (j.foods || []).map(usdaFoodToFood), error: null };
+  } catch (e) { return { items: [], error: "network" }; }
 }
+// OFF: the v2 /api/v2/search endpoint currently returns an HTML "temporarily unavailable" page and weak relevance.
+// The legacy CGI endpoint works and is relevant. Guard against non-JSON (HTML) responses — never feed HTML to json().
 async function searchOFF(query) {
-  try {
-    const url = `https://world.openfoodfacts.org/api/v2/search?search_terms=${encodeURIComponent(query)}&fields=code,product_name,nutriments,serving_size&page_size=8`;
-    const r = await fetch(url);
-    if (!r.ok) return [];
-    const j = await r.json();
-    return (j.products || []).filter((p) => p.product_name && p.nutriments && (p.nutriments["energy-kcal_100g"] != null || p.nutriments.energy_100g != null)).map(offProductToFood);
-  } catch (e) { return []; }
+  const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=8&lc=en&fields=product_name,brands,nutriments,code`;
+  // OFF's public endpoint intermittently throws a transient "Failed to fetch" on the first hit; one retry makes it reliable.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) return { items: [], error: "network" };
+      const ct = r.headers.get("content-type") || "";
+      if (!/json/i.test(ct)) return { items: [], error: "network" };   // guard the HTML "temporarily unavailable" page
+      let j;
+      try { j = await r.json(); } catch (e) { return { items: [], error: "network" }; }
+      const items = (j.products || [])
+        .filter((p) => p.product_name && p.nutriments && (p.nutriments["energy-kcal_100g"] != null || p.nutriments.energy_100g != null))
+        .map(offProductToFood)
+        .filter((f) => f.nutr && f.nutr.kcal);   // suppress zero-energy results for food queries
+      return { items, error: null };
+    } catch (e) { if (attempt === 1) return { items: [], error: "network" }; await new Promise((r) => setTimeout(r, 500)); }
+  }
+  return { items: [], error: "network" };
 }
 const findByBarcode = (nut, code) => (nut.foods || []).find((f) => f.barcode === code) || null;
 async function lookupBarcode(code) {
@@ -354,14 +393,14 @@ async function lookupBarcode(code) {
   } catch (e) { return null; }
 }
 const DEFAULT_FOODS = [
-  { id: "chicken300", label: "Chicken breast 300g", basis: "item", basisGrams: null, nutr: { kcal: 330, protein: 50, carbs: 0, fat: 7 }, source: "legacy" },
-  { id: "rice200", label: "Rice 200g cooked", basis: "item", basisGrams: null, nutr: { kcal: 260, protein: 4, carbs: 57, fat: 1 }, source: "legacy" },
-  { id: "eggs3", label: "3 whole eggs", basis: "item", basisGrams: null, nutr: { kcal: 210, protein: 18, carbs: 1, fat: 15 }, source: "legacy" },
-  { id: "whites200", label: "Egg whites 200g", basis: "item", basisGrams: null, nutr: { kcal: 100, protein: 22, carbs: 1, fat: 0 }, source: "legacy" },
-  { id: "whey1", label: "Whey 1 scoop", basis: "item", basisGrams: null, nutr: { kcal: 120, protein: 24, carbs: 3, fat: 2 }, source: "legacy" },
+  { id: "chicken300", label: "Chicken breast", basis: "serving", basisGrams: 300, nutr: { kcal: 330, protein: 50, carbs: 0, fat: 7 }, source: "staple" },
+  { id: "rice200", label: "Rice, cooked", basis: "serving", basisGrams: 200, nutr: { kcal: 260, protein: 4, carbs: 57, fat: 1 }, source: "staple" },
+  { id: "eggs3", label: "Eggs", basis: "serving", basisGrams: 150, nutr: { kcal: 210, protein: 18, carbs: 1, fat: 15 }, source: "staple" },
+  { id: "whites200", label: "Egg whites", basis: "serving", basisGrams: 200, nutr: { kcal: 100, protein: 22, carbs: 1, fat: 0 }, source: "staple" },
+  { id: "whey1", label: "Whey", basis: "serving", basisGrams: 30, nutr: { kcal: 120, protein: 24, carbs: 3, fat: 2 }, source: "staple" },
 ];
 const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb",
-  nutrition: { goals: { kcal: 2100, protein: 175, carbs: 215, fat: 60, steps: 15000, water: 3000, goalBwLb: 154.32, fiber: 30, sodium: 2300, calcium: 1000, iron: 8, potassium: 3400, caffeine: 400 }, days: {}, foods: DEFAULT_FOODS, meals: [], proxyUrl: "" },
+  nutrition: { goals: { kcal: 2100, protein: 175, carbs: 215, fat: 60, steps: 15000, water: 3000, goalBwLb: 154.32, fiber: 30, sodium: 2300, calcium: 1000, iron: 8, potassium: 3400, caffeine: 400 }, days: {}, foods: DEFAULT_FOODS, meals: [], proxyUrl: "", usdaKey: "" },
   sleep: { def: { bed: "23:00", wake: "08:00" }, days: {} } };
 
 /* ───────────────────────── program ───────────────────────── */
@@ -556,11 +595,16 @@ const migrateMem = (raw) => {
   m.lastByDay = m.lastByDay || {};
   m.audit = Array.isArray(m.audit) ? m.audit : [];
   const rn = raw.nutrition && typeof raw.nutrition === "object" ? raw.nutrition : {};
-  const foods = (Array.isArray(rn.foods) && rn.foods.length ? rn.foods : DEFAULT_FOODS).map(upgradeFood);
+  // one-time corrective re-seed: any stored food whose id is a current default staple is REPLACED with the
+  // present DEFAULT_FOODS definition (new gram basis + label), preserving the user's fav + lastGrams. This
+  // fixes already-migrated (nutr-present) staples that upgradeFood would otherwise leave portion-locked.
+  // Idempotent (re-running is stable) and lossless for real day-entries + custom/non-staple foods.
+  const reseedStaple = (f) => { if (!f || typeof f !== "object") return f; const staple = DEFAULT_FOODS.find((s) => s.id === f.id); if (!staple) return upgradeFood(f); return { ...staple, fav: !!f.fav, lastGrams: f.lastGrams != null ? f.lastGrams : staple.basisGrams }; };
+  const foods = (Array.isArray(rn.foods) && rn.foods.length ? rn.foods : DEFAULT_FOODS).map(reseedStaple);
   const rnDays = rn.days && typeof rn.days === "object" ? rn.days : {};
   const days = {};
   for (const k in rnDays) { const d = rnDays[k] || {}; days[k] = { ...d, entries: Array.isArray(d.entries) ? d.entries.map(upgradeEntry) : [] }; }
-  m.nutrition = { goals: { ...DEFAULT.nutrition.goals, ...(rn.goals || {}) }, days, foods, meals: Array.isArray(rn.meals) ? rn.meals : [], proxyUrl: typeof rn.proxyUrl === "string" ? rn.proxyUrl : DEFAULT.nutrition.proxyUrl };
+  m.nutrition = { goals: { ...DEFAULT.nutrition.goals, ...(rn.goals || {}) }, days, foods, meals: Array.isArray(rn.meals) ? rn.meals : [], proxyUrl: typeof rn.proxyUrl === "string" ? rn.proxyUrl : DEFAULT.nutrition.proxyUrl, usdaKey: typeof rn.usdaKey === "string" ? rn.usdaKey : DEFAULT.nutrition.usdaKey };
   const rs = raw.sleep && typeof raw.sleep === "object" ? raw.sleep : {};
   m.sleep = { def: { ...DEFAULT.sleep.def, ...(rs.def || {}) }, days: rs.days && typeof rs.days === "object" ? rs.days : {} };
   m.version = 2;
@@ -703,14 +747,14 @@ function NumberField({ value, onChange, step = 1, label, width = 58, placeholder
   const type = (raw) => { const clean = raw.replace(/[^0-9.]/g, ""); setTxt(clean); if (live && clean !== "" && clean !== ".") { const v = parseFloat(clean); if (!isNaN(v) && v >= 0) onChange(Math.round(v * 100) / 100); } };
   return (
     <div className="inline-flex items-center rounded-lg border" style={{ borderColor: C.edge, background: "#100E09" }}>
-      <button aria-label={`decrease ${label}`} onClick={() => nudge(-step)} className="flex h-9 w-8 items-center justify-center active:scale-90" style={{ color: C.bone }}><Minus size={15} /></button>
+      <button aria-label={`decrease ${label}`} onClick={() => nudge(-step)} className="flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.bone }}><Minus size={15} /></button>
       <input type="text" inputMode="decimal" aria-label={label} placeholder={placeholder || "—"} value={txt}
         onFocus={() => { focused.current = true; }}
         onChange={(e) => type(e.target.value)}
         onBlur={() => { focused.current = false; commit(txt); }}
         onKeyDown={(e) => { if (e.key === "Enter") { commit(txt); e.currentTarget.blur(); } }}
         className="bg-transparent text-center font-mono text-[15px] font-bold outline-none placeholder:opacity-40" style={{ color: C.bone, width }} />
-      <button aria-label={`increase ${label}`} onClick={() => nudge(step)} className="flex h-9 w-8 items-center justify-center active:scale-90" style={{ color: C.bone }}><Plus size={15} /></button>
+      <button aria-label={`increase ${label}`} onClick={() => nudge(step)} className="flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.bone }}><Plus size={15} /></button>
     </div>
   );
 }
@@ -916,7 +960,7 @@ function NutBar({ icon, label, cur, goal, suffix = "", overIsBad = false }) {
 const fmtNut = (v) => { const a = Math.abs(v); if (a >= 100) return Math.round(v).toLocaleString(); if (a >= 10) return (Math.round(v * 10) / 10).toString(); if (a >= 1) return (Math.round(v * 10) / 10).toString(); return (Math.round(v * 100) / 100).toString(); };
 // grouped micro/vitamin/mineral readout from NUTRIENTS; macros handled by parent. `No Data` when key absent.
 function NutrientSummary({ nutr, goals }) {
-  const groups = [["general", "General"], ["vitamin", "Vitamins"], ["mineral", "Minerals"]];
+  const groups = [["macro", "Macros"], ["general", "General"], ["vitamin", "Vitamins"], ["mineral", "Minerals"]];
   const n = nutr || {}, g = goals || {};
   return (
     <div className="space-y-3">
@@ -944,13 +988,31 @@ function NutrientSummary({ nutr, goals }) {
   );
 }
 // Cronometer-style confirm view — set amount/unit/time, preview energy + day-impact bars, add to diary.
-function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFav, onFav, onAdd, onClose }) {
+// Edit mode (editMode+onSave): primary button reads "Save" and saves in place instead of appending.
+function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFav, onFav, onAdd, onSave, editMode, onClose }) {
   const legacy = food.basisGrams == null && food.basis !== "per100";   // legacy 'item' → multiplier, no grams
   const per100 = food.basis === "per100";
-  const [amount, setAmount] = useState(legacy ? 1 : (initialGrams || food.lastGrams || (per100 ? 100 : food.basisGrams || 100)));
+  const hasBasis = food.basisGrams != null && food.basisGrams > 0;   // staple/serving with a real gram size → g⇄serving toggle
+  // seed grams: prefill from the edited/last portion, else a sensible default per basis
+  const seedGrams = legacy ? 1 : (initialGrams || food.lastGrams || (per100 ? 100 : food.basisGrams || 100));
+  // unit: 'g' | 'serving'. hasBasis foods can toggle; per100 stays 'g' (no serving size); legacy is a multiplier (no unit).
+  const [unit, setUnit] = useState(hasBasis && !editMode ? "serving" : "g");
+  // amount lives in the CURRENT unit. Default: if serving-unit + hasBasis → seedGrams/basisGrams, else seedGrams.
+  const [amount, setAmount] = useState(hasBasis && !editMode ? Math.round((seedGrams / food.basisGrams) * 100) / 100 : seedGrams);
   const [t, setT] = useState(() => { const d = initialT ? new Date(initialT) : new Date(); return d; });
-  const grams = legacy ? amount : amount;   // for legacy, amount is a multiplier; entryNutr ignores grams anyway
-  const en = entryNutr(food, grams);
+  // grams: legacy → amount is a raw multiplier; serving → amount×basisGrams; else amount is grams.
+  const grams = legacy ? amount : (unit === "serving" && hasBasis ? amount * food.basisGrams : amount);
+  // switch unit while preserving the food quantity (grams stay fixed) — converts the displayed amount.
+  const switchUnit = (u) => { if (u === unit || !hasBasis) return; setAmount(u === "serving" ? Math.round((grams / food.basisGrams) * 100) / 100 : Math.round(grams * 100) / 100); setUnit(u); };
+  const auto = entryNutr(food, grams);   // computed (library) nutr for this portion
+  // editable macro override: when active, the logged entry uses ov (macros) merged over auto (micros pass through).
+  const [ovOn, setOvOn] = useState(false);
+  const [saveCorr, setSaveCorr] = useState(false);
+  const [ov, setOv] = useState({ kcal: 0, protein: 0, carbs: 0, fat: 0 });
+  const seededRef = useRef(false);
+  // seed the override fields from the current auto values the first time "adjust values" is opened
+  const openOv = () => { if (!ovOn && !seededRef.current) { setOv({ kcal: Math.round(auto.kcal || 0), protein: Math.round((auto.protein || 0) * 10) / 10, carbs: Math.round((auto.carbs || 0) * 10) / 10, fat: Math.round((auto.fat || 0) * 10) / 10 }); seededRef.current = true; } setOvOn((v) => !v); };
+  const en = ovOn ? { ...auto, kcal: +ov.kcal || 0, protein: +ov.protein || 0, carbs: +ov.carbs || 0, fat: +ov.fat || 0 } : auto;
   const kcal = en.kcal || 0, p = en.protein || 0, c = en.carbs || 0, f = en.fat || 0, nc = Math.max(0, c - (en.fiber || 0));
   const macroKcal = p * 4 + nc * 4 + f * 9;
   const pct = (x) => macroKcal > 0 ? Math.round((x / macroKcal) * 100) : 0;
@@ -968,15 +1030,24 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
         <div className="flex items-start justify-between gap-3">
           <h3 className="text-[15px] font-bold leading-tight" style={{ color: C.bone }}>{food.label}</h3>
           <div className="flex shrink-0 items-center gap-3">
-            {onFav && <button onClick={onFav} aria-label="favorite" className="active:scale-90" style={{ color: isFav ? C.gold : C.ashDim }}><Star size={17} fill={isFav ? C.gold : "none"} /></button>}
-            <button onClick={onClose} aria-label="close" className="active:scale-90" style={{ color: C.ash }}><X size={18} /></button>
+            {onFav && <button onClick={onFav} aria-label="favorite" className="-my-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: isFav ? C.gold : C.ashDim }}><Star size={17} fill={isFav ? C.gold : "none"} /></button>}
+            <button onClick={onClose} aria-label="close" className="-my-2 -mr-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.ash }}><X size={18} /></button>
           </div>
         </div>
 
         {/* amount + unit + time */}
         <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <NumberField value={amount} step={legacy ? 1 : (per100 ? 10 : 1)} label="amount" width={64} onChange={setAmount} live />
-          <span className="font-mono text-[11px] uppercase tracking-wider" style={{ color: C.ash }}>{legacy ? "× serving" : (per100 ? "g" : "serving")}</span>
+          <NumberField value={amount} step={legacy ? 1 : (unit === "serving" ? 0.25 : (per100 ? 10 : 10))} label="amount" width={64} onChange={setAmount} live />
+          {hasBasis ? (
+            <div className="inline-flex overflow-hidden rounded-lg border" style={{ borderColor: C.edge }}>
+              {[["g", "g"], ["serving", "serving"]].map(([u, lab]) => (
+                <button key={u} onClick={() => switchUnit(u)} className="px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ background: unit === u ? C.gold : "transparent", color: unit === u ? C.bg : C.ash }}>{lab}</button>
+              ))}
+            </div>
+          ) : (
+            <span className="font-mono text-[11px] uppercase tracking-wider" style={{ color: C.ash }}>{legacy ? "× serving" : "g"}</span>
+          )}
+          {hasBasis && unit === "serving" && <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>= {Math.round(grams)}g</span>}
           <label className="ml-auto flex items-center gap-1 rounded-lg border px-2 py-1" style={{ borderColor: C.edge }}>
             <Clock size={12} style={{ color: C.ashDim }} />
             <input type="time" value={timeVal} onChange={(e) => setTime(e.target.value)} className="bg-transparent font-mono text-[11px] outline-none" style={{ color: C.ash, colorScheme: "dark" }} />
@@ -1026,13 +1097,28 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
           ))}
         </div>
 
+        {/* editable macros — per-entry override (does not touch the shared library food unless "save correction") */}
+        <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
+          <button onClick={openOv} className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.goldDim }}>{ovOn ? "▾ hide" : "▸ adjust"} values</button>
+          {ovOn && (
+            <div className="mt-3">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                {[["kcal", "kcal", 10], ["protein", "P", 1], ["carbs", "C", 1], ["fat", "F", 1]].map(([key, lab, stp]) => (
+                  <div key={key} className="flex items-center gap-1"><NumberField value={ov[key]} step={stp} label={key} width={56} onChange={(n) => setOv((o) => ({ ...o, [key]: n }))} live /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{lab}</span></div>
+                ))}
+              </div>
+              <button onClick={() => setSaveCorr((v) => !v)} className="mt-2 flex items-center gap-1.5 font-mono text-[10px]" style={{ color: saveCorr ? C.gold : C.ashDim }}><span style={{ width: 12, height: 12, borderRadius: 3, border: `1px solid ${saveCorr ? C.gold : C.edge}`, background: saveCorr ? C.gold : "transparent", display: "inline-block" }} />save correction to this food</button>
+            </div>
+          )}
+        </div>
+
         {/* complete nutrient summary (expandable) */}
         <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
           <button onClick={() => setFull((v) => !v)} className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.goldDim }}>{full ? "▾ hide" : "▸ show"} complete nutrient summary</button>
           {full && <div className="mt-3"><NutrientSummary nutr={en} goals={goals} /></div>}
         </div>
 
-        <button onClick={() => { onAdd({ food, grams, t: t.toISOString() }); onClose(); }} className="mt-5 w-full rounded-xl px-4 py-3 font-mono text-[12px] font-bold uppercase tracking-[0.2em] active:scale-95" style={{ background: C.gold, color: C.bg }}>Add to Diary</button>
+        <button onClick={() => { const payload = { food, grams, t: t.toISOString(), nutr: en, saveCorr: ovOn && saveCorr }; if (editMode && onSave) onSave(payload); else onAdd(payload); onClose(); }} className="mt-5 flex min-h-[44px] w-full items-center justify-center rounded-xl px-4 py-3 font-mono text-[12px] font-bold uppercase tracking-[0.2em] active:scale-95" style={{ background: C.gold, color: C.bg }}>{editMode ? "Save" : "Add to Diary"}</button>
       </div>
     </div>
   );
@@ -1048,8 +1134,9 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, proxyUrl, onLa
   const [status, setStatus] = useState("starting");   // starting | scanning | error
   const [errMsg, setErrMsg] = useState("");
   const [manual, setManual] = useState("");
+  const [labelNudge, setLabelNudge] = useState(false);   // no-proxy: show the 1-time-setup hint instead of hiding photo-the-label
   // a not-found result keeps the scanner open (parent shows the overlay) — re-arm so another code can be tried
-  useEffect(() => { if (scanState && scanState.notFound) doneRef.current = false; }, [scanState]);
+  useEffect(() => { if (scanState && scanState.notFound) { doneRef.current = false; setLabelNudge(false); } }, [scanState]);
 
   const stopTracks = useCallback(() => {
     const s = streamRef.current;
@@ -1136,18 +1223,19 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, proxyUrl, onLa
           <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center" style={{ background: "rgba(0,0,0,0.72)" }}>
             <p className="font-mono text-[12px]" style={{ color: C.rust }}>Not found</p>
             <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>No product for <span style={{ color: C.bone }}>{scanState.code}</span> in your library or Open Food Facts.</p>
-            <div className="mt-4 flex gap-2">
-              <button onClick={() => onManual(scanState.code)} className="rounded-full px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Enter manually</button>
-              <button onClick={close} className="rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Cancel</button>
+            {/* Phase 3: photo the nutrition label is the PRIMARY action; always shown (no-proxy → inline setup nudge) */}
+            <div className="mt-4 flex flex-col items-center gap-1">
+              {proxyUrl && onLabelFood
+                ? <LabelPhotoButton proxyUrl={proxyUrl} barcode={scanState.code} onFood={onLabelFood} onFallback={(msg) => { onManual(scanState.code); }}
+                    className="flex min-h-[44px] items-center justify-center rounded-full px-5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }} />
+                : <button onClick={() => setLabelNudge(true)} className="flex min-h-[44px] items-center justify-center rounded-full px-5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>📷 Photo the label</button>}
+              <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>reads macros from the nutrition label</span>
+              {labelNudge && <p className="mt-1 max-w-[16rem] font-mono text-[9px] leading-relaxed" style={{ color: C.gold }}>AI label scan needs a 1-time setup — add your proxy URL in Diet → edit goals.</p>}
             </div>
-            {/* Phase 3: photo the nutrition label → AI autofill (shown only when a proxy is configured) */}
-            {proxyUrl && onLabelFood && (
-              <div className="mt-4 flex flex-col items-center gap-1">
-                <LabelPhotoButton proxyUrl={proxyUrl} barcode={scanState.code} onFood={onLabelFood} onFallback={(msg) => { onManual(scanState.code); }}
-                  className="rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.gold, color: C.gold }} />
-                <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>reads macros from the nutrition label</span>
-              </div>
-            )}
+            <div className="mt-4 flex gap-2">
+              <button onClick={() => onManual(scanState.code)} className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Enter manually</button>
+              <button onClick={close} className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Cancel</button>
+            </div>
           </div>
         )}
       </div>
@@ -1173,29 +1261,38 @@ const isPhraseQuery = (q) => {
   if (s.split(/\s+/).length > 3) return true;
   return false;
 };
-function AddFlow({ onPick, proxyUrl, onParsed }) {
+function AddFlow({ onPick, proxyUrl, usdaKey, onParsed, onManual }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [searchErr, setSearchErr] = useState("");   // "" | 'ratelimit' | 'network'
   const [parsing, setParsing] = useState(false);   // AI text-parse in flight
   const [parseErr, setParseErr] = useState("");
   const [draft, setDraft] = useState(null);         // null | items[] from callGemini({task:'text'})
   const seq = useRef(0);
   useEffect(() => {
     const query = q.trim();
-    if (!query) { setResults([]); setLoading(false); setSearched(false); return; }
+    if (!query) { setResults([]); setLoading(false); setSearched(false); setSearchErr(""); return; }
     setLoading(true);
     const my = ++seq.current;
     const timer = setTimeout(async () => {
-      const [u, o] = await Promise.all([searchUSDA(query), searchOFF(query)]);
+      const [u, o] = await Promise.all([searchUSDA(query, usdaKey), searchOFF(query)]);
       if (my !== seq.current) return;   // stale response, a newer query fired
-      setResults([...u, ...o]);
+      // Ranking: USDA whole foods first, then OFF. Dedupe by code/label.
+      const merged = [...(u.items || []), ...(o.items || [])];
+      const seen = new Set(), deduped = [];
+      for (const f of merged) { const k = (f.barcode || f.label || "").toLowerCase(); if (k && seen.has(k)) continue; if (k) seen.add(k); deduped.push(f); }
+      // Surface an error state only when it left us with nothing AND a provider actually failed. If OFF searched
+      // successfully and returned nothing (o.error==null), that's a genuine "no matches" even if USDA was rate-limited.
+      const err = deduped.length ? "" : (o.error === "network" ? "network" : o.error == null ? "" : (u.error === "ratelimit" ? "ratelimit" : u.error === "network" ? "network" : ""));
+      setResults(deduped);
+      setSearchErr(err);
       setLoading(false);
       setSearched(true);
     }, 350);
     return () => clearTimeout(timer);
-  }, [q]);
+  }, [q, usdaKey]);
   const query = q.trim();
   // The "parse with AI" affordance is additive: only when a proxy + a parsed-handler are wired (main Diet log,
   // not the meal builder) AND the query looks phrase-like. Single-word queries never route through AI.
@@ -1231,16 +1328,34 @@ function AddFlow({ onPick, proxyUrl, onParsed }) {
       {query && (
         <div className="mt-2 space-y-1">
           {loading && <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>searching…</p>}
-          {!loading && searched && results.length === 0 && <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>no results</p>}
-          {results.map((f) => (
-            <button key={f.id} onClick={() => onPick(f)} className="flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left active:scale-[0.99]" style={{ borderColor: C.edge }}>
-              <span className="min-w-0 truncate text-[12px]" style={{ color: C.bone }}>{f.label}</span>
-              <span className="flex shrink-0 items-center gap-2">
-                <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{Math.round((f.nutr || {}).kcal || 0)} kcal/100g</span>
-                <span className="rounded-full border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider" style={{ borderColor: C.edge, color: f.source === "usda" ? C.sage : C.gold }}>{f.source === "usda" ? "USDA" : "OFF"}</span>
-              </span>
+          {!loading && searched && results.length === 0 && searchErr === "ratelimit" && (
+            <p className="font-mono text-[10px]" style={{ color: C.rust }}>search limited — add your free USDA key in goals to fix</p>
+          )}
+          {!loading && searched && results.length === 0 && searchErr === "network" && (
+            <p className="font-mono text-[10px]" style={{ color: C.rust }}>search unavailable — check your connection, then retry</p>
+          )}
+          {!loading && searched && results.length === 0 && !searchErr && (
+            <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>no matches — ＋ add manually below</p>
+          )}
+          {results.map((f) => {
+            const n = f.nutr || {};
+            const macro = `${Math.round(n.kcal || 0)} kcal · ${Math.round(n.protein || 0)}P · ${Math.round(n.carbs || 0)}C · ${Math.round(n.fat || 0)}F /100g`;
+            const isUsda = f.source === "usda";
+            return (
+              <button key={f.id} onClick={() => onPick(f)} className="flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left active:scale-[0.99]" style={{ borderColor: C.edge }}>
+                {isUsda ? <Leaf size={13} className="shrink-0" style={{ color: C.sage }} /> : <Package size={13} className="shrink-0" style={{ color: C.gold }} />}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12px]" style={{ color: C.bone }}>{f.label}{f.brand && <span style={{ color: C.ashDim }}> · {f.brand}</span>}</span>
+                  <span className="block truncate font-mono text-[10px]" style={{ color: C.ashDim }}>{macro}</span>
+                </span>
+              </button>
+            );
+          })}
+          {searched && !loading && onManual && (
+            <button onClick={onManual} className="mt-1 w-full rounded-lg border border-dashed py-2 px-3 text-left font-mono text-[10px] active:scale-[0.99]" style={{ borderColor: C.edge, color: C.ashDim }}>
+              ＋ Add manually / can't find it?
             </button>
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -1336,7 +1451,7 @@ function PlateDraft({ items, onAddAll, onCancel }) {
     </div>
   );
 }
-function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, toggleFav, favFood, addMeal, removeMeal, logMeal, logPlate, copyDay, setSteps, addWater, removeWaterEntry, setSleepToday, setSleepDefault, setNutGoals, setProxyUrl, setBody, logBW }) {
+function DietView({ mem, unit, logFood, editEntry, removeEntry, addFood, removeFood, toggleFav, favFood, addMeal, removeMeal, logMeal, logPlate, copyDay, setSteps, addWater, removeWaterEntry, setSleepToday, setSleepDefault, setNutGoals, setProxyUrl, setUsdaKey, setBody, logBW }) {
   const nut = mem.nutrition || DEFAULT.nutrition;
   const sl = mem.sleep || DEFAULT.sleep;
   const [viewDate, setViewDate] = useState(todayKey());   // which day the log cards (sleep/food/water) read & write
@@ -1347,6 +1462,17 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, toggle
   const st = sl.days[k] || sl.def;
   const slH = sleepHours(st.bed, st.wake);
   const inp = { background: "#100E09", border: `1px solid ${C.edge}`, color: C.bone };
+  // open a logged entry for editing: reconstruct its food from the library, else synthesize a one-off item from the entry's nutr.
+  const openEntry = (e) => {
+    const lib = (nut.foods || []).find((f) => f.id === e.foodId);
+    // library food → prefill its actual grams. synthesized one-off: if the entry has a real gram count, anchor a
+    // serving basis at those grams (nutr==entry's nutr) so grams display + scaling stay right; else a 1× item multiplier.
+    const hasG = e.grams != null && e.grams > 0;
+    const food = lib || (hasG
+      ? { id: e.foodId || null, label: e.label, basis: "serving", basisGrams: e.grams, nutr: e.nutr, source: "entry" }
+      : { id: e.foodId || null, label: e.label, basis: "item", basisGrams: null, nutr: e.nutr, source: "entry" });
+    setDetail({ food, initialGrams: lib ? e.grams : (hasG ? e.grams : 1), initialT: e.t, edit: { id: e.id } });
+  };
   const card = "mt-6 rounded-2xl border p-5";
   const hdr = "font-mono text-[11px] uppercase tracking-[0.2em]";
   const last7 = [...Array(7)].map((_, i) => { const dt = new Date(); dt.setDate(dt.getDate() - (6 - i)); return { key: dt.toLocaleDateString("en-CA"), lbl: dt.toLocaleDateString("en-US", { weekday: "short" }) }; });
@@ -1422,7 +1548,7 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, toggle
     <>
       {/* Day selector — the Sleep / Today / Water cards below log for this day */}
       <div className="mt-6 flex items-center justify-between rounded-2xl border px-2 py-2" style={{ background: C.card, borderColor: C.edge }}>
-        <button onClick={() => setViewDate(shiftDate(viewDate, -1))} aria-label="previous day" className="flex h-8 w-8 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronLeft size={18} /></button>
+        <button onClick={() => setViewDate(shiftDate(viewDate, -1))} aria-label="previous day" className="flex h-11 w-11 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronLeft size={18} /></button>
         <div className="flex items-center gap-2">
           <span className="font-mono text-[12px] font-bold" style={{ color: isToday ? C.gold : C.bone }}>{relDay(viewDate)}</span>
           <label className="flex items-center gap-1 rounded-lg border px-2 py-1" style={{ borderColor: C.edge }}>
@@ -1431,7 +1557,7 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, toggle
           </label>
           {!isToday && <button onClick={() => setViewDate(todayKey())} className="rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider" style={{ borderColor: C.goldDim, color: C.gold }}>today</button>}
         </div>
-        <button onClick={() => setViewDate(shiftDate(viewDate, 1))} aria-label="next day" className="flex h-8 w-8 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronRight size={18} /></button>
+        <button onClick={() => setViewDate(shiftDate(viewDate, 1))} aria-label="next day" className="flex h-11 w-11 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronRight size={18} /></button>
       </div>
 
       {/* Sleep */}
@@ -1482,14 +1608,15 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, toggle
         <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>Caffeine <span style={{ color: (dt.caffeine || 0) > g.caffeine ? C.rust : C.ash }}>{Math.round(dt.caffeine || 0)} / {g.caffeine} mg</span></p>
 
         {/* external DB search */}
-        <button onClick={() => setScanOpen(true)} className="mt-3 w-full rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }}>Scan barcode</button>
+        <button onClick={() => setScanOpen(true)} className="mt-3 flex min-h-[44px] w-full items-center justify-center rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }}>Scan barcode</button>
         {nut.proxyUrl && <LabelPhotoButton proxyUrl={nut.proxyUrl} onFood={(food) => setDetail({ food })} onFallback={(msg) => flash(msg)}
-          className="mt-2 w-full rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }} />}
+          className="mt-2 flex min-h-[44px] w-full items-center justify-center rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }} />}
         {nut.proxyUrl && <PlatePhotoButton proxyUrl={nut.proxyUrl} onDraft={(items) => setPlate(items)} onFallback={(msg) => flash(msg)}
-          className="mt-2 w-full rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }} />}
+          className="mt-2 flex min-h-[44px] w-full items-center justify-center rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }} />}
         {plate && <PlateDraft items={plate} onCancel={() => setPlate(null)}
           onAddAll={async (rows) => { const n = await logPlate(rows, viewDate); setPlate(null); flash(n ? `Logged ${n} item${n === 1 ? "" : "s"}` : "Nothing to log"); }} />}
-        <AddFlow onPick={(f) => setDetail({ food: f })} proxyUrl={nut.proxyUrl}
+        <AddFlow onPick={(f) => setDetail({ food: f })} proxyUrl={nut.proxyUrl} usdaKey={nut.usdaKey}
+          onManual={() => { const el = document.getElementById("diet-custom-food"); if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); const inp = el.querySelector("input"); if (inp) setTimeout(() => inp.focus(), 300); } }}
           onParsed={async (rows) => { const n = await logPlate(rows, viewDate); flash(n ? `Logged ${n} item${n === 1 ? "" : "s"}` : "Nothing to log"); }} />
 
         {/* favorites — one-tap, prefilled with last portion as hint */}
@@ -1499,7 +1626,7 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, toggle
             {favs.map((f) => (
               <span key={f.id} className="flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 active:scale-95" style={{ borderColor: C.goldDim, color: C.bone }}>
                 <button onClick={() => setDetail({ food: f, initialGrams: f.lastGrams })} className="font-mono text-[11px]">{f.label}{f.lastGrams != null && <span style={{ color: C.ashDim }}> · {Math.round(f.lastGrams)}g</span>}</button>
-                <button onClick={() => toggleFav(f.id)} aria-label="unfavorite" style={{ color: C.gold }}><Star size={12} fill={C.gold} /></button>
+                <button onClick={() => toggleFav(f.id)} aria-label="unfavorite" className="-my-2 -mr-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.gold }}><Star size={12} fill={C.gold} /></button>
               </span>
             ))}
           </div>
@@ -1512,7 +1639,7 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, toggle
             {recs.map((f) => (
               <span key={f.id} className="flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 active:scale-95" style={{ borderColor: C.edge, color: C.bone }}>
                 <button onClick={() => setDetail({ food: f, initialGrams: f.lastGrams })} className="font-mono text-[11px]">{f.label}{f.lastGrams != null && <span style={{ color: C.ashDim }}> · last {Math.round(f.lastGrams)}g</span>}</button>
-                <button onClick={() => toggleFav(f.id)} aria-label="favorite" style={{ color: C.ashDim }}><Star size={12} /></button>
+                <button onClick={() => toggleFav(f.id)} aria-label="favorite" className="-my-2 -mr-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.ashDim }}><Star size={12} /></button>
               </span>
             ))}
           </div>
@@ -1586,7 +1713,7 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, toggle
         </div>
 
         {/* custom add */}
-        <div className="mt-4 border-t pt-4" style={{ borderColor: C.edge }}>
+        <div id="diet-custom-food" className="mt-4 border-t pt-4" style={{ borderColor: C.edge }}>
           <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>custom food{cf.barcode && <span style={{ color: C.gold }}> · barcode {cf.barcode}</span>}</p>
           <input value={cf.label} onChange={(e) => setCf({ ...cf, label: e.target.value })} placeholder="label" className="mt-2 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={inp} />
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -1606,8 +1733,8 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, toggle
           <div className="mt-4 space-y-1">
             {d.entries.map((e) => (
               <div key={e.id} className="flex items-center justify-between gap-2 text-[12px]" style={{ color: C.bone }}>
-                <span className="flex items-center gap-2 min-w-0"><span style={{ color: C.ashDim }} className="font-mono text-[10px]">{tHM(e.t)}</span><span className="truncate">{e.label}{e.grams != null && <span style={{ color: C.ashDim }}> · {Math.round(e.grams)}g</span>}</span></span>
-                <span className="flex items-center gap-2 shrink-0"><span className="font-mono text-[10px]" style={{ color: C.ash }}>{Math.round((e.nutr || {}).kcal || 0)} kcal · {Math.round((e.nutr || {}).protein || 0)}P</span><button onClick={() => removeEntry(e.id, viewDate)} aria-label="remove" style={{ color: C.ashDim }}><X size={12} /></button></span>
+                <button onClick={() => openEntry(e)} className="flex items-center gap-2 min-w-0 flex-1 text-left active:opacity-70"><span style={{ color: C.ashDim }} className="font-mono text-[10px]">{tHM(e.t)}</span><span className="truncate">{e.label}{e.grams != null && <span style={{ color: C.ashDim }}> · {Math.round(e.grams)}g</span>}</span></button>
+                <span className="flex items-center gap-2 shrink-0"><span className="font-mono text-[10px]" style={{ color: C.ash }}>{Math.round((e.nutr || {}).kcal || 0)} kcal · {Math.round((e.nutr || {}).protein || 0)}P</span><button onClick={() => removeEntry(e.id, viewDate)} aria-label="remove" className="-mr-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.ashDim }}><X size={14} /></button></span>
               </div>
             ))}
           </div>
@@ -1631,6 +1758,11 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, toggle
                 <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>AI proxy URL</label>
                 <input type="url" inputMode="url" placeholder="https://your-worker.workers.dev" defaultValue={nut.proxyUrl || ""} onBlur={(e) => setProxyUrl(e.target.value)} className="mt-1 w-full rounded-lg px-2 py-1.5 font-mono text-[11px]" style={inp} />
                 <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>paste your Cloudflare Worker URL — see docs/gemini-proxy/SETUP.md</p>
+              </div>
+              <div className="w-full mt-2">
+                <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>USDA API key</label>
+                <input type="text" inputMode="text" placeholder="your free FDC key" defaultValue={nut.usdaKey || ""} onBlur={(e) => setUsdaKey(e.target.value)} autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-2 py-1.5 font-mono text-[11px]" style={inp} />
+                <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>free at fdc.nal.usda.gov/api-key-signup — lifts the shared demo-key rate limit on search</p>
               </div>
             </div>
           )}
@@ -1731,7 +1863,7 @@ function DietView({ mem, unit, logFood, removeEntry, addFood, removeFood, toggle
       }} onClose={() => { setScanOpen(false); setScanState(null); }} scanState={scanState}
         onManual={(code) => { setScanOpen(false); setScanState(null); setCf((c) => ({ ...c, barcode: code })); }}
         proxyUrl={nut.proxyUrl} onLabelFood={(food) => { setScanOpen(false); setScanState(null); setDetail({ food }); }} />}
-      {detail && <FoodDetail food={detail.food} initialGrams={detail.initialGrams} initialT={detail.initialT} goals={g} dayTotalsBefore={dt} isFav={!!(nut.foods || []).find((f) => f.id === detail.food.id && f.fav)} onFav={() => favFood(detail.food)} onAdd={(payload) => logFood({ ...payload, dk: viewDate })} onClose={() => setDetail(null)} />}
+      {detail && <FoodDetail food={detail.food} initialGrams={detail.initialGrams} initialT={detail.initialT} goals={g} dayTotalsBefore={detail.edit ? subNutr(dt, (d.entries.find((x) => x.id === detail.edit.id) || {}).nutr) : dt} isFav={!!(nut.foods || []).find((f) => f.id === detail.food.id && f.fav)} onFav={() => favFood(detail.food)} editMode={!!detail.edit} onAdd={(payload) => logFood({ ...payload, dk: viewDate })} onSave={(payload) => editEntry(detail.edit.id, viewDate, { grams: payload.grams, nutr: payload.nutr, t: payload.t, label: payload.food.label })} onClose={() => setDetail(null)} />}
     </>
   );
 }
@@ -1770,6 +1902,14 @@ function App() {
       if (!alive) return;
       const m = migrateMem(s);
       setMem(m); memRef.current = m;
+      // One-time corrective re-seed persistence: if migration re-shaped a stored default staple
+      // (e.g. legacy 'Rice 200g cooked' → gram-based 'Rice, cooked'), write the migrated copy back to
+      // storage so the fix survives without waiting for a user action. Idempotent: skipped once staples match.
+      if (s && hasStore) {
+        const storedFoods = (s.nutrition && Array.isArray(s.nutrition.foods)) ? s.nutrition.foods : [];
+        const reseeded = storedFoods.some((f) => { if (!f) return false; const st = DEFAULT_FOODS.find((d) => d.id === f.id); return st && (f.basis !== st.basis || f.basisGrams !== st.basisGrams || f.label !== st.label); });
+        if (reseeded) await saveState(m);
+      }
       // Migration: an existing local copy with no change-clock yet (legacy / pre-sync data)
       // must count as unsynced content so reconcile seeds it to the repo instead of risking
       // it being silently overwritten by the other device.
@@ -2149,65 +2289,98 @@ function App() {
   const setUnit = async (u) => { const nm = { ...mem, unit: u }; if (hasStore) await saveState(nm); setMem(nm); };
 
   // ── diet handlers (each persists locally + rides the existing sync, like setBody) ──
-  const persistMem = async (nm) => { if (hasStore) await saveState(nm); setMem(nm); };
+  // RACE FIX: writes go through a functional updater built on the LATEST state (memRef.current),
+  // so two handlers firing in the same tick (before a re-render) both see each other's write instead
+  // of the closed-over `mem` snapshot. We compute `next = fn(prev)`, persist THAT exact object
+  // (saveState(next)), and mirror it into memRef + React state. Handlers that produce many entries in
+  // one call (logMeal/logPlate/copyDay) still persist once — the batching is inside their `fn`.
+  const persistMem = async (nm) => { memRef.current = nm; if (hasStore) await saveState(nm); setMem(nm); };
+  // apply a functional update against the freshest mem, persist + commit atomically. Returns fn's optional result.
+  const updateMem = async (fn) => {
+    const prev = memRef.current || mem;
+    let out;
+    const next = fn(prev, (r) => { out = r; }) || prev;
+    await persistMem(next);
+    return out;
+  };
   const nutOf = () => mem.nutrition || DEFAULT.nutrition;
   const dayOf = (nut, k) => ({ ...blankDay(), ...(nut.days[k] || {}) });
-  const setNutGoals = async (patch) => { const nut = nutOf(); await persistMem({ ...mem, nutrition: { ...nut, goals: { ...nut.goals, ...patch } } }); };
-  const setProxyUrl = async (url) => { const nut = nutOf(); await persistMem({ ...mem, nutrition: { ...nut, proxyUrl: (url || "").trim() } }); };
+  const withNut = (prev, nut) => ({ ...prev, nutrition: nut });
+  const nutFrom = (prev) => prev.nutrition || DEFAULT.nutrition;
+  const setNutGoals = async (patch) => updateMem((prev) => { const nut = nutFrom(prev); return withNut(prev, { ...nut, goals: { ...nut.goals, ...patch } }); });
+  const setProxyUrl = async (url) => updateMem((prev) => { const nut = nutFrom(prev); return withNut(prev, { ...nut, proxyUrl: (url || "").trim() }); });
+  const setUsdaKey = async (key) => updateMem((prev) => { const nut = nutFrom(prev); return withNut(prev, { ...nut, usdaKey: (key || "").trim() }); });
+  // refresh lastGrams/lastUsedT on matching library foods so bulk logs (meal/plate/copy) surface in Recents like logFood.
+  // touches: [{ foodId, grams, ts }]. Only rows whose foodId exists in `foods` are updated; unknown ids are ignored.
+  const touchFoods = (foods, touches) => { let arr = foods || []; (touches || []).forEach((t) => { if (!t || !t.foodId) return; const i = arr.findIndex((f) => f.id === t.foodId); if (i < 0) return; arr = arr.map((f, j) => (j === i ? { ...f, lastGrams: t.grams, lastUsedT: t.ts } : f)); }); return arr; };
+  // find an existing library row for a food: prefer id, else fall back to label+source so favFood/logFood don't create two rows for the same custom/DB food.
+  const findFoodIdx = (foods, food, fid) => { const byId = fid ? foods.findIndex((f) => f.id === fid) : -1; if (byId >= 0) return byId; return foods.findIndex((f) => (f.label || "") === (food.label || "") && (f.source || "") === (food.source || "")); };
   // gram-based logging: entry carries a computed nutr object; day totals are derived (dayTotals), never stored.
-  const logFood = async ({ food, grams, t, dk }) => { const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k), ts = t || new Date().toISOString();
-    const fid = food.id || uid();   // stable DB id (usda:/off:) reused; unsaved custom/food gets a fresh id
-    const e = { id: uid(), foodId: fid, label: food.label || "food", grams, nutr: entryNutr(food, grams), t: ts };
-    // upsert the food into the library so it surfaces in recents/last-portion (DB foods included)
-    const foods = nut.foods || []; const idx = foods.findIndex((f) => f.id === fid);
-    const base = { id: fid, label: food.label || "food", basis: food.basis, basisGrams: food.basisGrams != null ? food.basisGrams : null, nutr: food.nutr, source: food.source, barcode: food.barcode };
+  // nutr (optional): a per-entry macro override from FoodDetail's "adjust values" (micros already merged). saveCorr: also
+  // write that correction back to the library food's base nutr (scaled to its basis) for reuse.
+  const logFood = async ({ food, grams, t, dk, nutr, saveCorr }) => updateMem((prev) => { const nut = nutFrom(prev), k = dk || todayKey(), d = dayOf(nut, k), ts = t || new Date().toISOString();
+    // upsert the food into the library so it surfaces in recents/last-portion (DB foods included).
+    // dedupe: match by id when present, else by label+source so a fav'd-then-logged custom food doesn't split into two rows.
+    const foods = nut.foods || []; const idx = findFoodIdx(foods, food, food.id);
+    const fid = food.id || (idx >= 0 ? foods[idx].id : uid());   // stable DB id reused; deduped custom food reuses the matched row's id
+    const eNutr = nutr || entryNutr(food, grams);
+    const e = { id: uid(), foodId: fid, label: food.label || "food", grams, nutr: eNutr, t: ts };
+    // saveCorr: rescale the edited macros back to the food's basis so future portions inherit the correction
+    const corrNutr = (saveCorr && grams > 0) ? scaleToBasis(food, eNutr, grams) : food.nutr;
+    const base = { id: fid, label: food.label || "food", basis: food.basis, basisGrams: food.basisGrams != null ? food.basisGrams : null, nutr: corrNutr, source: food.source, barcode: food.barcode };
     const uf = { ...(idx >= 0 ? foods[idx] : {}), ...base, lastGrams: grams, lastUsedT: ts, fav: (idx >= 0 ? foods[idx].fav : false) };
     const nf = idx >= 0 ? foods.map((f, i) => (i === idx ? uf : f)) : [...foods, uf];
     const nd = { ...d, entries: [...d.entries, e] };
-    await persistMem({ ...mem, nutrition: { ...nut, foods: pruneFoods(nf), days: pruneDays({ ...nut.days, [k]: nd }) } }); };
-  const toggleFav = async (id) => { const nut = nutOf(); const foods = (nut.foods || []).map((f) => (f.id === id ? { ...f, fav: !f.fav } : f));
-    await persistMem({ ...mem, nutrition: { ...nut, foods } }); };
+    return withNut(prev, { ...nut, foods: pruneFoods(nf), days: pruneDays({ ...nut.days, [k]: nd }) }); });
+  // replace an entry in place (edit-logged-entry). patch may include grams,nutr,t,label. Single persist.
+  const editEntry = async (id, dk, patch) => updateMem((prev) => { const nut = nutFrom(prev), k = dk || todayKey(), d = dayOf(nut, k); if (!d.entries.some((x) => x.id === id)) return prev;
+    const nd = { ...d, entries: d.entries.map((x) => (x.id === id ? { ...x, ...patch } : x)) };
+    return withNut(prev, { ...nut, days: { ...nut.days, [k]: nd } }); });
+  const toggleFav = async (id) => updateMem((prev) => { const nut = nutFrom(prev); const foods = (nut.foods || []).map((f) => (f.id === id ? { ...f, fav: !f.fav } : f));
+    return withNut(prev, { ...nut, foods }); });
   // favorite from FoodDetail: ensure the food is in the library (upsert an unsaved DB/custom food), then flip fav
-  const favFood = async (food) => { const nut = nutOf(); const foods = nut.foods || []; const fid = food.id || uid(); const idx = foods.findIndex((f) => f.id === fid);
-    if (idx >= 0) { const nf = foods.map((f, i) => (i === idx ? { ...f, fav: !f.fav } : f)); await persistMem({ ...mem, nutrition: { ...nut, foods: nf } }); return fid; }
+  const favFood = async (food) => updateMem((prev, ret) => { const nut = nutFrom(prev); const foods = nut.foods || []; const idx = findFoodIdx(foods, food, food.id); const fid = food.id || (idx >= 0 ? foods[idx].id : uid()); ret(fid);
+    if (idx >= 0) { const nf = foods.map((f, i) => (i === idx ? { ...f, fav: !f.fav } : f)); return withNut(prev, { ...nut, foods: nf }); }
     const uf = { id: fid, label: food.label || "food", basis: food.basis, basisGrams: food.basisGrams != null ? food.basisGrams : null, nutr: food.nutr, source: food.source, barcode: food.barcode, lastGrams: food.lastGrams, fav: true };
-    await persistMem({ ...mem, nutrition: { ...nut, foods: pruneFoods([...foods, uf]) } }); return fid; };
+    return withNut(prev, { ...nut, foods: pruneFoods([...foods, uf]) }); });
   // ── saved meals (bundles) ── items carry a FULL food snapshot so meals survive food-library pruning
-  const addMeal = async ({ label, items }) => { const nut = nutOf(); const m = { id: uid(), label: label || "meal", items: (items || []).map((it) => ({ food: it.food, grams: it.grams })) };
-    await persistMem({ ...mem, nutrition: { ...nut, meals: [...(nut.meals || []), m] } }); return m.id; };
-  const removeMeal = async (id) => { const nut = nutOf(); await persistMem({ ...mem, nutrition: { ...nut, meals: (nut.meals || []).filter((m) => m.id !== id) } }); };
-  // log every item of a meal onto day dk (one entry per item, each with its own timestamp + scaled nutr)
-  const logMeal = async (mealId, dk) => { const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k); const m = (nut.meals || []).find((x) => x.id === mealId); if (!m) return;
+  const addMeal = async ({ label, items }) => updateMem((prev, ret) => { const nut = nutFrom(prev); const m = { id: uid(), label: label || "meal", items: (items || []).map((it) => ({ food: it.food, grams: it.grams })) }; ret(m.id);
+    return withNut(prev, { ...nut, meals: [...(nut.meals || []), m] }); });
+  const removeMeal = async (id) => updateMem((prev) => { const nut = nutFrom(prev); return withNut(prev, { ...nut, meals: (nut.meals || []).filter((m) => m.id !== id) }); });
+  // log every item of a meal onto day dk (one entry per item, each with its own timestamp + scaled nutr) — single persist
+  const logMeal = async (mealId, dk) => updateMem((prev) => { const nut = nutFrom(prev), k = dk || todayKey(), d = dayOf(nut, k); const m = (nut.meals || []).find((x) => x.id === mealId); if (!m) return prev;
     const es = (m.items || []).map((it, i) => ({ id: uid(), foodId: it.food.id || null, label: it.food.label || "food", grams: it.grams, nutr: entryNutr(it.food, it.grams), t: new Date(Date.now() + i).toISOString() }));
     const nd = { ...d, entries: [...d.entries, ...es] };
-    await persistMem({ ...mem, nutrition: { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) } }); };
+    const foods = touchFoods(nut.foods, es.map((e) => ({ foodId: e.foodId, grams: e.grams, ts: e.t })));
+    return withNut(prev, { ...nut, foods: pruneFoods(foods), days: pruneDays({ ...nut.days, [k]: nd }) }); });
   // log a batch of AI plate-draft rows onto day dk in ONE persist (like logMeal — no async race per item)
-  const logPlate = async (rows, dk) => { const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k); const items = (rows || []).filter((r) => r && (+r.grams || 0) > 0); if (!items.length) return 0;
+  const logPlate = async (rows, dk) => updateMem((prev, ret) => { const nut = nutFrom(prev), k = dk || todayKey(), d = dayOf(nut, k); const items = (rows || []).filter((r) => r && (+r.grams || 0) > 0); if (!items.length) { ret(0); return prev; }
     const es = items.map((r, i) => ({ id: uid(), foodId: null, label: r.label || "food", grams: +r.grams || 0, nutr: { kcal: +r.kcal || 0, protein: +r.protein || 0, carbs: +r.carbs || 0, fat: +r.fat || 0 }, t: new Date(Date.now() + i).toISOString() }));
-    const nd = { ...d, entries: [...d.entries, ...es] };
-    await persistMem({ ...mem, nutrition: { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) } }); return es.length; };
-  // clone all FOOD entries from one day into another (fresh ids/timestamps); leaves steps/water/sleep untouched
-  const copyDay = async (fromKey, toKey) => { const nut = nutOf(); const from = dayOf(nut, fromKey), to = dayOf(nut, toKey); if (!from.entries.length) return 0;
+    const nd = { ...d, entries: [...d.entries, ...es] }; ret(es.length);
+    return withNut(prev, { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) }); });
+  // clone all FOOD entries from one day into another (fresh ids/timestamps); leaves steps/water/sleep untouched — single persist
+  const copyDay = async (fromKey, toKey) => updateMem((prev, ret) => { const nut = nutFrom(prev); const from = dayOf(nut, fromKey), to = dayOf(nut, toKey); if (!from.entries.length) { ret(0); return prev; }
     const es = from.entries.map((e, i) => ({ id: uid(), foodId: e.foodId, label: e.label, grams: e.grams, nutr: e.nutr, t: new Date(Date.now() + i).toISOString() }));
-    const nd = { ...to, entries: [...to.entries, ...es] };
-    await persistMem({ ...mem, nutrition: { ...nut, days: pruneDays({ ...nut.days, [toKey]: nd }) } }); return es.length; };
-  const removeEntry = async (id, dk) => { const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k); if (!d.entries.some((x) => x.id === id)) return;
+    const nd = { ...to, entries: [...to.entries, ...es] }; ret(es.length);
+    const foods = touchFoods(nut.foods, es.map((e) => ({ foodId: e.foodId, grams: e.grams, ts: e.t })));
+    return withNut(prev, { ...nut, foods: pruneFoods(foods), days: pruneDays({ ...nut.days, [toKey]: nd }) }); });
+  const removeEntry = async (id, dk) => updateMem((prev) => { const nut = nutFrom(prev), k = dk || todayKey(), d = dayOf(nut, k); if (!d.entries.some((x) => x.id === id)) return prev;
     const nd = { ...d, entries: d.entries.filter((x) => x.id !== id) };
-    await persistMem({ ...mem, nutrition: { ...nut, days: { ...nut.days, [k]: nd } } }); };
-  const addFood = async (food) => { const nut = nutOf(); const f = { id: uid(), label: food.label, basis: "item", basisGrams: null, nutr: { kcal: +food.kcal || 0, protein: +food.protein || 0, carbs: +food.carbs || 0, fat: +food.fat || 0 }, source: "custom" };
-    await persistMem({ ...mem, nutrition: { ...nut, foods: [...(nut.foods || []), f] } }); };
-  const removeFood = async (id) => { const nut = nutOf(); await persistMem({ ...mem, nutrition: { ...nut, foods: (nut.foods || []).filter((f) => f.id !== id) } }); };
-  const setSteps = async (n, dk) => { const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k); const nd = { ...d, steps: Math.max(0, Math.round(+n || 0)) };
-    await persistMem({ ...mem, nutrition: { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) } }); };
-  const addWater = async (ml, dk) => { const amt = Math.round(+ml || 0); if (!amt) return; const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k);
+    return withNut(prev, { ...nut, days: { ...nut.days, [k]: nd } }); });
+  const addFood = async (food) => updateMem((prev) => { const nut = nutFrom(prev); const f = { id: uid(), label: food.label, basis: "item", basisGrams: null, nutr: { kcal: +food.kcal || 0, protein: +food.protein || 0, carbs: +food.carbs || 0, fat: +food.fat || 0 }, source: "custom" };
+    return withNut(prev, { ...nut, foods: [...(nut.foods || []), f] }); });
+  const removeFood = async (id) => updateMem((prev) => { const nut = nutFrom(prev); return withNut(prev, { ...nut, foods: (nut.foods || []).filter((f) => f.id !== id) }); });
+  const setSteps = async (n, dk) => updateMem((prev) => { const nut = nutFrom(prev), k = dk || todayKey(), d = dayOf(nut, k); const nd = { ...d, steps: Math.max(0, Math.round(+n || 0)) };
+    return withNut(prev, { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) }); });
+  const addWater = async (ml, dk) => { const amt = Math.round(+ml || 0); if (!amt) return; return updateMem((prev) => { const nut = nutFrom(prev), k = dk || todayKey(), d = dayOf(nut, k);
     const w = { id: uid(), ml: amt, t: new Date().toISOString() }; const nd = { ...d, water: Math.max(0, d.water + amt), waterEntries: [...d.waterEntries, w] };
-    await persistMem({ ...mem, nutrition: { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) } }); };
-  const removeWaterEntry = async (id, dk) => { const nut = nutOf(), k = dk || todayKey(), d = dayOf(nut, k); const e = d.waterEntries.find((x) => x.id === id); if (!e) return;
+    return withNut(prev, { ...nut, days: pruneDays({ ...nut.days, [k]: nd }) }); }); };
+  const removeWaterEntry = async (id, dk) => updateMem((prev) => { const nut = nutFrom(prev), k = dk || todayKey(), d = dayOf(nut, k); const e = d.waterEntries.find((x) => x.id === id); if (!e) return prev;
     const nd = { ...d, water: Math.max(0, d.water - e.ml), waterEntries: d.waterEntries.filter((x) => x.id !== id) };
-    await persistMem({ ...mem, nutrition: { ...nut, days: { ...nut.days, [k]: nd } } }); };
-  const setSleepToday = async (bed, wake, dk) => { const sl = mem.sleep || DEFAULT.sleep, k = dk || todayKey();
-    await persistMem({ ...mem, sleep: { ...sl, days: pruneDays({ ...sl.days, [k]: { bed, wake } }) } }); };
-  const setSleepDefault = async (bed, wake) => { const sl = mem.sleep || DEFAULT.sleep; await persistMem({ ...mem, sleep: { ...sl, def: { bed, wake } } }); };
+    return withNut(prev, { ...nut, days: { ...nut.days, [k]: nd } }); });
+  const setSleepToday = async (bed, wake, dk) => updateMem((prev) => { const sl = prev.sleep || DEFAULT.sleep, k = dk || todayKey();
+    return { ...prev, sleep: { ...sl, days: pruneDays({ ...sl.days, [k]: { bed, wake } }) } }; });
+  const setSleepDefault = async (bed, wake) => updateMem((prev) => { const sl = prev.sleep || DEFAULT.sleep; return { ...prev, sleep: { ...sl, def: { bed, wake } } }; });
   const logBW = async () => {
     const body = { ...(mem.body || {}) };
     if (!body.bw) return;
@@ -2634,7 +2807,7 @@ function App() {
         </>)}
 
         {tab === "diet" && (
-          <DietView mem={mem} unit={unit} logFood={logFood} removeEntry={removeEntry} addFood={addFood} removeFood={removeFood} toggleFav={toggleFav} favFood={favFood} addMeal={addMeal} removeMeal={removeMeal} logMeal={logMeal} logPlate={logPlate} copyDay={copyDay} setSteps={setSteps} addWater={addWater} removeWaterEntry={removeWaterEntry} setSleepToday={setSleepToday} setSleepDefault={setSleepDefault} setNutGoals={setNutGoals} setProxyUrl={setProxyUrl} setBody={setBody} logBW={logBW} />
+          <DietView mem={mem} unit={unit} logFood={logFood} editEntry={editEntry} removeEntry={removeEntry} addFood={addFood} removeFood={removeFood} toggleFav={toggleFav} favFood={favFood} addMeal={addMeal} removeMeal={removeMeal} logMeal={logMeal} logPlate={logPlate} copyDay={copyDay} setSteps={setSteps} addWater={addWater} removeWaterEntry={removeWaterEntry} setSleepToday={setSleepToday} setSleepDefault={setSleepDefault} setNutGoals={setNutGoals} setProxyUrl={setProxyUrl} setUsdaKey={setUsdaKey} setBody={setBody} logBW={logBW} />
         )}
 
         {/* shared cross-device sync (app-wide, both tabs) */}
