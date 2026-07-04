@@ -182,7 +182,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0701-review1445";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0701-ocr1522";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -230,6 +230,78 @@ const downscaleImage = (file, maxDim = 1024) => new Promise((resolve, reject) =>
   img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't read image")); };
   img.src = url;
 });
+// ── In-browser OCR (no proxy, no cloud) ── Tesseract.js v5 loaded lazily from esm.sh; its worker/wasm-core/lang-data
+// are fetched at runtime from jsdelivr with EXPLICIT paths (no build step, no bundling). Test hook: window.__mockOcr(file).
+// downscaleFile → JPEG File sized for OCR (Tesseract likes ~1000–1600px; too small loses glyphs, too big is slow).
+const downscaleFile = (file, maxDim = 1400) => new Promise((resolve, reject) => {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+      const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+      cv.getContext("2d").drawImage(img, 0, 0, w, h);
+      cv.toBlob((b) => { URL.revokeObjectURL(url); b ? resolve(new File([b], "label.jpg", { type: "image/jpeg" })) : reject(new Error("Couldn't encode image")); }, "image/jpeg", 0.9);
+    } catch (e) { URL.revokeObjectURL(url); reject(e); }
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't read image")); };
+  img.src = url;
+});
+let __tesseractP = null;
+const loadTesseract = () => (__tesseractP = __tesseractP || import("https://esm.sh/tesseract.js@5.1.1").then((m) => m.default || m));
+// ocrLabel(file) → recognized text. Runs Tesseract fully in-browser. onProgress(0..1) optional.
+const ocrLabel = async (file, onProgress) => {
+  if (typeof window !== "undefined" && typeof window.__mockOcr === "function") return await window.__mockOcr(file);
+  const img = await downscaleFile(file);
+  const T = await loadTesseract();
+  const V = "5.1.0", CV = "5.0.0";   // tesseract.js-core & tessdata are versioned separately from the JS
+  const opts = {
+    workerPath: `https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js`,
+    corePath: `https://cdn.jsdelivr.net/npm/tesseract.js-core@${CV}/`,
+    langPath: `https://tessdata.projectnaptha.com/4.0.0`,
+  };
+  if (onProgress) opts.logger = (m) => { if (m && typeof m.progress === "number" && m.status === "recognizing text") onProgress(m.progress); };
+  const { data } = await T.recognize(img, "eng", opts);
+  return (data && data.text) || "";
+};
+// parseNutritionText(text) → editable draft food from raw OCR. Detects per-100(g|ml) vs per-serving + serving grams,
+// extracts numbers near keywords, tolerates common OCR confusions (O/0, l/1, S/5) and kJ→kcal. Missing fields omitted.
+const parseNutritionText = (text) => {
+  const raw = (text || "").replace(/\r/g, "");
+  const norm = raw.toLowerCase();
+  // fix OCR digit confusions ONLY inside number-ish tokens (avoid mangling words)
+  const numFix = (s) => s.replace(/[oO]/g, "0").replace(/[lI|]/g, "1").replace(/[sS]/g, "5").replace(/[B]/g, "8").replace(/[gG]/g, "9").replace(/,/g, ".");
+  const grab = (re) => { const m = norm.match(re); if (!m) return null; const v = parseFloat(numFix(m[1])); return isFinite(v) ? v : null; };
+  // basis detection
+  let basis = "per100", basisGrams = 100;
+  if (/per\s*100\s*(g|ml|9|m1)/.test(norm) || /\/\s*100\s*(g|ml)/.test(norm) || /100\s*(g|ml|9)\b/.test(norm)) { basis = "per100"; basisGrams = 100; }
+  const servMatch = norm.match(/serving\s*size[^0-9]{0,8}([0-9oOlI|sS.,]{1,6})\s*(g|ml|9)/) || norm.match(/per\s*serving[^0-9]{0,12}([0-9oOlI|sS.,]{1,6})\s*(g|ml|9)/);
+  if (!/per\s*100/.test(norm) && servMatch) { const g = parseFloat(numFix(servMatch[1])); if (isFinite(g) && g > 0) { basis = "serving"; basisGrams = g; } }
+  const nutr = {};
+  // energy: prefer kcal; else kJ / 4.184
+  let kcal = grab(/(?:calories|energy|kcal|energ[iy])[^0-9kj]{0,12}([0-9oOlI|sS.,]{1,6})\s*(?:kcal|cal|$|\n)/) ?? grab(/(?:calories|energy|kcal)[^0-9]{0,12}([0-9oOlI|sS.,]{1,6})/);
+  if (kcal == null) { const kj = grab(/([0-9oOlI|sS.,]{2,6})\s*kj/); if (kj != null) kcal = kj / 4.184; }
+  if (kcal != null) nutr.kcal = Math.round(kcal);
+  const set = (k, v) => { if (v != null && isFinite(v)) nutr[k] = Math.round(v * 10) / 10; };
+  set("protein", grab(/protein[^0-9]{0,10}([0-9oOlI|sS.,]{1,5})\s*g/));
+  set("carbs", grab(/(?:carbohydrate|carbohydrates|carbs?|total carb\w*)[^0-9]{0,10}([0-9oOlI|sS.,]{1,5})\s*g/));
+  set("fat", grab(/(?:total fat|fat)[^0-9]{0,10}([0-9oOlI|sS.,]{1,5})\s*g/));
+  set("fiber", grab(/(?:fibre|fiber|dietary fib\w*)[^0-9]{0,10}([0-9oOlI|sS.,]{1,5})\s*g/));
+  set("sugar", grab(/(?:sugars?|of which sugars)[^0-9]{0,10}([0-9oOlI|sS.,]{1,5})\s*g/));
+  // sodium in mg; salt in g → mg (×400 sodium per g salt)
+  let sodium = grab(/sodium[^0-9]{0,10}([0-9oOlI|sS.,]{1,6})\s*mg/) ?? (grab(/sodium[^0-9]{0,10}([0-9oOlI|sS.,]{1,5})\s*g/) != null ? grab(/sodium[^0-9]{0,10}([0-9oOlI|sS.,]{1,5})\s*g/) * 1000 : null);
+  if (sodium == null) { const salt = grab(/salt[^0-9]{0,10}([0-9oOlI|sS.,]{1,5})\s*g/); if (salt != null) sodium = salt * 400; }
+  set("sodium", sodium);
+  // label guess: first non-numeric-ish line that isn't a nutrition header
+  let label;
+  for (const ln of raw.split("\n").map((s) => s.trim()).filter(Boolean)) {
+    if (/nutrition|facts|serving|per\s*100|amount|%\s*daily/i.test(ln)) continue;
+    if (/^[0-9\s.,%a-z]{0,4}$/i.test(ln)) continue;
+    if (/[a-z]{3,}/i.test(ln) && !/^\d/.test(ln)) { label = ln.slice(0, 40); break; }
+  }
+  return { label, basis, basisGrams, nutr, source: "ocr" };
+};
 const blankDay = () => ({ kcal: 0, protein: 0, carbs: 0, fat: 0, steps: 0, water: 0, entries: [], waterEntries: [] });
 // canonical nutrient dictionary — NOT stored; drives extraction, display, goals. netCarbs is DERIVED (carbs-fiber), not listed.
 const NUTRIENTS = [
@@ -1168,9 +1240,8 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, proxyUrl, onLa
   const [status, setStatus] = useState("starting");   // starting | scanning | error
   const [errMsg, setErrMsg] = useState("");
   const [manual, setManual] = useState("");
-  const [labelNudge, setLabelNudge] = useState(false);   // no-proxy: show the 1-time-setup hint instead of hiding photo-the-label
   // a not-found result keeps the scanner open (parent shows the overlay) — re-arm so another code can be tried
-  useEffect(() => { if (scanState && scanState.notFound) { doneRef.current = false; setLabelNudge(false); } }, [scanState]);
+  useEffect(() => { if (scanState && scanState.notFound) { doneRef.current = false; } }, [scanState]);
 
   const stopTracks = useCallback(() => {
     const s = streamRef.current;
@@ -1257,14 +1328,12 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, proxyUrl, onLa
           <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center" style={{ background: "rgba(0,0,0,0.72)" }}>
             <p className="font-mono text-[12px]" style={{ color: C.rust }}>Not found</p>
             <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>No product for <span style={{ color: C.bone }}>{scanState.code}</span> in your library or Open Food Facts.</p>
-            {/* Phase 3: photo the nutrition label is the PRIMARY action; always shown (no-proxy → inline setup nudge) */}
+            {/* Photo the nutrition label is the PRIMARY action; ALWAYS usable — OCR (no proxy) is the fallback, Gemini upgrades it. */}
             <div className="mt-4 flex flex-col items-center gap-1">
-              {proxyUrl && onLabelFood
-                ? <LabelPhotoButton proxyUrl={proxyUrl} barcode={scanState.code} onFood={onLabelFood} onFallback={(msg) => { onManual(scanState.code); }}
-                    className="flex min-h-[44px] items-center justify-center rounded-full px-5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }} />
-                : <button onClick={() => setLabelNudge(true)} className="flex min-h-[44px] items-center justify-center rounded-full px-5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>📷 Photo the label</button>}
-              <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>reads macros from the nutrition label</span>
-              {labelNudge && <p className="mt-1 max-w-[16rem] font-mono text-[9px] leading-relaxed" style={{ color: C.gold }}>AI label scan needs a 1-time setup — add your proxy URL in Diet → edit goals.</p>}
+              <LabelPhotoButton proxyUrl={proxyUrl} barcode={scanState.code} onFood={(food) => { onLabelFood && onLabelFood(food); }}
+                onFallback={(msg, draft) => { onLabelFood && draft ? onLabelFood(draft) : onManual(scanState.code); }}
+                className="flex min-h-[44px] items-center justify-center rounded-full px-5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }} />
+              <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{proxyUrl ? "reads macros from the nutrition label" : "reads the label on-device — check the numbers"}</span>
             </div>
             <div className="mt-4 flex gap-2">
               <button onClick={() => onManual(scanState.code)} className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Enter manually</button>
@@ -1405,29 +1474,44 @@ function AddFlow({ onPick, proxyUrl, usdaKey, onParsed, onManual }) {
 // "Photo the label" affordance: hidden camera/gallery file input + button. On pick → downscale → callGemini({task:'label'})
 // → build an AI Food {basis:'per100'} (with the not-found barcode if seeded) → onFood(food) opens FoodDetail prefilled.
 // On error / no proxy → onFallback(message) (caller shows a message + routes to manual entry). Never crashes.
+// Two paths: proxyUrl set → Gemini (best). No proxy → in-browser Tesseract OCR (no setup needed) — this is the
+// default fallback so the button ALWAYS works. OCR opens FoodDetail prefilled+editable so the owner fixes any misreads.
+// If OCR reads nothing usable, onFallback(msg, draftFood) lets the caller open the manual form prefilled.
 function LabelPhotoButton({ proxyUrl, barcode, onFood, onFallback, className, style, label = "📷 Photo the label" }) {
   const inputRef = useRef(null);
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState("");   // "reading label…" for OCR
   const pick = async (e) => {
     const file = e.target.files && e.target.files[0];
     e.target.value = "";   // allow re-picking the same file
     if (!file) return;
-    if (!proxyUrl) { onFallback && onFallback("Set up AI in Diet › edit goals first."); return; }
     setBusy(true);
     try {
-      const image = await downscaleImage(file);
-      const r = await callGemini({ task: "label", image }, proxyUrl);
-      const per100 = (r && r.per100) || {};
-      const food = { id: uid(), label: (r && r.label) || "food", basis: "per100", basisGrams: 100, nutr: per100, source: "ai", barcode: barcode || undefined };
-      onFood(food);
+      if (proxyUrl) {
+        setPhase("reading label…");
+        const image = await downscaleImage(file);
+        const r = await callGemini({ task: "label", image }, proxyUrl);
+        const per100 = (r && r.per100) || {};
+        const food = { id: uid(), label: (r && r.label) || "food", basis: "per100", basisGrams: 100, nutr: per100, source: "ai", barcode: barcode || undefined };
+        onFood(food);
+      } else {
+        // No proxy → OCR in the browser.
+        setPhase("reading label…");
+        const text = await ocrLabel(file);
+        const d = parseNutritionText(text);
+        const draft = { id: uid(), label: d.label || "food", basis: d.basis, basisGrams: d.basisGrams, nutr: d.nutr || {}, source: "ocr", barcode: barcode || undefined };
+        const gotSomething = draft.nutr && Object.keys(draft.nutr).length > 0;
+        if (gotSomething) onFood(draft);
+        else onFallback && onFallback("Couldn't read it all — check the numbers.", draft);
+      }
     } catch (err) {
       onFallback && onFallback((err && err.message) || "Couldn't read the label — enter it manually.");
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setPhase(""); }
   };
   return (
     <>
       <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={pick} />
-      <button onClick={() => inputRef.current && inputRef.current.click()} disabled={busy} className={className} style={style}>{busy ? "reading label…" : label}</button>
+      <button onClick={() => inputRef.current && inputRef.current.click()} disabled={busy} className={className} style={style}>{busy ? (phase || "reading label…") : label}</button>
     </>
   );
 }
@@ -1650,8 +1734,8 @@ function DietView({ mem, unit, logFood, editEntry, removeEntry, addFood, removeF
 
         {/* external DB search */}
         <button onClick={() => setScanOpen(true)} className="mt-3 flex min-h-[44px] w-full items-center justify-center rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }}>Scan barcode</button>
-        {nut.proxyUrl && <LabelPhotoButton proxyUrl={nut.proxyUrl} onFood={(food) => setDetail({ food })} onFallback={(msg) => flash(msg)}
-          className="mt-2 flex min-h-[44px] w-full items-center justify-center rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }} />}
+        <LabelPhotoButton proxyUrl={nut.proxyUrl} onFood={(food) => setDetail({ food })} onFallback={(msg, draft) => { flash(msg); if (draft) setDetail({ food: draft }); }}
+          className="mt-2 flex min-h-[44px] w-full items-center justify-center rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }} />
         {nut.proxyUrl && <PlatePhotoButton proxyUrl={nut.proxyUrl} onDraft={(items) => setPlate(items)} onFallback={(msg) => flash(msg)}
           className="mt-2 flex min-h-[44px] w-full items-center justify-center rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }} />}
         {plate && <PlateDraft items={plate} onCancel={() => setPlate(null)}
