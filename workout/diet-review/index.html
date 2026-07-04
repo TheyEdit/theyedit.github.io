@@ -182,7 +182,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0701-review1433";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0701-review1445";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -327,7 +327,15 @@ const usdaFoodToFood = (fdc) => {
     const val = fn.value != null ? fn.value : fn.amount;
     if (val != null) nutr[key] = +val;
   });
-  return { id: "usda:" + fdc.fdcId, label: fdc.description, basis: "per100", basisGrams: 100, nutr, source: "usda" };
+  // Energy fallback: Foundation foods report kcal only under Atwater ids (2048 specific / 2047 general), not 1008.
+  if (nutr.kcal == null) {
+    for (const eid of [2048, 2047]) {
+      const fn = (fdc.foodNutrients || []).find((n) => (n.nutrientId != null ? n.nutrientId : (n.nutrient && n.nutrient.id)) === eid);
+      const v = fn && (fn.value != null ? fn.value : fn.amount);
+      if (v != null) { nutr.kcal = +v; break; }
+    }
+  }
+  return { id: "usda:" + fdc.fdcId, label: fdc.description, basis: "per100", basisGrams: 100, nutr, source: "usda", dataType: fdc.dataType };
 };
 // OFF: nutriments carry <field>_100g values (may be strings). Derive sodium from salt/2.5 when only salt present.
 const offProductToFood = (prod) => {
@@ -346,17 +354,43 @@ const USDA_DEMO_KEY = "kCTIiIhqTLRn17USePlgomjCnPEyZIAUbjxkJLZF";  // baked-in f
 // Returns { items, error } where error is null | 'ratelimit' | 'network'. DEMO_KEY is globally rate-limited (429);
 // a user-supplied free USDA FDC key (nutrition.usdaKey) lifts that. On 429/OVER_RATE_LIMIT we flag 'ratelimit' so
 // the UI can prompt for a key instead of silently showing nothing.
+// Rank USDA candidates so PLAIN GENERIC ingredients (Foundation / short comma-structured SR entries) beat
+// processed/branded/prepared ones. Higher score = more generic = ranked first.
+const USDA_PREP_RE = /\b(lunchmeat|luncheon|breaded|tender|tenders|nugget|nuggets|patty|patties|canned|smoked|cured|sausage|sauce|prepared|entree|frozen meal|flavored|flavoured|seasoned|marinated|rotisserie|deli|stick|sticks|spread|dinner|dinners|kit|kits|restaurant|roll|sliced|slices|oven-roasted|fat-free|fat free|prebasted|pre-basted|glazed|honey|barbecue|bbq|paste|loaf|nuggets?)\b/;
+const USDA_COOK_RE = /\b(raw|cooked|roasted|grilled|boiled|broiled)\b/;
+function scoreUsdaFood(f, query) {
+  const desc = (f.label || "");
+  const d = desc.toLowerCase();
+  const q = (query || "").trim().toLowerCase();
+  const core = q.split(/\s+/)[0] || "";   // core noun, e.g. "chicken"
+  const prep = USDA_PREP_RE.test(d);
+  let s = 0;
+  if (f.dataType === "Foundation") s += 60;      // cleanest generic foods
+  else if (f.dataType === "SR Legacy") s += 20;
+  if (!prep && USDA_COOK_RE.test(d)) s += 25;    // raw/cooked/roasted… = a generic state (not for processed items)
+  if (core && (d === core || d.startsWith(core + ",") || d.startsWith(core + " "))) s += 30;  // "Chicken, …"
+  else if (core && d.includes(core)) s += 8;
+  s -= Math.min(30, Math.floor(desc.length / 12));  // prefer short comma-structured descriptions
+  if (prep) s -= 45;                             // processed/prepared/branded markers
+  if (/^[A-Z0-9 ,'&.-]{6,}$/.test(desc) && desc === desc.toUpperCase()) s -= 25;  // ALLCAPS brand-ish
+  return s;
+}
 async function searchUSDA(query, key) {
   const apiKey = (key && key.trim()) || USDA_DEMO_KEY;
   try {
-    const url = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&dataType=Foundation,SR%20Legacy&pageSize=8&api_key=${encodeURIComponent(apiKey)}`;
+    const url = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&dataType=Foundation,SR%20Legacy&pageSize=25&api_key=${encodeURIComponent(apiKey)}`;
     const r = await fetch(url);
     if (r.status === 429) return { items: [], error: "ratelimit" };
     if (!r.ok) return { items: [], error: r.status >= 500 ? "network" : null };
     let j;
     try { j = await r.json(); } catch (e) { return { items: [], error: "network" }; }
     if (j && j.error && /OVER_RATE_LIMIT/i.test(j.error.code || "")) return { items: [], error: "ratelimit" };
-    return { items: (j.foods || []).map(usdaFoodToFood), error: null };
+    const ranked = (j.foods || []).map(usdaFoodToFood)
+      .map((f) => ({ f, sc: scoreUsdaFood(f, query) }))
+      .sort((a, b) => b.sc - a.sc)
+      .slice(0, 8)
+      .map((x) => x.f);
+    return { items: ranked, error: null };
   } catch (e) { return { items: [], error: "network" }; }
 }
 // OFF: the v2 /api/v2/search endpoint currently returns an HTML "temporarily unavailable" page and weak relevance.
@@ -1279,8 +1313,10 @@ function AddFlow({ onPick, proxyUrl, usdaKey, onParsed, onManual }) {
     const timer = setTimeout(async () => {
       const [u, o] = await Promise.all([searchUSDA(query, usdaKey), searchOFF(query)]);
       if (my !== seq.current) return;   // stale response, a newer query fired
-      // Ranking: USDA whole foods first, then OFF. Dedupe by code/label.
-      const merged = [...(u.items || []), ...(o.items || [])];
+      // Ingredient-first ordering: USDA generic ingredients on top (already client-ranked in searchUSDA),
+      // then OFF packaged products below. Cap generics so packaged products stay reachable. Dedupe by code/label.
+      const usda = (u.items || []).slice(0, 6);
+      const merged = [...usda, ...(o.items || [])];
       const seen = new Set(), deduped = [];
       for (const f of merged) { const k = (f.barcode || f.label || "").toLowerCase(); if (k && seen.has(k)) continue; if (k) seen.add(k); deduped.push(f); }
       // Surface an error state only when it left us with nothing AND a provider actually failed. If OFF searched
@@ -1337,18 +1373,23 @@ function AddFlow({ onPick, proxyUrl, usdaKey, onParsed, onManual }) {
           {!loading && searched && results.length === 0 && !searchErr && (
             <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>no matches — ＋ add manually below</p>
           )}
-          {results.map((f) => {
+          {results.map((f, i) => {
             const n = f.nutr || {};
             const macro = `${Math.round(n.kcal || 0)} kcal · ${Math.round(n.protein || 0)}P · ${Math.round(n.carbs || 0)}C · ${Math.round(n.fat || 0)}F /100g`;
             const isUsda = f.source === "usda";
+            // Subtle divider before the first packaged (OFF) row, so generic ingredients read as the primary block.
+            const firstOff = !isUsda && i > 0 && results[i - 1].source === "usda";
             return (
-              <button key={f.id} onClick={() => onPick(f)} className="flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left active:scale-[0.99]" style={{ borderColor: C.edge }}>
-                {isUsda ? <Leaf size={13} className="shrink-0" style={{ color: C.sage }} /> : <Package size={13} className="shrink-0" style={{ color: C.gold }} />}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[12px]" style={{ color: C.bone }}>{f.label}{f.brand && <span style={{ color: C.ashDim }}> · {f.brand}</span>}</span>
-                  <span className="block truncate font-mono text-[10px]" style={{ color: C.ashDim }}>{macro}</span>
-                </span>
-              </button>
+              <React.Fragment key={f.id}>
+                {firstOff && <p className="pt-1 pb-0.5 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>packaged products</p>}
+                <button onClick={() => onPick(f)} className="flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left active:scale-[0.99]" style={{ borderColor: C.edge }}>
+                  {isUsda ? <Leaf size={13} className="shrink-0" style={{ color: C.sage }} /> : <Package size={13} className="shrink-0" style={{ color: C.gold }} />}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12px]" style={{ color: C.bone }}>{f.label}{f.brand && <span style={{ color: C.ashDim }}> · {f.brand}</span>}</span>
+                    <span className="block truncate font-mono text-[10px]" style={{ color: C.ashDim }}>{macro}</span>
+                  </span>
+                </button>
+              </React.Fragment>
             );
           })}
           {searched && !loading && onManual && (
