@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <meta name="theme-color" content="#0E0D0B" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -23,7 +23,7 @@
 }
 </script>
 <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
-<style> html,body{margin:0;background:#0E0D0B} #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#6E5A1E;font:600 12px ui-monospace,monospace;letter-spacing:.2em;text-transform:uppercase} </style>
+<style> html,body{margin:0;background:#0E0D0B} html{-webkit-text-size-adjust:100%;text-size-adjust:100%} *{touch-action:manipulation} body{-webkit-tap-highlight-color:transparent} #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#6E5A1E;font:600 12px ui-monospace,monospace;letter-spacing:.2em;text-transform:uppercase} </style>
 </head>
 <body>
 <div id="root"></div>
@@ -183,7 +183,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0706-review1746";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0706-review1853";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -892,9 +892,9 @@ function Stepper({ value, onStep, minW = 30, disabled, label = "value", fmt }) {
   useEffect(() => () => stop(), []);
   return (
     <div className="inline-flex select-none items-center rounded-lg border" style={{ borderColor: C.edge, background: "#100E09", opacity: disabled ? 0.45 : 1 }}>
-      <button aria-label={`decrease ${label}`} onPointerDown={() => start(-1)} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop} className="flex h-9 w-9 touch-none items-center justify-center active:scale-90" style={{ color: C.bone }}><Minus size={16} /></button>
-      <span className="px-1 text-center font-mono text-[15px] font-bold" style={{ color: C.bone, minWidth: minW }}>{fmt ? fmt(value) : value}</span>
-      <button aria-label={`increase ${label}`} onPointerDown={() => start(1)} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop} className="flex h-9 w-9 touch-none items-center justify-center active:scale-90" style={{ color: C.bone }}><Plus size={16} /></button>
+      <button aria-label={`decrease ${label}`} onPointerDown={() => start(-1)} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop} className="flex h-11 w-11 touch-none items-center justify-center active:scale-90" style={{ color: C.bone }}><Minus size={20} /></button>
+      <span className="px-1 text-center font-mono text-[18px] font-bold" style={{ color: C.bone, minWidth: minW }}>{fmt ? fmt(value) : value}</span>
+      <button aria-label={`increase ${label}`} onPointerDown={() => start(1)} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop} className="flex h-11 w-11 touch-none items-center justify-center active:scale-90" style={{ color: C.bone }}><Plus size={20} /></button>
     </div>
   );
 }
@@ -916,7 +916,7 @@ function NumberField({ value, onChange, step = 1, label, width = 58, placeholder
         onChange={(e) => type(e.target.value)}
         onBlur={() => { focused.current = false; commit(txt); }}
         onKeyDown={(e) => { if (e.key === "Enter") { commit(txt); e.currentTarget.blur(); } }}
-        className="bg-transparent text-center font-mono text-[15px] font-bold outline-none placeholder:opacity-40" style={{ color: C.bone, width }} />
+        className="bg-transparent text-center font-mono text-[16px] font-bold outline-none placeholder:opacity-40" style={{ color: C.bone, width }} />
       <button aria-label={`increase ${label}`} onClick={() => nudge(step)} className="flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.bone }}><Plus size={15} /></button>
     </div>
   );
@@ -1215,7 +1215,7 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
           {hasBasis && unit === "serving" && <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>= {Math.round(grams)}g</span>}
           <label className="ml-auto flex items-center gap-1 rounded-lg border px-2 py-1" style={{ borderColor: C.edge }}>
             <Clock size={12} style={{ color: C.ashDim }} />
-            <input type="time" value={timeVal} onChange={(e) => setTime(e.target.value)} className="bg-transparent font-mono text-[11px] outline-none" style={{ color: C.ash, colorScheme: "dark" }} />
+            <input type="time" value={timeVal} onChange={(e) => setTime(e.target.value)} className="bg-transparent font-mono text-[16px] outline-none" style={{ color: C.ash, colorScheme: "dark" }} />
           </label>
         </div>
 
@@ -1680,7 +1680,7 @@ function PlateDraft({ items, onAddAll, onCancel }) {
             <span className="flex shrink-0 items-center gap-1.5">
               <NumberField value={r.grams} step={10} label={`${r.label} grams`} width={54} onChange={(n) => setRows((xs) => xs.map((x, j) => (j === i ? { ...x, grams: n } : x)))} />
               <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>g</span>
-              <button onClick={() => setRows((xs) => xs.filter((_, j) => j !== i))} aria-label={`remove ${r.label}`} style={{ color: C.ashDim }}><X size={12} /></button>
+              <button onClick={() => setRows((xs) => xs.filter((_, j) => j !== i))} aria-label={`remove ${r.label}`} className="flex h-11 w-11 shrink-0 items-center justify-center" style={{ color: C.ashDim }}><X size={16} /></button>
             </span>
           </div>
         ))}
@@ -1792,7 +1792,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
       <div className="mt-4 flex justify-end">
         <div className="inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
           {["kg", "lb"].map((u) => (
-            <button key={u} onClick={() => setDietUnit(u)} aria-label={`show body weights in ${u === "kg" ? "kilograms" : "pounds"}`} className="rounded-full px-3 py-1.5 font-mono text-xs active:scale-95"
+            <button key={u} onClick={() => setDietUnit(u)} aria-label={`show body weights in ${u === "kg" ? "kilograms" : "pounds"}`} className="rounded-full px-4 py-2 font-mono text-sm active:scale-95"
               style={{ background: unit === u ? C.gold : "transparent", color: unit === u ? C.bg : C.ash, fontWeight: unit === u ? 700 : 400 }}>{u}</button>
           ))}
         </div>
@@ -1804,7 +1804,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
           <span className="font-mono text-[12px] font-bold" style={{ color: isToday ? C.gold : C.bone }}>{relDay(viewDate)}</span>
           <label className="flex items-center gap-1 rounded-lg border px-2 py-1" style={{ borderColor: C.edge }}>
             <CalendarDays size={12} style={{ color: C.ashDim }} />
-            <input type="date" value={viewDate} onChange={(e) => e.target.value && setViewDate(e.target.value)} className="bg-transparent font-mono text-[11px] outline-none" style={{ color: C.ash, colorScheme: "dark" }} />
+            <input type="date" value={viewDate} onChange={(e) => e.target.value && setViewDate(e.target.value)} className="bg-transparent font-mono text-[16px] outline-none" style={{ color: C.ash, colorScheme: "dark" }}/>
           </label>
           {!isToday && <button onClick={() => setViewDate(todayKey())} className="rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider" style={{ borderColor: C.goldDim, color: C.gold }}>today</button>}
         </div>
@@ -1816,9 +1816,9 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
         <span className={hdr} style={{ color: C.ash }}><Moon size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Sleep</span>
         <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-3">
           <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>bed</p>
-            <input type="time" value={st.bed} onChange={(e) => setSleepToday(e.target.value, st.wake, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} /></div>
+            <input type="time" value={st.bed} onChange={(e) => setSleepToday(e.target.value, st.wake, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[16px] outline-none" style={inp} /></div>
           <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>wake</p>
-            <input type="time" value={st.wake} onChange={(e) => setSleepToday(st.bed, e.target.value, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} /></div>
+            <input type="time" value={st.wake} onChange={(e) => setSleepToday(st.bed, e.target.value, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[16px] outline-none" style={inp} /></div>
           <div className="ml-auto text-right"><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>last night</p>
             <p className="font-mono text-xl font-bold" style={{ color: slH >= 7 && slH <= 9.5 ? C.sage : C.gold }}>{fmtHM(slH)}</p></div>
         </div>
@@ -1914,7 +1914,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
             {meals.map((m) => (
               <span key={m.id} className="flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 active:scale-95" style={{ borderColor: C.goldDim, color: C.bone }}>
                 <button onClick={() => { logMeal(m.id, viewDate); flash(`Logged ${m.label} · ${(m.items || []).length} items`); }} className="font-mono text-[11px]">{m.label}<span style={{ color: C.ashDim }}> · {(m.items || []).length}</span></button>
-                <button onClick={() => removeMeal(m.id)} aria-label="remove meal" style={{ color: C.ashDim }}><X size={12} /></button>
+                <button onClick={() => removeMeal(m.id)} aria-label="remove meal" className="flex h-11 w-11 shrink-0 items-center justify-center" style={{ color: C.ashDim }}><X size={16} /></button>
               </span>
             ))}
           </div>
@@ -1930,7 +1930,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
                     <span className="flex shrink-0 items-center gap-1.5">
                       <NumberField value={it.grams} step={it.food.basis === "per100" ? 10 : 1} label="grams" width={54} onChange={(n) => setMealItems((xs) => xs.map((x, j) => (j === i ? { ...x, grams: n } : x)))} />
                       <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{it.food.basis === "per100" ? "g" : "×"}</span>
-                      <button onClick={() => setMealItems((xs) => xs.filter((_, j) => j !== i))} aria-label="remove item" style={{ color: C.ashDim }}><X size={12} /></button>
+                      <button onClick={() => setMealItems((xs) => xs.filter((_, j) => j !== i))} aria-label="remove item" className="flex h-11 w-11 shrink-0 items-center justify-center" style={{ color: C.ashDim }}><X size={16} /></button>
                     </span>
                   </div>
                 ))}
@@ -2035,7 +2035,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
         {d.waterEntries.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {d.waterEntries.slice().reverse().map((w) => (
-              <span key={w.id} className="flex items-center gap-1 rounded-full border px-2 py-1 font-mono text-[10px]" style={{ borderColor: C.edge, color: C.ash }}>{tHM(w.t)} · {w.ml}<button onClick={() => removeWaterEntry(w.id, viewDate)} aria-label="remove" style={{ color: C.ashDim }}><X size={10} /></button></span>
+              <span key={w.id} className="flex items-center gap-1 rounded-full border px-2 py-1 font-mono text-[12px]" style={{ borderColor: C.edge, color: C.ash }}>{tHM(w.t)} · {w.ml}<button onClick={() => removeWaterEntry(w.id, viewDate)} aria-label="remove" className="flex h-10 w-8 items-center justify-center" style={{ color: C.ashDim }}><X size={14} /></button></span>
             ))}
           </div>
         )}
@@ -2770,10 +2770,10 @@ function App() {
         .vup .ggbody{animation-name:situpUp}
         .vup .gglegs{animation:legsUp 2s ease-in-out infinite alternate}
         .recline .ggbody{transform:rotate(-24deg)}`}</style>
-      <div className="mx-auto max-w-md px-5 pb-24 pt-8">
+      <div className="mx-auto max-w-md px-5 pb-24 pt-8" style={{ paddingBottom: "calc(6rem + env(safe-area-inset-bottom))", paddingLeft: "max(1.25rem, env(safe-area-inset-left))", paddingRight: "max(1.25rem, env(safe-area-inset-right))" }}>
         {sessionStarted && tab === "workout" && (
-          <div className="sticky top-0 z-20 -mx-5 mb-4 px-5 py-2" style={{ background: "rgba(14,13,11,0.93)", backdropFilter: "blur(6px)", borderBottom: `1px solid ${C.edge}` }}>
-            <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider">
+          <div className="sticky top-0 z-20 -mx-5 mb-4 px-5 py-2" style={{ background: "rgba(14,13,11,0.93)", backdropFilter: "blur(6px)", borderBottom: `1px solid ${C.edge}`, paddingTop: "calc(0.5rem + env(safe-area-inset-top))" }}>
+            <div className="flex items-center justify-between font-mono text-xs uppercase tracking-wider">
               <span style={{ color: C.gold }}>Day {day} · in progress</span>
               <span style={{ color: C.ash }}>{workDone} / {workTotal} sets</span>
             </div>
@@ -2792,9 +2792,9 @@ function App() {
 
         <div className="mt-5 inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
           {[["workout", "Workout", Dumbbell], ["diet", "Diet", Apple]].map(([t, lab, Icon]) => (
-            <button key={t} onClick={() => { setTab(t); setOpenInfo(null); }} className="flex items-center gap-1.5 rounded-full px-5 py-1.5 font-mono text-xs active:scale-95"
+            <button key={t} onClick={() => { setTab(t); setOpenInfo(null); }} className="flex items-center gap-1.5 rounded-full px-5 py-2.5 font-mono text-sm active:scale-95"
               style={{ background: tab === t ? C.gold : "transparent", color: tab === t ? C.bg : C.ash, fontWeight: tab === t ? 700 : 400 }}>
-              <Icon size={12} />{lab}{t === "workout" && sessionStarted && <span style={{ width: 6, height: 6, borderRadius: 9, background: tab === t ? C.bg : C.gold, display: "inline-block" }} />}
+              <Icon size={16} />{lab}{t === "workout" && sessionStarted && <span style={{ width: 6, height: 6, borderRadius: 9, background: tab === t ? C.bg : C.gold, display: "inline-block" }} />}
             </button>
           ))}
         </div>
@@ -2805,8 +2805,8 @@ function App() {
             <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>In-progress session found</p>
             <p className="mt-2 text-[13px]" style={{ color: C.bone }}>You have an unfinished Day {pending.day} — {pending.done.length > 0 ? `${pending.done.length} set${pending.done.length === 1 ? "" : "s"} logged` : "a set in progress"}. Pick up where you left off?</p>
             <div className="mt-3 flex gap-2">
-              <button onClick={resumeSession} className="flex-1 rounded-xl py-2.5 font-mono text-xs font-bold uppercase tracking-wider" style={{ background: C.gold, color: C.bg }}>Resume</button>
-              <button onClick={discardSession} className="flex-1 rounded-xl border py-2.5 font-mono text-xs uppercase tracking-wider" style={{ borderColor: C.edge, color: C.ash }}>Discard</button>
+              <button onClick={resumeSession} className="flex-1 rounded-xl py-3 font-mono text-sm font-bold uppercase tracking-wider" style={{ background: C.gold, color: C.bg }}>Resume</button>
+              <button onClick={discardSession} className="flex-1 rounded-xl border py-3 font-mono text-sm uppercase tracking-wider" style={{ borderColor: C.edge, color: C.ash }}>Discard</button>
             </div>
           </div>
         )}
@@ -2857,7 +2857,7 @@ function App() {
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
             {PROGRAM.map((d) => (
-              <button key={d.id} onClick={() => { setDay(d.id); setOpenInfo(null); setConfirm(null); if (hasStore) clearLive(); liveRef.current = null; liveClearedRef.current = true; }} className="flex items-center gap-1 rounded-full px-3 py-1.5 font-mono text-xs"
+              <button key={d.id} onClick={() => { setDay(d.id); setOpenInfo(null); setConfirm(null); if (hasStore) clearLive(); liveRef.current = null; liveClearedRef.current = true; }} className="flex min-w-[42px] items-center justify-center gap-1 rounded-full px-3 py-2 font-mono text-sm"
                 style={{ background: day === d.id ? C.gold : "transparent", color: day === d.id ? C.bg : C.ash, fontWeight: day === d.id ? 700 : 400 }}>
                 {d.id}
               </button>
@@ -2865,7 +2865,7 @@ function App() {
           </div>
           <div className="inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
             {["lb", "kg"].map((u) => (
-              <button key={u} onClick={() => setUnit(u)} aria-label={`show weights in ${u === "lb" ? "pounds" : "kilograms"}`} className="rounded-full px-3 py-1.5 font-mono text-xs"
+              <button key={u} onClick={() => setUnit(u)} aria-label={`show weights in ${u === "lb" ? "pounds" : "kilograms"}`} className="rounded-full px-4 py-2 font-mono text-sm"
                 style={{ background: unit === u ? C.gold : "transparent", color: unit === u ? C.bg : C.ash, fontWeight: unit === u ? 700 : 400 }}>{u}</button>
             ))}
           </div>
@@ -2886,14 +2886,14 @@ function App() {
             <div key={item.ex.name} className={cardCls} style={{ background: C.card, borderColor: C.edge }}>
               {item.pair && item.pair.role === "B" && joined && (
                 <div className="-mx-5 -mt-5 mb-3 flex items-center justify-between border-b px-5 py-1.5" style={{ borderColor: C.goldDim, background: "#1A1609" }}>
-                  <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>superset · no rest between</span>
-                  <button onClick={() => breakPair(item.pair.id)} className="flex min-h-[32px] items-center font-mono text-[9px] uppercase tracking-wider active:scale-95" style={{ color: C.ashDim }}>straight sets today</button>
+                  <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>superset · no rest between</span>
+                  <button onClick={() => breakPair(item.pair.id)} className="flex min-h-[44px] items-center font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ color: C.ashDim }}>straight sets today</button>
                 </div>
               )}
               {item.pair && item.pair.role === "B" && !joined && (
                 <div className="-mx-5 -mt-5 mb-3 flex items-center justify-between border-b px-5 py-1.5" style={{ borderColor: C.edge, background: "#15120A" }}>
-                  <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>superset off — tap to restore</span>
-                  <button onClick={() => breakPair(item.pair.id)} className="flex min-h-[32px] items-center font-mono text-[9px] uppercase tracking-wider active:scale-95" style={{ color: C.gold }}>restore</button>
+                  <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>superset off — tap to restore</span>
+                  <button onClick={() => breakPair(item.pair.id)} className="flex min-h-[44px] items-center font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ color: C.gold }}>restore</button>
                 </div>
               )}
               <div className="flex items-baseline gap-3">
@@ -2915,9 +2915,9 @@ function App() {
                     )}
                   </div>
                 </div>
-                <button onClick={() => setOpenInfo(openInfo === exIdx ? null : exIdx)} aria-label={`${openInfo === exIdx ? "hide" : "show"} form animation`} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border active:scale-90"
+                <button onClick={() => setOpenInfo(openInfo === exIdx ? null : exIdx)} aria-label={`${openInfo === exIdx ? "hide" : "show"} form animation`} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border active:scale-90"
                   style={{ borderColor: openInfo === exIdx ? C.goldDim : C.edge, color: openInfo === exIdx ? C.gold : C.ash }}>
-                  <Info size={14} />
+                  <Info size={18} />
                 </button>
               </div>
 
@@ -2937,7 +2937,7 @@ function App() {
                       const onv = item.ex.slotIndex === vi;
                       return (
                         <button key={v.name} aria-label={`select ${v.name}`} onClick={() => !exLocked && setVariant(item.ex.slotKey, vi)} disabled={exLocked && !onv}
-                          className="rounded-lg border px-2 py-1.5 font-mono text-[10px]"
+                          className="rounded-lg border px-2 py-2.5 font-mono text-[12px]"
                           style={{ borderColor: onv ? C.goldDim : C.edge, background: onv ? "#241F12" : "transparent", color: onv ? C.gold : C.ash, opacity: exLocked && !onv ? 0.35 : 1 }}>
                           {SHORT[v.name] || v.name}
                         </button>
@@ -2965,55 +2965,55 @@ function App() {
                     <div key={key} className="rounded-xl border" style={{ borderColor: isActive ? C.activeEdge : "transparent", background: isActive ? "#1F1A0E" : "transparent" }}>
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-2 px-2 py-2">
                         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-2">
-                          <span className="w-5 shrink-0 text-center font-mono text-[11px]" style={{ color: isWarm ? C.ashDim : C.gold }}>{set.label}</span>
+                          <span className="w-5 shrink-0 text-center font-mono text-[13px]" style={{ color: isWarm ? C.ashDim : C.gold }}>{set.label}</span>
                           {rp ? (
                             <span className="font-mono text-[10px] uppercase tracking-wide" style={{ color: C.ashDim }}>bodyweight</span>
                           ) : (
                             <>
-                              <Stepper value={log.weight} onStep={(d) => stepW(key, d, set)} minW={34} disabled={isDone} label="weight" fmt={(v) => dispW(v, unit)} />
+                              <Stepper value={log.weight} onStep={(d) => stepW(key, d, set)} minW={42} disabled={isDone} label="weight" fmt={(v) => dispW(v, unit)} />
                               <button onClick={() => setDbMode(item.ex.name, cnt === 1 ? 2 : 1)} aria-label="switch between one and two dumbbells"
                                 disabled={sessionStarted} title={sessionStarted ? "finish or reset the session to switch" : undefined}
-                                className="flex min-h-[32px] items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] active:scale-95" style={{ borderColor: C.edge, color: C.ash, opacity: sessionStarted ? 0.45 : 1 }}>
-                                {cnt === 1 ? `${uw(unit)} · 1 DB` : `${uw(unit)}/hand · 2 DB`}<ArrowLeftRight size={10} />
+                                className="flex min-h-[44px] items-center gap-1 rounded-full border px-3 py-1 font-mono text-[12px] active:scale-95" style={{ borderColor: C.edge, color: C.ash, opacity: sessionStarted ? 0.45 : 1 }}>
+                                {cnt === 1 ? `${uw(unit)} · 1 DB` : `${uw(unit)}/hand · 2 DB`}<ArrowLeftRight size={13} />
                               </button>
                               <span className="font-mono text-xs" style={{ color: C.ash }}>×</span>
                             </>
                           )}
-                          <Stepper value={log.reps} onStep={(d) => stepR(key, d, set)} minW={20} disabled={isDone} label="reps" />
-                          <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>reps</span>
+                          <Stepper value={log.reps} onStep={(d) => stepR(key, d, set)} minW={24} disabled={isDone} label="reps" />
+                          <span className="font-mono text-[12px]" style={{ color: C.ashDim }}>reps</span>
                         </div>
                         <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
                           {isDone ? (
-                            <button onClick={() => undoSet(key)} aria-label="undo this set" title="tap to undo" className="flex items-center gap-1 rounded-full px-2.5 py-1.5 active:scale-90" style={{ background: "#20301C" }}>
-                              <Check size={15} style={{ color: C.sage }} /><Undo2 size={11} style={{ color: C.ashDim }} />
+                            <button onClick={() => undoSet(key)} aria-label="undo this set" title="tap to undo" className="flex items-center gap-1 rounded-full px-3 py-2.5 active:scale-90" style={{ background: "#20301C" }}>
+                              <Check size={17} style={{ color: C.sage }} /><Undo2 size={13} style={{ color: C.ashDim }} />
                             </button>
                           ) : isActive ? (
                             <>
-                              <button onClick={cancelSet} aria-label="cancel set" className="flex h-9 w-9 items-center justify-center rounded-full border active:scale-90" style={{ borderColor: C.edge, color: C.ash }}><X size={14} /></button>
-                              <button onClick={() => finishSet(set, exIdx)} className="flex items-center gap-1.5 rounded-full px-4 py-1.5 font-mono text-xs font-bold active:scale-95" style={{ background: C.gold, color: C.bg }}><Check size={13} /> Finish</button>
+                              <button onClick={cancelSet} aria-label="cancel set" className="flex h-11 w-11 items-center justify-center rounded-full border active:scale-90" style={{ borderColor: C.edge, color: C.ash }}><X size={18} /></button>
+                              <button onClick={() => finishSet(set, exIdx)} className="flex items-center gap-1.5 rounded-full px-5 py-2.5 font-mono text-sm font-bold active:scale-95" style={{ background: C.gold, color: C.bg }}><Check size={16} /> Finish</button>
                             </>
                           ) : isResting ? null : (
-                            <button onClick={() => startSet(key)} disabled={busy} aria-label="start set" className="flex items-center gap-1.5 rounded-full border px-4 py-1.5 font-mono text-xs active:scale-95"
-                              style={{ borderColor: busy ? C.edge : C.goldDim, color: busy ? C.ashDim : C.gold, opacity: busy ? 0.5 : 1 }}><Play size={12} /> Start</button>
+                            <button onClick={() => startSet(key)} disabled={busy} aria-label="start set" className="flex items-center gap-1.5 rounded-full border px-5 py-2.5 font-mono text-sm active:scale-95"
+                              style={{ borderColor: busy ? C.edge : C.goldDim, color: busy ? C.ashDim : C.gold, opacity: busy ? 0.5 : 1 }}><Play size={15} /> Start</button>
                           )}
                         </div>
                       </div>
-                      <div className="px-2 pb-1.5 pl-7 font-mono text-[10px]" style={{ color: C.ash }}>
+                      <div className="px-2 pb-1.5 pl-7 font-mono text-[12px]" style={{ color: C.ash }}>
                         {rp ? "bodyweight" : cnt === 1 ? `${dispW(log.weight, unit)} ${uw(unit)}` : `${dispW(log.weight * 2, unit)} ${uw(unit)} total`}{isWarm ? " · warm-up" : `  ·  ${set.repsLabel}${set.aim ? ` · aim ${set.aim}` : ""}`}
                         <span style={{ color: C.ashDim }}>{edited && !rp ? `  ·  proj ${dispW(set.load, unit)} × ${set.repsNum}` : ""}</span>
                       </div>
                       {isDone && !isWarm && (
-                        <div className="flex items-center gap-1 px-2 pb-2 pl-7">
-                          <span className="mr-1 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>effort</span>
+                        <div className="flex items-center gap-1.5 px-2 pb-2 pl-7">
+                          <span className="mr-1 font-mono text-[11px] uppercase tracking-wider" style={{ color: C.ashDim }}>effort</span>
                           {[["easy", "Easy", C.sage], ["good", "Good", C.gold], ["hard", "Hard", C.rust], ["fail", "Failed", C.rust]].map(([v, lab, col]) => {
                             const on = log.e === v;
-                            return <button key={v} onClick={() => setEffort(key, v)} aria-label={`effort ${lab}`} className="rounded-full border px-2 py-0.5 font-mono text-[9px] active:scale-95"
+                            return <button key={v} onClick={() => setEffort(key, v)} aria-label={`effort ${lab}`} className="flex-1 rounded-full border px-1 py-2 text-center font-mono text-[12px] active:scale-95"
                               style={{ borderColor: on ? col : C.edge, background: on ? col : "transparent", color: on ? C.bg : C.ash, fontWeight: on ? 700 : 400 }}>{lab}</button>;
                           })}
                         </div>
                       )}
                       {showPct && (
-                        <div className="flex gap-4 px-2 pb-1.5 pl-7 font-mono text-[10px]">
+                        <div className="flex gap-4 px-2 pb-1.5 pl-7 font-mono text-[12px]">
                           <span style={{ color: C.ashDim }}>overall <span style={{ color: pctColor(overallPct) }}>{fmtPct(overallPct)}</span></span>
                           <span style={{ color: C.ashDim }}>vs last <span style={{ color: pctColor(lastPct) }}>{fmtPct(lastPct)}</span></span>
                         </div>
@@ -3032,15 +3032,15 @@ function App() {
                         <div className="mb-2 ml-2 mr-2 rounded-lg p-3" style={{ background: "#15120A" }}>
                           <div className="flex items-center justify-between">
                             <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.goldDim }}>rest</span>
-                            <span className="font-mono text-lg font-bold" style={{ color: C.gold }}>{fmtClock(restLeft)}</span>
+                            <span className="font-mono text-3xl font-bold" style={{ color: C.gold }}>{fmtClock(restLeft)}</span>
                           </div>
                           <div className="mt-2 h-1 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
                             <div className="h-full rounded-full" style={{ width: `${rest.total ? (restLeft / rest.total) * 100 : 0}%`, background: C.gold, transition: "width .5s linear" }} />
                           </div>
-                          <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>logged {rp ? "bodyweight" : `${dispW(log.weight, unit)} ${uw(unit)}${cnt === 1 ? "" : "/hand"}`} × {log.reps} reps — adjust above if that's off</p>
+                          <p className="mt-2 font-mono text-[12px]" style={{ color: C.ash }}>logged {rp ? "bodyweight" : `${dispW(log.weight, unit)} ${uw(unit)}${cnt === 1 ? "" : "/hand"}`} × {log.reps} reps — adjust above if that's off</p>
                           <div className="mt-2 flex gap-2">
-                            <button onClick={addRest} aria-label="add 30 seconds rest" className="rounded-full border px-3 py-1 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>+30s</button>
-                            <button onClick={skipRest} aria-label="skip rest" className="flex items-center gap-1 rounded-full border px-3 py-1 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}><SkipForward size={11} /> Skip</button>
+                            <button onClick={addRest} aria-label="add 30 seconds rest" className="rounded-full border px-4 py-2.5 font-mono text-[13px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>+30s</button>
+                            <button onClick={skipRest} aria-label="skip rest" className="flex items-center gap-1 rounded-full border px-4 py-2.5 font-mono text-[13px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}><SkipForward size={15} /> Skip</button>
                           </div>
                         </div>
                       )}
@@ -3065,7 +3065,59 @@ function App() {
           );})}
         </div>
 
+        {/* sticky thumb bar — the active set's action, always in reach */}
+        {sessionStarted && (() => {
+          let inner = null;
+          if (active) {
+            const [ei, si] = active.split("-").map(Number);
+            const it = plan[ei]; const st = it && it.sets[si];
+            if (it && st) inner = (
+              <>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-mono text-[11px] uppercase tracking-wider" style={{ color: C.goldDim }}>set {st.label} · live</p>
+                  <p className="truncate text-[15px] font-semibold" style={{ color: C.bone }}>{it.ex.name}</p>
+                </div>
+                <button onClick={() => finishSet(st, ei)} className="flex shrink-0 items-center gap-2 rounded-full px-6 py-3 font-mono text-sm font-bold active:scale-95" style={{ background: C.gold, color: C.bg }}><Check size={17} /> Finish set</button>
+              </>
+            );
+          } else if (rest) {
+            inner = (
+              <>
+                <div className="flex min-w-0 flex-1 items-baseline gap-2">
+                  <span className="font-mono text-[11px] uppercase tracking-wider" style={{ color: C.goldDim }}>rest</span>
+                  <span className="font-mono text-2xl font-bold" style={{ color: C.gold }}>{fmtClock(restLeft)}</span>
+                </div>
+                <button onClick={addRest} aria-label="add 30 seconds rest" className="shrink-0 rounded-full border px-4 py-3 font-mono text-[13px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>+30s</button>
+                <button onClick={skipRest} aria-label="skip rest" className="flex shrink-0 items-center gap-1 rounded-full border px-4 py-3 font-mono text-[13px] active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}><SkipForward size={15} /> Skip</button>
+              </>
+            );
+          } else {
+            let nk = null, nit = null, nst = null;
+            outer: for (let ei = 0; ei < plan.length; ei++) { const it = plan[ei]; for (let si = 0; si < it.sets.length; si++) { const k = `${ei}-${si}`; if (!done.has(k)) { nk = k; nit = it; nst = it.sets[si]; break outer; } } }
+            inner = nk ? (
+              <>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-mono text-[11px] uppercase tracking-wider" style={{ color: C.ashDim }}>next · set {nst.label}{nst.kind === "warmup" ? " · warm-up" : ""}</p>
+                  <p className="truncate text-[15px] font-semibold" style={{ color: C.bone }}>{nit.ex.name}</p>
+                </div>
+                <button onClick={() => startSet(nk)} disabled={busy} className="flex shrink-0 items-center gap-2 rounded-full border px-6 py-3 font-mono text-sm font-bold active:scale-95" style={{ borderColor: C.goldDim, color: C.gold, opacity: busy ? 0.5 : 1 }}><Play size={15} /> Start</button>
+              </>
+            ) : (
+              <>
+                <p className="min-w-0 flex-1 truncate text-[14px] font-semibold" style={{ color: C.sage }}>All sets done — strong work.</p>
+                <button onClick={() => { setConfirm("finish"); setTimeout(() => document.getElementById("finishzone")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50); }} className="flex shrink-0 items-center gap-2 rounded-full px-6 py-3 font-mono text-sm font-bold active:scale-95" style={{ background: C.gold, color: C.bg }}><Save size={15} /> Finish day</button>
+              </>
+            );
+          }
+          return (
+            <div className="fixed inset-x-0 bottom-0 z-30" style={{ background: "rgba(14,13,11,0.96)", backdropFilter: "blur(8px)", borderTop: `1px solid ${C.edge}` }}>
+              <div className="mx-auto flex max-w-md items-center gap-2 px-5 py-2.5" style={{ paddingBottom: "calc(0.625rem + env(safe-area-inset-bottom))" }}>{inner}</div>
+            </div>
+          );
+        })()}
+
         {/* finish + progress */}
+        <div id="finishzone" />
         {confirm === "finish" ? (
           <div className="mt-6 rounded-2xl border p-4" style={{ borderColor: C.activeEdge, background: "#1A1609", animation: "fade .3s ease-out" }}>
             <p className="text-[13px] leading-relaxed" style={{ color: C.bone }}>Finish Day {day}? This saves your {workDone} logged set{workDone === 1 ? "" : "s"}, applies progression, and advances to the next day.</p>
