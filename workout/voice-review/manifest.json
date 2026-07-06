@@ -1,0 +1,2354 @@
+[
+ {
+  "id": "incline-db-bench-press-00",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 0,
+  "text": "Imagine bending the dumbbells into a U-shape as you press — it screws your shoulders into their sockets and fires the chest."
+ },
+ {
+  "id": "incline-db-bench-press-01",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 1,
+  "text": "Tuck a tennis ball under each armpit and don't let it drop; that keeps your elbows in the right groove."
+ },
+ {
+  "id": "incline-db-bench-press-02",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 2,
+  "text": "Push your sternum up to meet the dumbbells instead of curling your shoulders forward — chest to the sky."
+ },
+ {
+  "id": "incline-db-bench-press-03",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 3,
+  "text": "Drive your feet into the floor like a leg press; the tension travels up into a stronger press."
+ },
+ {
+  "id": "incline-db-bench-press-04",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 4,
+  "text": "Pull the dumbbells down like you're rowing them, then reverse — own the weight, don't just catch it."
+ },
+ {
+  "id": "incline-db-bench-press-05",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 5,
+  "text": "Spread your collarbones wide and proud before each rep to pre-load the upper chest."
+ },
+ {
+  "id": "incline-db-bench-press-06",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 6,
+  "text": "Lower until you feel a deep stretch across the top of the pecs — that stretch is the rep."
+ },
+ {
+  "id": "incline-db-bench-press-07",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 7,
+  "text": "Squeeze the handles like you're leaving fingerprints in the metal; a hard grip wakes the whole arm."
+ },
+ {
+  "id": "incline-db-bench-press-08",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 8,
+  "text": "At the top, press both dumbbells toward a single point a foot above your collarbones."
+ },
+ {
+  "id": "incline-db-bench-press-09",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 9,
+  "text": "Picture pushing yourself away from the dumbbells, not the dumbbells away from you."
+ },
+ {
+  "id": "incline-db-bench-press-10",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 10,
+  "text": "This is your money set — explode the first half, control the lockout. Fast up, never sloppy."
+ },
+ {
+  "id": "incline-db-bench-press-11",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 11,
+  "text": "Leave one honest rep in the tank; the rep where bar speed dies is the one you skip."
+ },
+ {
+  "id": "incline-db-bench-press-12",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 12,
+  "text": "Keep your forearms stacked dead vertical under the weight — never let them tip in or out."
+ },
+ {
+  "id": "incline-db-bench-press-13",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 13,
+  "text": "Crush the dumbbells together with isometric tension at the top to squeeze the inner-upper chest."
+ },
+ {
+  "id": "incline-db-bench-press-14",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 14,
+  "text": "Keep your chin tucked and head flat on the bench; lifting your head kills your drive."
+ },
+ {
+  "id": "incline-db-bench-press-15",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 15,
+  "text": "Glue your shoulder blades into your back pockets and keep them there the whole set."
+ },
+ {
+  "id": "incline-db-bench-press-16",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 16,
+  "text": "Breathe into your belly, brace, then press — never take a breath at the bottom under load."
+ },
+ {
+  "id": "incline-db-bench-press-17",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 17,
+  "text": "Lower the dumbbells like you're setting down a glass you don't want to spill."
+ },
+ {
+  "id": "incline-db-bench-press-18",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 18,
+  "text": "Don't clack them at the top — stop just short and keep the pecs loaded."
+ },
+ {
+  "id": "incline-db-bench-press-19",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 19,
+  "text": "If one side lags, slow both down and re-sync; symmetry now prevents imbalances later."
+ },
+ {
+  "id": "incline-db-bench-press-20",
+  "exercise": "Incline DB Bench Press",
+  "muscle": "Upper chest",
+  "idx": 20,
+  "text": "Treat your elbows as the only hinges; the hands just go along for the ride."
+ },
+ {
+  "id": "standing-db-shoulder-press-00",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 0,
+  "text": "Squeeze your glutes like you're cracking a walnut before you press — it locks your pelvis and kills the back-lean."
+ },
+ {
+  "id": "standing-db-shoulder-press-01",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 1,
+  "text": "Brace your abs as if bracing for a punch; a soft middle leaks all your power."
+ },
+ {
+  "id": "standing-db-shoulder-press-02",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 2,
+  "text": "Drive your head 'through the window' the instant the dumbbells clear it — finish with ears between your arms."
+ },
+ {
+  "id": "standing-db-shoulder-press-03",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 3,
+  "text": "Press the dumbbells up through a narrowing chimney so they finish close together overhead."
+ },
+ {
+  "id": "standing-db-shoulder-press-04",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 4,
+  "text": "Keep your ribs stacked down over your hips; don't let your ribcage flare up to cheat the weight."
+ },
+ {
+  "id": "standing-db-shoulder-press-05",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 5,
+  "text": "Crush the handles and bend them apart — that grip tension stabilizes the whole shoulder."
+ },
+ {
+  "id": "standing-db-shoulder-press-06",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 6,
+  "text": "Start each rep from a dead stop at the shoulders — no bounce out of the bottom."
+ },
+ {
+  "id": "standing-db-shoulder-press-07",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 7,
+  "text": "Screw the dumbbells up and slightly in, like turning two jar lids open above your head."
+ },
+ {
+  "id": "standing-db-shoulder-press-08",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 8,
+  "text": "Press as if you're trying to grow two inches taller, lengthening your whole spine."
+ },
+ {
+  "id": "standing-db-shoulder-press-09",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 9,
+  "text": "Pull your shoulder blades down away from your ears before the first rep."
+ },
+ {
+  "id": "standing-db-shoulder-press-10",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 10,
+  "text": "Keep your forearms vertical, stacked like pillars directly under the weight."
+ },
+ {
+  "id": "standing-db-shoulder-press-11",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 11,
+  "text": "Heavy set — full breath, hard brace, one clean rep shy of a grind."
+ },
+ {
+  "id": "standing-db-shoulder-press-12",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 12,
+  "text": "The instant your lower back wants to arch, that set is done — stop on a good rep."
+ },
+ {
+  "id": "standing-db-shoulder-press-13",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 13,
+  "text": "Don't shrug the weight up; let the delts press and keep the traps quiet until the very top."
+ },
+ {
+  "id": "standing-db-shoulder-press-14",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 14,
+  "text": "Tuck your chin slightly so the dumbbells pass cleanly in front of your face."
+ },
+ {
+  "id": "standing-db-shoulder-press-15",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 15,
+  "text": "Screw your feet into the floor, hip-width, for an unshakable base."
+ },
+ {
+  "id": "standing-db-shoulder-press-16",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 16,
+  "text": "Lower under control to chin height before pressing again — no free-falling reps."
+ },
+ {
+  "id": "standing-db-shoulder-press-17",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 17,
+  "text": "Exhale forcefully through the sticking point, like blowing out candles, to push past it."
+ },
+ {
+  "id": "standing-db-shoulder-press-18",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 18,
+  "text": "Squeeze the dumbbells together overhead for a beat to finish the contraction."
+ },
+ {
+  "id": "standing-db-shoulder-press-19",
+  "exercise": "Standing DB Shoulder Press",
+  "muscle": "Front delts",
+  "idx": 19,
+  "text": "Keep both arms mirrored; chase symmetry on every single rep."
+ },
+ {
+  "id": "db-lateral-raises-00",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 0,
+  "text": "Pour the water out — tip your pinkies up at the top like emptying two jugs to nail the side delt."
+ },
+ {
+  "id": "db-lateral-raises-01",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 1,
+  "text": "Lead with your elbows as if someone is lifting you by them with strings."
+ },
+ {
+  "id": "db-lateral-raises-02",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 2,
+  "text": "Push the dumbbells out and away, not just up — long arms make a longer lever and a bigger burn."
+ },
+ {
+  "id": "db-lateral-raises-03",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 3,
+  "text": "Raise to a 'T' at shoulder height; one inch higher and the traps steal the work."
+ },
+ {
+  "id": "db-lateral-raises-04",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 4,
+  "text": "Lean your chest forward about ten degrees so the side delt fights gravity head-on."
+ },
+ {
+  "id": "db-lateral-raises-05",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 5,
+  "text": "Lower like you're pressing through honey — three slow seconds, fighting the whole way."
+ },
+ {
+  "id": "db-lateral-raises-06",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 6,
+  "text": "Freeze a soft bend in your elbows; the angle never changes from start to finish."
+ },
+ {
+  "id": "db-lateral-raises-07",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 7,
+  "text": "Imagine your hands are weightless and all the load hangs from your elbows."
+ },
+ {
+  "id": "db-lateral-raises-08",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 8,
+  "text": "Lock your traps down — if you feel your neck, you've handed the work to the wrong muscle."
+ },
+ {
+  "id": "db-lateral-raises-09",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 9,
+  "text": "Pause a beat at the top with the delts balled up tight before you lower."
+ },
+ {
+  "id": "db-lateral-raises-10",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 10,
+  "text": "This is sculpting, not lifting — pick a weight you can stop on a dime."
+ },
+ {
+  "id": "db-lateral-raises-11",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 11,
+  "text": "Never let the dumbbells rest on your thighs; keep constant tension the whole set."
+ },
+ {
+  "id": "db-lateral-raises-12",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 12,
+  "text": "Reach the dumbbells toward the far walls as you raise, widening your whole frame."
+ },
+ {
+  "id": "db-lateral-raises-13",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 13,
+  "text": "Lead with the pinky edge; don't let your wrists roll forward."
+ },
+ {
+  "id": "db-lateral-raises-14",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 14,
+  "text": "If your body starts swinging to launch the weight, it's too heavy — drop it and stay strict."
+ },
+ {
+  "id": "db-lateral-raises-15",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 15,
+  "text": "Picture two protractors at your shoulders and raise both arms to the exact same angle."
+ },
+ {
+  "id": "db-lateral-raises-16",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 16,
+  "text": "Feel the outer cap of the shoulder doing every bit of the work."
+ },
+ {
+  "id": "db-lateral-raises-17",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 17,
+  "text": "On the last reps, slow the negative even more instead of cutting the range short."
+ },
+ {
+  "id": "db-lateral-raises-18",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 18,
+  "text": "Keep your elbows higher than your wrists from the first inch to the last."
+ },
+ {
+  "id": "db-lateral-raises-19",
+  "exercise": "DB Lateral Raises",
+  "muscle": "Side delts",
+  "idx": 19,
+  "text": "Squeeze at the top as if pinning the delts to the ceiling."
+ },
+ {
+  "id": "db-skull-crushers-00",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 0,
+  "text": "Point your elbows at the ceiling and weld them there — if they drift, it becomes a press."
+ },
+ {
+  "id": "db-skull-crushers-01",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 1,
+  "text": "Pretend your upper arms are bolted to a wall; only the forearms swing."
+ },
+ {
+  "id": "db-skull-crushers-02",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 2,
+  "text": "Lower toward a spot just behind the crown of your head for a deeper long-head stretch."
+ },
+ {
+  "id": "db-skull-crushers-03",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 3,
+  "text": "Feel the triceps pull apart like taffy at the bottom before you reverse."
+ },
+ {
+  "id": "db-skull-crushers-04",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 4,
+  "text": "Keep your pinkies slightly higher than your thumbs to stop the elbows flaring."
+ },
+ {
+  "id": "db-skull-crushers-05",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 5,
+  "text": "Control the lowering for a three-count — the stretch under load is the growth."
+ },
+ {
+  "id": "db-skull-crushers-06",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 6,
+  "text": "Throw the dumbbells toward the ceiling to extend, then stop a hair short of lockout."
+ },
+ {
+  "id": "db-skull-crushers-07",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 7,
+  "text": "Tuck your elbows to shoulder-width and hold that frame all set."
+ },
+ {
+  "id": "db-skull-crushers-08",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 8,
+  "text": "Brace your abs so your ribs don't flare and your back stays flat on the bench."
+ },
+ {
+  "id": "db-skull-crushers-09",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 9,
+  "text": "Use a neutral grip, palms facing, to keep your elbows happy under the stretch."
+ },
+ {
+  "id": "db-skull-crushers-10",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 10,
+  "text": "Stop just short of straight arms to keep tension on the muscle, not the joint."
+ },
+ {
+  "id": "db-skull-crushers-11",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 11,
+  "text": "Keep your shoulders pinned to the bench — don't let them ride toward your ears."
+ },
+ {
+  "id": "db-skull-crushers-12",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 12,
+  "text": "Pause at the deep-stretch bottom for a beat to kill the bounce."
+ },
+ {
+  "id": "db-skull-crushers-13",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 13,
+  "text": "Picture cracking a nut behind your head, then squeezing it back up."
+ },
+ {
+  "id": "db-skull-crushers-14",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 14,
+  "text": "Move both forearms as a perfectly matched pair."
+ },
+ {
+  "id": "db-skull-crushers-15",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 15,
+  "text": "Light and surgical beats heavy and sloppy — the elbows always win that argument."
+ },
+ {
+  "id": "db-skull-crushers-16",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 16,
+  "text": "Keep your wrists stacked straight; don't let the dumbbells flop backward."
+ },
+ {
+  "id": "db-skull-crushers-17",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 17,
+  "text": "The last two reps slow down — never scramble to finish a skull crusher."
+ },
+ {
+  "id": "db-skull-crushers-18",
+  "exercise": "DB Skull Crushers",
+  "muscle": "Triceps",
+  "idx": 18,
+  "text": "Hinge at the elbow only, like a trap door swinging on a single hinge."
+ },
+ {
+  "id": "chest-supported-db-row-00",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 0,
+  "text": "Imagine a pencil between your shoulder blades and crush it hard at the top of every rep."
+ },
+ {
+  "id": "chest-supported-db-row-01",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 1,
+  "text": "Drive your elbows toward your back pockets, not out to the sides."
+ },
+ {
+  "id": "chest-supported-db-row-02",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 2,
+  "text": "Keep your chest sealed to the bench — the second it lifts, you're cheating with your hips."
+ },
+ {
+  "id": "chest-supported-db-row-03",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 3,
+  "text": "Start each rep from a full hang with the shoulder blades spread wide, then pull and pinch."
+ },
+ {
+  "id": "chest-supported-db-row-04",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 4,
+  "text": "Pretend you're snapping a twig between your scapulae at the top."
+ },
+ {
+  "id": "chest-supported-db-row-05",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 5,
+  "text": "Pull with your elbows and let your hands be passive hooks — take the biceps out of it."
+ },
+ {
+  "id": "chest-supported-db-row-06",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 6,
+  "text": "Lower for a three-count and feel the back load up fully before the next pull."
+ },
+ {
+  "id": "chest-supported-db-row-07",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 7,
+  "text": "Pause a beat at the top squeeze; own the contraction, don't just touch and go."
+ },
+ {
+  "id": "chest-supported-db-row-08",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 8,
+  "text": "Keep your neck long and neutral — don't crane up to look in the mirror."
+ },
+ {
+  "id": "chest-supported-db-row-09",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 9,
+  "text": "Row the dumbbells in an arc toward your waistline to load the mid-back, not the upper traps."
+ },
+ {
+  "id": "chest-supported-db-row-10",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 10,
+  "text": "Heavy set — drive with intent, one clean rep shy of failure."
+ },
+ {
+  "id": "chest-supported-db-row-11",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 11,
+  "text": "Keep both elbows tracking at the same angle; don't let one wing flare."
+ },
+ {
+  "id": "chest-supported-db-row-12",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 12,
+  "text": "Think about tucking the dumbbells into your back pockets at the top."
+ },
+ {
+  "id": "chest-supported-db-row-13",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 13,
+  "text": "Brace your abs so your lower back stays neutral and your chest stays planted."
+ },
+ {
+  "id": "chest-supported-db-row-14",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 14,
+  "text": "Squeeze so hard at the top that the dumbbells pause on their own for a split second."
+ },
+ {
+  "id": "chest-supported-db-row-15",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 15,
+  "text": "On the back-off set, slow everything and chase the squeeze in the mid-back."
+ },
+ {
+  "id": "chest-supported-db-row-16",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 16,
+  "text": "If your biceps are screaming and your back is quiet, lead more with the elbows."
+ },
+ {
+  "id": "chest-supported-db-row-17",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 17,
+  "text": "Pull the dumbbells 'through' your hands, sourcing the force from your back."
+ },
+ {
+  "id": "chest-supported-db-row-18",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 18,
+  "text": "Keep your shoulders down and away from your ears as you pull."
+ },
+ {
+  "id": "chest-supported-db-row-19",
+  "exercise": "Chest-Supported DB Row",
+  "muscle": "Mid back",
+  "idx": 19,
+  "text": "Make the bottom stretch as deliberate as the top squeeze — full range at both ends."
+ },
+ {
+  "id": "db-romanian-deadlift-00",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 0,
+  "text": "Push your hips back like you're shutting a car door with your butt — that starts the hinge."
+ },
+ {
+  "id": "db-romanian-deadlift-01",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 1,
+  "text": "Drag the dumbbells down your thighs as if you're shaving your legs with them."
+ },
+ {
+  "id": "db-romanian-deadlift-02",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 2,
+  "text": "Reach your hips toward the wall behind you, not your chest toward the floor."
+ },
+ {
+  "id": "db-romanian-deadlift-03",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 3,
+  "text": "Pinch an imaginary coin between your glutes at the top to finish with the hips."
+ },
+ {
+  "id": "db-romanian-deadlift-04",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 4,
+  "text": "Carry a proud chest and pull your shoulder blades down and back the whole set."
+ },
+ {
+  "id": "db-romanian-deadlift-05",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 5,
+  "text": "Stop lowering the instant your hamstrings shout — that stretch is your depth, not the floor."
+ },
+ {
+  "id": "db-romanian-deadlift-06",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 6,
+  "text": "Keep a soft knee bend and freeze it; the knees don't dip forward like a squat."
+ },
+ {
+  "id": "db-romanian-deadlift-07",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 7,
+  "text": "Spread the floor with your feet, screwing them outward, to lock in your hips."
+ },
+ {
+  "id": "db-romanian-deadlift-08",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 8,
+  "text": "Treat your spine like a long broomstick that never bends from tailbone to skull."
+ },
+ {
+  "id": "db-romanian-deadlift-09",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 9,
+  "text": "Drive the floor away through your heels on the way up, like a standing leg press."
+ },
+ {
+  "id": "db-romanian-deadlift-10",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 10,
+  "text": "Keep the dumbbells glued close; an inch forward doubles the strain on your lower back."
+ },
+ {
+  "id": "db-romanian-deadlift-11",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 11,
+  "text": "Big breath at the top, brace the belt of muscle around your waist, then descend."
+ },
+ {
+  "id": "db-romanian-deadlift-12",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 12,
+  "text": "Feel the load in the hamstrings and glutes — if it's all lower back, sit the hips back more."
+ },
+ {
+  "id": "db-romanian-deadlift-13",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 13,
+  "text": "Finish tall and stacked; don't lean back and hyperextend at the top."
+ },
+ {
+  "id": "db-romanian-deadlift-14",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 14,
+  "text": "Heavy set — control the way down, then snap the hips through on the way up."
+ },
+ {
+  "id": "db-romanian-deadlift-15",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 15,
+  "text": "The moment your back wants to round, that's your range — never chase extra depth."
+ },
+ {
+  "id": "db-romanian-deadlift-16",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 16,
+  "text": "Grip the handles like a vice and let the forearms earn their keep."
+ },
+ {
+  "id": "db-romanian-deadlift-17",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 17,
+  "text": "Keep your weight in your heels and mid-foot, never drifting onto your toes."
+ },
+ {
+  "id": "db-romanian-deadlift-18",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 18,
+  "text": "Pack your neck in line with your spine; don't crane up to the mirror."
+ },
+ {
+  "id": "db-romanian-deadlift-19",
+  "exercise": "DB Romanian Deadlift",
+  "muscle": "Hamstrings",
+  "idx": 19,
+  "text": "The whole rhythm is just 'hips back, then hips through.'"
+ },
+ {
+  "id": "bent-over-db-flyes-00",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 0,
+  "text": "Hug a giant barrel in reverse — open your arms around it, leading with the elbows."
+ },
+ {
+  "id": "bent-over-db-flyes-01",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 1,
+  "text": "Pour the water out at the top, pinkies tipped up, to hit the rear delts clean."
+ },
+ {
+  "id": "bent-over-db-flyes-02",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 2,
+  "text": "Squeeze a grape between your shoulder blades at the top of each rep."
+ },
+ {
+  "id": "bent-over-db-flyes-03",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 3,
+  "text": "Freeze a soft bend in your elbows; if it opens and closes, it's a row, not a fly."
+ },
+ {
+  "id": "bent-over-db-flyes-04",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 4,
+  "text": "Hinge to near-parallel and let the dumbbells hang straight down to start."
+ },
+ {
+  "id": "bent-over-db-flyes-05",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 5,
+  "text": "Spread your wings wide and slow — don't think about lifting the weight up."
+ },
+ {
+  "id": "bent-over-db-flyes-06",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 6,
+  "text": "Raise out to the sides only to back height; no higher, no swinging."
+ },
+ {
+  "id": "bent-over-db-flyes-07",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 7,
+  "text": "Keep your neck neutral, gaze at the floor a few feet ahead."
+ },
+ {
+  "id": "bent-over-db-flyes-08",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 8,
+  "text": "Lock your upper traps down — these are featherweights, let the rear delts do it all."
+ },
+ {
+  "id": "bent-over-db-flyes-09",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 9,
+  "text": "Pull the dumbbells apart and away from each other, not toward the ceiling."
+ },
+ {
+  "id": "bent-over-db-flyes-10",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 10,
+  "text": "Pause at the top for a beat with the rear delts balled tight."
+ },
+ {
+  "id": "bent-over-db-flyes-11",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 11,
+  "text": "Lower like you're setting down something fragile — slow and controlled."
+ },
+ {
+  "id": "bent-over-db-flyes-12",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 12,
+  "text": "Brace your abs so your torso stays frozen in the hinge as you fatigue."
+ },
+ {
+  "id": "bent-over-db-flyes-13",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 13,
+  "text": "If your chest pops up to help, lighten the weight and reset the hinge."
+ },
+ {
+  "id": "bent-over-db-flyes-14",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 14,
+  "text": "Move both arms as one wingspan opening — perfectly mirrored."
+ },
+ {
+  "id": "bent-over-db-flyes-15",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 15,
+  "text": "Imagine your arms are ropes fixed at the elbow; only the shoulders swing them open."
+ },
+ {
+  "id": "bent-over-db-flyes-16",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 16,
+  "text": "Keep constant tension; don't let the dumbbells clink together at the bottom."
+ },
+ {
+  "id": "bent-over-db-flyes-17",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 17,
+  "text": "Feel the very back of your shoulders, behind your shirt seam, doing the work."
+ },
+ {
+  "id": "bent-over-db-flyes-18",
+  "exercise": "Bent-Over DB Flyes",
+  "muscle": "Rear delts",
+  "idx": 18,
+  "text": "Drive the pinky edge up and back to bias the rear delt over the traps."
+ },
+ {
+  "id": "incline-db-curls-00",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 0,
+  "text": "Let your arms hang dead-straight behind your torso — that deep stretch is the whole point of the incline."
+ },
+ {
+  "id": "incline-db-curls-01",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 1,
+  "text": "Pin your elbows in place; if they swing forward, you've thrown away the stretch."
+ },
+ {
+  "id": "incline-db-curls-02",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 2,
+  "text": "Curl as if pulling your forearm to your shoulder, not the dumbbell to your face."
+ },
+ {
+  "id": "incline-db-curls-03",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 3,
+  "text": "Turn your pinky up and out at the top — supinate hard to crush the biceps peak."
+ },
+ {
+  "id": "incline-db-curls-04",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 4,
+  "text": "Squeeze the biceps at the top like flexing for a photo, then lower slow."
+ },
+ {
+  "id": "incline-db-curls-05",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 5,
+  "text": "Lower until your arms are fully straight and stretched — never cut the bottom."
+ },
+ {
+  "id": "incline-db-curls-06",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 6,
+  "text": "Keep your back flat on the bench and shoulders down; no heaving off the pad."
+ },
+ {
+  "id": "incline-db-curls-07",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 7,
+  "text": "Control the negative for a three-count; the stretch under load is where the size lives."
+ },
+ {
+  "id": "incline-db-curls-08",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 8,
+  "text": "Pause a beat at the bottom, dead straight, to kill any swing."
+ },
+ {
+  "id": "incline-db-curls-09",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 9,
+  "text": "Drive your elbows slightly back into the bench to deepen the long-head stretch."
+ },
+ {
+  "id": "incline-db-curls-10",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 10,
+  "text": "Keep your wrists firm and straight — curl with the biceps, not the wrist."
+ },
+ {
+  "id": "incline-db-curls-11",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 11,
+  "text": "Keep tension on the biceps the whole way; don't rest at the bottom."
+ },
+ {
+  "id": "incline-db-curls-12",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 12,
+  "text": "Move the dumbbells as if they were twice as heavy — that much control."
+ },
+ {
+  "id": "incline-db-curls-13",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 13,
+  "text": "Keep your elbows pinned to your sides; don't let them drift out wide."
+ },
+ {
+  "id": "incline-db-curls-14",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 14,
+  "text": "If your forearms burn before your biceps, slow the lowering and squeeze harder up top."
+ },
+ {
+  "id": "incline-db-curls-15",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 15,
+  "text": "Pull your pinky up toward your collarbone to finish the curl."
+ },
+ {
+  "id": "incline-db-curls-16",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 16,
+  "text": "The last reps slow down — never swing a dumbbell to finish a curl."
+ },
+ {
+  "id": "incline-db-curls-17",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 17,
+  "text": "Keep your chest open and proud; don't round forward as you fatigue."
+ },
+ {
+  "id": "incline-db-curls-18",
+  "exercise": "Incline DB Curls",
+  "muscle": "Biceps",
+  "idx": 18,
+  "text": "Use every inch of that hanging stretch — it's the gift the incline gives you."
+ },
+ {
+  "id": "single-leg-calf-raises-00",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 0,
+  "text": "Sink the heel as far below the step as it will go before you press — half the gains are in that stretch."
+ },
+ {
+  "id": "single-leg-calf-raises-01",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 1,
+  "text": "Press all the way up onto the tip of your big toe, like reaching a high shelf with your foot."
+ },
+ {
+  "id": "single-leg-calf-raises-02",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 2,
+  "text": "Pause a full second at the top and a full second at the bottom — calves love the stops."
+ },
+ {
+  "id": "single-leg-calf-raises-03",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 3,
+  "text": "Drive up through the big-toe side, not the pinky edge, to keep the ankle honest."
+ },
+ {
+  "id": "single-leg-calf-raises-04",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 4,
+  "text": "Keep the working knee straight but unlocked to bias the big gastrocnemius."
+ },
+ {
+  "id": "single-leg-calf-raises-05",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 5,
+  "text": "Lower slow and controlled; never bounce off the Achilles like a spring."
+ },
+ {
+  "id": "single-leg-calf-raises-06",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 6,
+  "text": "Lightly hold something for balance so every ounce of focus goes to the calf."
+ },
+ {
+  "id": "single-leg-calf-raises-07",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 7,
+  "text": "Keep your hips level and squared; don't let the free side drop."
+ },
+ {
+  "id": "single-leg-calf-raises-08",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 8,
+  "text": "Stand tall like you're on a tightrope — straight up, straight down, no wobble."
+ },
+ {
+  "id": "single-leg-calf-raises-09",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 9,
+  "text": "Feel the stretch at the bottom as much as the squeeze at the top."
+ },
+ {
+  "id": "single-leg-calf-raises-10",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 10,
+  "text": "Train calves like you mean it — full reps, real tension, never half-bounces."
+ },
+ {
+  "id": "single-leg-calf-raises-11",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 11,
+  "text": "Keep your ankle tracking straight forward, not rolling outward under load."
+ },
+ {
+  "id": "single-leg-calf-raises-12",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 12,
+  "text": "Squeeze as if trying to lift your whole body an extra inch at the top."
+ },
+ {
+  "id": "single-leg-calf-raises-13",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 13,
+  "text": "Match the depth and reps on both legs so neither calf falls behind."
+ },
+ {
+  "id": "single-leg-calf-raises-14",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 14,
+  "text": "Slow, full, patient reps beat fast and shallow every single time."
+ },
+ {
+  "id": "single-leg-calf-raises-15",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 15,
+  "text": "Keep a long spine and tall posture; the work is below the knee, not in the back."
+ },
+ {
+  "id": "single-leg-calf-raises-16",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 16,
+  "text": "Run the rhythm 'stretch, pause, press, squeeze' on every rep."
+ },
+ {
+  "id": "single-leg-calf-raises-17",
+  "exercise": "Single-Leg Calf Raises",
+  "muscle": "Calves",
+  "idx": 17,
+  "text": "On the last reps, hold the bottom stretch a beat longer instead of cutting reps."
+ },
+ {
+  "id": "bench-supported-db-pullover-00",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 0,
+  "text": "Keep a slight, fixed bend in your elbows the whole way — this is a pullover, not a triceps extension."
+ },
+ {
+  "id": "bench-supported-db-pullover-01",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 1,
+  "text": "Reach the dumbbell back behind your head until you feel a deep stretch through your lats and ribcage."
+ },
+ {
+  "id": "bench-supported-db-pullover-02",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 2,
+  "text": "Pull the weight with your armpits, not your hands — let the lats drive the arc."
+ },
+ {
+  "id": "bench-supported-db-pullover-03",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 3,
+  "text": "Take a big breath in as you lower; the expanding ribcage deepens the stretch."
+ },
+ {
+  "id": "bench-supported-db-pullover-04",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 4,
+  "text": "Keep your hips down and core braced so your lower back doesn't arch off the bench."
+ },
+ {
+  "id": "bench-supported-db-pullover-05",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 5,
+  "text": "Pull the dumbbell over your chest in a wide arc, like hugging a barrel from below."
+ },
+ {
+  "id": "bench-supported-db-pullover-06",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 6,
+  "text": "Lower slowly for a three-count — the loaded stretch at the bottom is the whole point."
+ },
+ {
+  "id": "bench-supported-db-pullover-07",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 7,
+  "text": "Keep your upper arms from flaring wide so the tension stays on the lats."
+ },
+ {
+  "id": "bench-supported-db-pullover-08",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 8,
+  "text": "Feel the lats lengthen at the bottom and shorten hard as you pull over the top."
+ },
+ {
+  "id": "bench-supported-db-pullover-09",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 9,
+  "text": "Don't bend the elbows to cheat — near-locked arms keep the lats working, not the triceps."
+ },
+ {
+  "id": "bench-supported-db-pullover-10",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 10,
+  "text": "Squeeze the lats at the top as if crushing the dumbbell down toward your chest."
+ },
+ {
+  "id": "bench-supported-db-pullover-11",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 11,
+  "text": "Keep your shoulder blades down and back; don't let the shoulders shrug toward your ears."
+ },
+ {
+  "id": "bench-supported-db-pullover-12",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 12,
+  "text": "Move only at the shoulders — the rest of your body stays still and grounded."
+ },
+ {
+  "id": "bench-supported-db-pullover-13",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 13,
+  "text": "Go only as deep as your shoulders comfortably allow; the stretch should feel good, never pinchy."
+ },
+ {
+  "id": "bench-supported-db-pullover-14",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 14,
+  "text": "Exhale as you pull over, inhale as you lower — let the breath ride the rep."
+ },
+ {
+  "id": "bench-supported-db-pullover-15",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 15,
+  "text": "Keep the dumbbell tracking over the midline of your body through the whole arc."
+ },
+ {
+  "id": "bench-supported-db-pullover-16",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 16,
+  "text": "This is the loaded lat stretch chin-ups gave you for free — make every rep earn it."
+ },
+ {
+  "id": "bench-supported-db-pullover-17",
+  "exercise": "Bench-Supported DB Pullover",
+  "muscle": "Lats",
+  "idx": 17,
+  "text": "Lighter and deeper beats heavy and shallow here; chase the stretch, not the number."
+ },
+ {
+  "id": "bulgarian-split-squat-00",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 0,
+  "text": "Keep most of your weight on the front heel — the back leg is a kickstand, not a driver."
+ },
+ {
+  "id": "bulgarian-split-squat-01",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 1,
+  "text": "Drop straight down, not forward; your front shin stays close to vertical."
+ },
+ {
+  "id": "bulgarian-split-squat-02",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 2,
+  "text": "Let the back knee sink toward the floor under control on every rep."
+ },
+ {
+  "id": "bulgarian-split-squat-03",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 3,
+  "text": "Drive up by pushing the floor away through your front heel."
+ },
+ {
+  "id": "bulgarian-split-squat-04",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 4,
+  "text": "Stay tall and proud, only a slight forward lean from the hips."
+ },
+ {
+  "id": "bulgarian-split-squat-05",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 5,
+  "text": "Front knee tracks over the toes — don't let it cave inward."
+ },
+ {
+  "id": "bulgarian-split-squat-06",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 6,
+  "text": "Brace your core so your lower back stays neutral as you descend."
+ },
+ {
+  "id": "bulgarian-split-squat-07",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 7,
+  "text": "Go deep enough that your front thigh reaches at least parallel."
+ },
+ {
+  "id": "bulgarian-split-squat-08",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 8,
+  "text": "Let the dumbbells hang straight down at your sides, grip relaxed."
+ },
+ {
+  "id": "bulgarian-split-squat-09",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 9,
+  "text": "Find your balance point first, then add speed to the rep."
+ },
+ {
+  "id": "bulgarian-split-squat-10",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 10,
+  "text": "Squeeze the front glute hard at the top of each rep."
+ },
+ {
+  "id": "bulgarian-split-squat-11",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 11,
+  "text": "Control the descent for a two- to three-count — own the bottom."
+ },
+ {
+  "id": "bulgarian-split-squat-12",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 12,
+  "text": "Keep your hips square; don't let one side rotate open."
+ },
+ {
+  "id": "bulgarian-split-squat-13",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 13,
+  "text": "Finish all your reps on one leg before switching — match the count."
+ },
+ {
+  "id": "bulgarian-split-squat-14",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 14,
+  "text": "Push through the whole foot, not just the toes, on the way up."
+ },
+ {
+  "id": "bulgarian-split-squat-15",
+  "exercise": "Bulgarian Split Squat",
+  "muscle": "Quads",
+  "idx": 15,
+  "text": "If you wobble, slow down and shorten the range until it's solid."
+ },
+ {
+  "id": "db-goblet-squat-00",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 0,
+  "text": "Hold the dumbbell tight to your chest like a goblet — elbows down."
+ },
+ {
+  "id": "db-goblet-squat-01",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 1,
+  "text": "Sit straight down between your hips, not back like a hinge."
+ },
+ {
+  "id": "db-goblet-squat-02",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 2,
+  "text": "Drive your knees out so they track over your toes."
+ },
+ {
+  "id": "db-goblet-squat-03",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 3,
+  "text": "Keep your chest tall and proud the whole way down."
+ },
+ {
+  "id": "db-goblet-squat-04",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 4,
+  "text": "Let your elbows brush the inside of your knees at the bottom."
+ },
+ {
+  "id": "db-goblet-squat-05",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 5,
+  "text": "Sink to at least parallel — thighs level with the floor."
+ },
+ {
+  "id": "db-goblet-squat-06",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 6,
+  "text": "Push the floor apart with your feet to lock in your hips."
+ },
+ {
+  "id": "db-goblet-squat-07",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 7,
+  "text": "Drive up through your mid-foot and heels, not your toes."
+ },
+ {
+  "id": "db-goblet-squat-08",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 8,
+  "text": "Brace your core hard before each rep, like bracing for a push."
+ },
+ {
+  "id": "db-goblet-squat-09",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 9,
+  "text": "Keep your heels flat and planted — never let them lift."
+ },
+ {
+  "id": "db-goblet-squat-10",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 10,
+  "text": "Control the descent; don't drop and bounce out of the bottom."
+ },
+ {
+  "id": "db-goblet-squat-11",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 11,
+  "text": "Keep a long, neutral spine — no rounding as you go deep."
+ },
+ {
+  "id": "db-goblet-squat-12",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 12,
+  "text": "Squeeze your glutes and stand tall at the top of every rep."
+ },
+ {
+  "id": "db-goblet-squat-13",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 13,
+  "text": "Take a breath at the top, brace, descend, then exhale up."
+ },
+ {
+  "id": "db-goblet-squat-14",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 14,
+  "text": "Keep your weight centered over your mid-foot throughout."
+ },
+ {
+  "id": "db-goblet-squat-15",
+  "exercise": "DB Goblet Squat",
+  "muscle": "Quads",
+  "idx": 15,
+  "text": "Knees out, chest up, sit down — that's the whole rep."
+ },
+ {
+  "id": "weighted-db-crunch-00",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 0,
+  "text": "Curl your ribcage toward your pelvis — a short, hard crunch."
+ },
+ {
+  "id": "weighted-db-crunch-01",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 1,
+  "text": "Hold the dumbbell on your chest, or over your forehead for more load."
+ },
+ {
+  "id": "weighted-db-crunch-02",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 2,
+  "text": "Lift your shoulder blades off the floor, not your whole back."
+ },
+ {
+  "id": "weighted-db-crunch-03",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 3,
+  "text": "Don't pull with your neck; lead with the abs."
+ },
+ {
+  "id": "weighted-db-crunch-04",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 4,
+  "text": "Lower under control for a two- to three-count."
+ },
+ {
+  "id": "weighted-db-crunch-05",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 5,
+  "text": "Exhale hard at the top and squeeze the abs."
+ },
+ {
+  "id": "weighted-db-crunch-06",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 6,
+  "text": "Keep your lower back flat on the floor throughout."
+ },
+ {
+  "id": "weighted-db-crunch-07",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 7,
+  "text": "Pause for a beat at the top contraction."
+ },
+ {
+  "id": "weighted-db-crunch-08",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 8,
+  "text": "Keep the movement small and deliberate — it's a curl, not a sit-up."
+ },
+ {
+  "id": "weighted-db-crunch-09",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 9,
+  "text": "Keep constant tension; don't fully relax at the bottom."
+ },
+ {
+  "id": "weighted-db-crunch-10",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 10,
+  "text": "Press the dumbbell over your forehead to increase the load."
+ },
+ {
+  "id": "weighted-db-crunch-11",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 11,
+  "text": "Brace before each rep so the abs do all the work."
+ },
+ {
+  "id": "weighted-db-crunch-12",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 12,
+  "text": "Don't swing the weight to help you up."
+ },
+ {
+  "id": "weighted-db-crunch-13",
+  "exercise": "Weighted DB Crunch",
+  "muscle": "Abs",
+  "idx": 13,
+  "text": "The slower the lowering, the more the abs are worked."
+ },
+ {
+  "id": "flat-db-press-00",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 0,
+  "text": "Lower the dumbbells to the sides of your mid-chest, not up by your shoulders."
+ },
+ {
+  "id": "flat-db-press-01",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 1,
+  "text": "Press up and slightly together, stopping just short of locking out."
+ },
+ {
+  "id": "flat-db-press-02",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 2,
+  "text": "Keep your shoulder blades pinned back and down into the bench."
+ },
+ {
+  "id": "flat-db-press-03",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 3,
+  "text": "Feel a deep stretch across the chest at the bottom of each rep."
+ },
+ {
+  "id": "flat-db-press-04",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 4,
+  "text": "Drive your feet into the floor for a stable, powerful press."
+ },
+ {
+  "id": "flat-db-press-05",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 5,
+  "text": "Keep your forearms stacked vertically under the weight the whole time."
+ },
+ {
+  "id": "flat-db-press-06",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 6,
+  "text": "Push your chest up to meet the dumbbells instead of rounding your shoulders forward."
+ },
+ {
+  "id": "flat-db-press-07",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 7,
+  "text": "Lower under control for a two-count; don't just drop into the bottom."
+ },
+ {
+  "id": "flat-db-press-08",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 8,
+  "text": "Squeeze the dumbbells together at the top to fire the inner chest."
+ },
+ {
+  "id": "flat-db-press-09",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 9,
+  "text": "Keep a hard grip and brace your core before each rep."
+ },
+ {
+  "id": "flat-db-press-10",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 10,
+  "text": "Don't clack them at the top — stop short and keep the pecs loaded."
+ },
+ {
+  "id": "flat-db-press-11",
+  "exercise": "Flat DB Press",
+  "muscle": "Mid chest",
+  "idx": 11,
+  "text": "Leave one clean rep in the tank rather than grinding and losing form."
+ },
+ {
+  "id": "overhead-db-triceps-extension-00",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 0,
+  "text": "Keep your upper arms vertical and close to your ears the entire set."
+ },
+ {
+  "id": "overhead-db-triceps-extension-01",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 1,
+  "text": "Lower the dumbbell behind your head until the triceps stretch deeply."
+ },
+ {
+  "id": "overhead-db-triceps-extension-02",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 2,
+  "text": "Extend by straightening the elbows, not by swinging the arms forward."
+ },
+ {
+  "id": "overhead-db-triceps-extension-03",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 3,
+  "text": "Keep your elbows pointed up and in — don't let them flare out wide."
+ },
+ {
+  "id": "overhead-db-triceps-extension-04",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 4,
+  "text": "Brace your core so your lower back doesn't arch as you reach overhead."
+ },
+ {
+  "id": "overhead-db-triceps-extension-05",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 5,
+  "text": "Control the lowering for a three-count; the overhead stretch is the point."
+ },
+ {
+  "id": "overhead-db-triceps-extension-06",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 6,
+  "text": "Squeeze the triceps hard at the top of each rep."
+ },
+ {
+  "id": "overhead-db-triceps-extension-07",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 7,
+  "text": "Keep your ribs down and stacked over your hips throughout."
+ },
+ {
+  "id": "overhead-db-triceps-extension-08",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 8,
+  "text": "Cup the top end of the dumbbell securely with both hands."
+ },
+ {
+  "id": "overhead-db-triceps-extension-09",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 9,
+  "text": "Pause a beat at the bottom stretch before driving back up."
+ },
+ {
+  "id": "overhead-db-triceps-extension-10",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 10,
+  "text": "Keep the movement all in the elbows; the shoulders stay still."
+ },
+ {
+  "id": "overhead-db-triceps-extension-11",
+  "exercise": "Overhead DB Triceps Extension",
+  "muscle": "Triceps",
+  "idx": 11,
+  "text": "Lighter and deeper beats heavy and short here — chase the stretch."
+ },
+ {
+  "id": "one-arm-db-row-00",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 0,
+  "text": "Drive your elbow toward your back pocket, not out to the side."
+ },
+ {
+  "id": "one-arm-db-row-01",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 1,
+  "text": "Let the dumbbell hang to a full stretch at the bottom of every rep."
+ },
+ {
+  "id": "one-arm-db-row-02",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 2,
+  "text": "Squeeze the lat hard at the top and pause for a beat."
+ },
+ {
+  "id": "one-arm-db-row-03",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 3,
+  "text": "Keep your back flat and your hips square — don't twist to lift."
+ },
+ {
+  "id": "one-arm-db-row-04",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 4,
+  "text": "Pull with your elbow and let your hand be a passive hook."
+ },
+ {
+  "id": "one-arm-db-row-05",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 5,
+  "text": "Row the dumbbell toward your waistline in a slight arc."
+ },
+ {
+  "id": "one-arm-db-row-06",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 6,
+  "text": "Keep your shoulder down and away from your ear as you pull."
+ },
+ {
+  "id": "one-arm-db-row-07",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 7,
+  "text": "Lower for a three-count and feel the lat load up."
+ },
+ {
+  "id": "one-arm-db-row-08",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 8,
+  "text": "Brace your core so your spine stays neutral throughout."
+ },
+ {
+  "id": "one-arm-db-row-09",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 9,
+  "text": "Keep your neck long and gaze at the bench, not the mirror."
+ },
+ {
+  "id": "one-arm-db-row-10",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 10,
+  "text": "Match the reps and depth on both sides exactly."
+ },
+ {
+  "id": "one-arm-db-row-11",
+  "exercise": "One-Arm DB Row",
+  "muscle": "Lats",
+  "idx": 11,
+  "text": "Pull through your hand, sourcing the force from your back."
+ },
+ {
+  "id": "hammer-curl-00",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 0,
+  "text": "Keep your palms facing each other, thumbs up, the whole rep."
+ },
+ {
+  "id": "hammer-curl-01",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 1,
+  "text": "Pin your elbows at your sides; don't let them swing forward."
+ },
+ {
+  "id": "hammer-curl-02",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 2,
+  "text": "Curl your forearm to your shoulder, not the dumbbell to your face."
+ },
+ {
+  "id": "hammer-curl-03",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 3,
+  "text": "Lower all the way to a full stretch — never cut the bottom."
+ },
+ {
+  "id": "hammer-curl-04",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 4,
+  "text": "Keep your wrists firm and straight, like holding two hammers."
+ },
+ {
+  "id": "hammer-curl-05",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 5,
+  "text": "Squeeze at the top for a beat before lowering slow."
+ },
+ {
+  "id": "hammer-curl-06",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 6,
+  "text": "Stand tall and braced; no heaving with the back or hips."
+ },
+ {
+  "id": "hammer-curl-07",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 7,
+  "text": "Control the negative for a two- to three-count."
+ },
+ {
+  "id": "hammer-curl-08",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 8,
+  "text": "Keep tension on the arms; don't rest at the bottom."
+ },
+ {
+  "id": "hammer-curl-09",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 9,
+  "text": "Move both arms in mirrored time, or alternate cleanly."
+ },
+ {
+  "id": "hammer-curl-10",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 10,
+  "text": "Keep your shoulders down and chest proud as you fatigue."
+ },
+ {
+  "id": "hammer-curl-11",
+  "exercise": "Hammer Curl",
+  "muscle": "Brachialis",
+  "idx": 11,
+  "text": "The last reps slow down — never swing to finish a rep."
+ },
+ {
+  "id": "single-leg-rdl-00",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 0,
+  "text": "Hinge at the hip and reach the dumbbell toward the floor, not your chest down."
+ },
+ {
+  "id": "single-leg-rdl-01",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 1,
+  "text": "Let the free leg extend straight behind you as a counterbalance."
+ },
+ {
+  "id": "single-leg-rdl-02",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 2,
+  "text": "Keep a soft, fixed bend in the standing knee throughout."
+ },
+ {
+  "id": "single-leg-rdl-03",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 3,
+  "text": "Stop when the hamstring stretches deeply — that's your depth."
+ },
+ {
+  "id": "single-leg-rdl-04",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 4,
+  "text": "Keep your hips square to the floor; don't let the back hip open up."
+ },
+ {
+  "id": "single-leg-rdl-05",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 5,
+  "text": "Drive the standing hip forward to stand tall and squeeze the glute."
+ },
+ {
+  "id": "single-leg-rdl-06",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 6,
+  "text": "Keep your spine long and flat like a broomstick the whole hinge."
+ },
+ {
+  "id": "single-leg-rdl-07",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 7,
+  "text": "Move slowly and own your balance before adding speed."
+ },
+ {
+  "id": "single-leg-rdl-08",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 8,
+  "text": "Reach the dumbbell close to your standing shin on the way down."
+ },
+ {
+  "id": "single-leg-rdl-09",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 9,
+  "text": "Brace your core so your lower back stays neutral."
+ },
+ {
+  "id": "single-leg-rdl-10",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 10,
+  "text": "Match the reps and depth on both legs."
+ },
+ {
+  "id": "single-leg-rdl-11",
+  "exercise": "Single-Leg RDL",
+  "muscle": "Hamstrings",
+  "idx": 11,
+  "text": "Stay patient — control beats load on this one."
+ },
+ {
+  "id": "reverse-lunge-00",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 0,
+  "text": "Step straight back and drop the back knee toward the floor."
+ },
+ {
+  "id": "reverse-lunge-01",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 1,
+  "text": "Keep most of your weight on the front heel to drive up."
+ },
+ {
+  "id": "reverse-lunge-02",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 2,
+  "text": "Keep your front shin close to vertical; don't let the knee shoot forward."
+ },
+ {
+  "id": "reverse-lunge-03",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 3,
+  "text": "Stay tall through the torso with only a slight forward lean."
+ },
+ {
+  "id": "reverse-lunge-04",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 4,
+  "text": "Control the descent — lower the back knee, don't drop it."
+ },
+ {
+  "id": "reverse-lunge-05",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 5,
+  "text": "Drive up by pushing the floor away through the front heel."
+ },
+ {
+  "id": "reverse-lunge-06",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 6,
+  "text": "Front knee tracks over the toes, never caving inward."
+ },
+ {
+  "id": "reverse-lunge-07",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 7,
+  "text": "Let the dumbbells hang at your sides, grip relaxed."
+ },
+ {
+  "id": "reverse-lunge-08",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 8,
+  "text": "Brace your core so your lower back stays neutral."
+ },
+ {
+  "id": "reverse-lunge-09",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 9,
+  "text": "Squeeze the front glute at the top of each rep."
+ },
+ {
+  "id": "reverse-lunge-10",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 10,
+  "text": "Keep your hips square; don't rotate as you step back."
+ },
+ {
+  "id": "reverse-lunge-11",
+  "exercise": "Reverse Lunge",
+  "muscle": "Quads",
+  "idx": 11,
+  "text": "Finish all reps on one leg before switching, matching the count."
+ },
+ {
+  "id": "db-hip-thrust-00",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 0,
+  "text": "Drive through your heels to lift the hips, not through your toes."
+ },
+ {
+  "id": "db-hip-thrust-01",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 1,
+  "text": "Squeeze your glutes hard at the top until your torso is parallel to the floor."
+ },
+ {
+  "id": "db-hip-thrust-02",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 2,
+  "text": "Tuck your chin and keep your ribs down — don't arch your lower back to finish."
+ },
+ {
+  "id": "db-hip-thrust-03",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 3,
+  "text": "Aim for vertical shins at the top of each rep."
+ },
+ {
+  "id": "db-hip-thrust-04",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 4,
+  "text": "Pause a full beat at the top with the glutes locked."
+ },
+ {
+  "id": "db-hip-thrust-05",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 5,
+  "text": "Lower under control; don't just drop the hips."
+ },
+ {
+  "id": "db-hip-thrust-06",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 6,
+  "text": "Keep the dumbbell pinned across your hip crease with your hands."
+ },
+ {
+  "id": "db-hip-thrust-07",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 7,
+  "text": "Push your knees out slightly in line with your toes."
+ },
+ {
+  "id": "db-hip-thrust-08",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 8,
+  "text": "Keep your core braced so the work stays in the glutes."
+ },
+ {
+  "id": "db-hip-thrust-09",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 9,
+  "text": "Move through a full range — deep at the bottom, locked at the top."
+ },
+ {
+  "id": "db-hip-thrust-10",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 10,
+  "text": "Keep your gaze forward and neck neutral, not cranked back."
+ },
+ {
+  "id": "db-hip-thrust-11",
+  "exercise": "DB Hip Thrust",
+  "muscle": "Glutes",
+  "idx": 11,
+  "text": "Finish every rep with a hard glute squeeze, not a back arch."
+ },
+ {
+  "id": "standing-calf-raise-00",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 0,
+  "text": "Sink the heels as far below the step as they'll go before pressing."
+ },
+ {
+  "id": "standing-calf-raise-01",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 1,
+  "text": "Press all the way up onto the tips of your big toes."
+ },
+ {
+  "id": "standing-calf-raise-02",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 2,
+  "text": "Pause a full second at the top and a full second at the bottom."
+ },
+ {
+  "id": "standing-calf-raise-03",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 3,
+  "text": "Drive up through the big-toe side to keep the ankles honest."
+ },
+ {
+  "id": "standing-calf-raise-04",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 4,
+  "text": "Keep the knees straight but unlocked to bias the gastrocnemius."
+ },
+ {
+  "id": "standing-calf-raise-05",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 5,
+  "text": "Lower slow and controlled; never bounce off the Achilles."
+ },
+ {
+  "id": "standing-calf-raise-06",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 6,
+  "text": "Hold the dumbbells at your sides and stand tall and balanced."
+ },
+ {
+  "id": "standing-calf-raise-07",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 7,
+  "text": "Feel the stretch at the bottom as much as the squeeze up top."
+ },
+ {
+  "id": "standing-calf-raise-08",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 8,
+  "text": "Keep your ankles tracking straight, not rolling outward."
+ },
+ {
+  "id": "standing-calf-raise-09",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 9,
+  "text": "Run the rhythm 'stretch, pause, press, squeeze' every rep."
+ },
+ {
+  "id": "standing-calf-raise-10",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 10,
+  "text": "Stack load with the vest plus dumbbells when bodyweight gets easy."
+ },
+ {
+  "id": "standing-calf-raise-11",
+  "exercise": "Standing Calf Raise",
+  "muscle": "Calves",
+  "idx": 11,
+  "text": "Full, patient reps beat fast and shallow every time."
+ }
+]

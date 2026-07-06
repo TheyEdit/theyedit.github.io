@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Voice Review — Workout Cues</title>
+<style>
+  :root{
+    --bg:#0b0f14; --card:#151b23; --card2:#1c242e; --line:#2a3441;
+    --txt:#e8edf3; --dim:#8b98a8; --dim2:#5b6878;
+    --acc:#4f8ef7; --ok:#34d399; --bad:#f87171; --warn:#fbbf24;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{-webkit-text-size-adjust:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;
+    background:var(--bg);color:var(--txt);line-height:1.45;
+    padding-bottom:calc(90px + env(safe-area-inset-bottom))}
+  .wrap{max-width:640px;margin:0 auto;padding:14px}
+  header{position:sticky;top:0;z-index:20;background:rgba(11,15,20,.94);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
+    padding:calc(10px + env(safe-area-inset-top)) 14px 10px}
+  header .hrow{max-width:640px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px}
+  h1{font-size:17px;font-weight:700;letter-spacing:-.3px}
+  .prog{font-size:13px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .prog b{color:var(--txt)}
+  .filters{max-width:640px;margin:8px auto 0;display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+  .filters::-webkit-scrollbar{display:none}
+  .fbtn{flex:0 0 auto;font-size:13px;font-weight:600;padding:8px 14px;border-radius:99px;
+    border:1px solid var(--line);background:var(--card);color:var(--dim);min-height:36px}
+  .fbtn.on{background:var(--acc);border-color:var(--acc);color:#fff}
+  .exhead{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;
+    color:var(--dim);margin:22px 2px 8px;display:flex;justify-content:space-between;align-items:baseline}
+  .exhead .m{font-weight:500;text-transform:none;letter-spacing:0;color:var(--dim2);font-size:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px}
+  .card.done-approved{border-color:rgba(52,211,153,.35)}
+  .card.done-regen{border-color:rgba(248,113,113,.4)}
+  .ltext{font-size:15px;margin-bottom:12px}
+  .lid{font-size:11px;color:var(--dim2);margin-bottom:4px;font-variant-numeric:tabular-nums}
+  .takes{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+  .take{display:flex;align-items:center;gap:10px;background:var(--card2);
+    border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+  .take.approved{border-color:var(--ok);background:rgba(52,211,153,.08)}
+  .pbtn{flex:0 0 auto;width:46px;height:46px;border-radius:50%;border:none;
+    background:var(--acc);color:#fff;font-size:18px;display:flex;align-items:center;
+    justify-content:center;cursor:pointer}
+  .pbtn.playing{background:var(--warn);color:#000}
+  .pbtn.missing{background:var(--card);color:var(--dim2);border:1px dashed var(--dim2)}
+  .tmeta{flex:1;min-width:0}
+  .tname{font-size:14px;font-weight:700}
+  .tsub{font-size:12px;color:var(--dim2)}
+  .bar{height:4px;border-radius:2px;background:var(--line);margin-top:6px;overflow:hidden}
+  .bar>i{display:block;height:100%;width:0;background:var(--acc);border-radius:2px}
+  .chk{flex:0 0 auto;display:flex;align-items:center;gap:8px;min-height:46px;padding:0 6px;cursor:pointer}
+  .chk input{display:none}
+  .box{width:26px;height:26px;border-radius:8px;border:2px solid var(--dim2);
+    display:flex;align-items:center;justify-content:center;font-size:15px;color:#fff}
+  .chk input:checked+.box{background:var(--ok);border-color:var(--ok)}
+  .chk .cl{font-size:13px;font-weight:600;color:var(--dim)}
+  .regenrow{display:flex;align-items:center;gap:8px;min-height:46px;cursor:pointer;
+    border-top:1px solid var(--line);margin-top:2px;padding-top:8px}
+  .regenrow input{display:none}
+  .regenrow .box{border-radius:8px}
+  .regenrow input:checked+.box{background:var(--bad);border-color:var(--bad)}
+  .regenrow .cl{font-size:14px;font-weight:600;color:var(--dim)}
+  .regenrow input:checked~.cl{color:var(--bad)}
+  textarea{width:100%;margin-top:10px;background:var(--bg);border:1px solid var(--line);
+    border-radius:10px;color:var(--txt);font-family:inherit;font-size:16px;padding:10px;
+    min-height:44px;resize:vertical}
+  textarea::placeholder{color:var(--dim2)}
+  .foot{position:fixed;left:0;right:0;bottom:0;z-index:30;background:rgba(11,15,20,.96);
+    backdrop-filter:blur(8px);border-top:1px solid var(--line);
+    padding:10px 14px calc(10px + env(safe-area-inset-bottom))}
+  .foot .frow{max-width:640px;margin:0 auto;display:flex;gap:8px;align-items:center}
+  .foot .stats{flex:1;font-size:12px;color:var(--dim);line-height:1.3;font-variant-numeric:tabular-nums}
+  .foot .stats b{color:var(--txt)}
+  .ebtn{flex:0 0 auto;background:var(--acc);border:none;color:#fff;font-weight:700;
+    font-size:14px;padding:12px 18px;border-radius:12px;min-height:46px;cursor:pointer}
+  .toast{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;
+    transform:translateX(-50%);background:var(--ok);color:#04291c;font-weight:700;
+    font-size:14px;padding:10px 18px;border-radius:99px;opacity:0;transition:opacity .25s;
+    pointer-events:none;z-index:50}
+  .toast.show{opacity:1}
+  .empty{text-align:center;color:var(--dim2);padding:40px 0;font-size:14px}
+</style>
+</head>
+<body>
+<header>
+  <div class="hrow">
+    <h1>🎙 Cue Voice Review</h1>
+    <div class="prog" id="prog">…</div>
+  </div>
+  <div class="filters" id="filters"></div>
+</header>
+<div class="wrap"><div id="list"><div class="empty">Loading manifest…</div></div></div>
+<div class="foot"><div class="frow">
+  <div class="stats" id="stats"></div>
+  <button class="ebtn" id="exportBtn">Export results</button>
+</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const LS_KEY = "voiceReview.v1";
+let manifest = [], state = {}, filter = "all", audioEl = null, playingKey = null;
+
+const load = () => { try { state = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch(e){ state = {}; } };
+const save = () => localStorage.setItem(LS_KEY, JSON.stringify(state));
+const st = id => state[id] || (state[id] = { approved: [], regen: false, notes: "" });
+const status = id => {
+  const s = state[id]; if (!s) return "todo";
+  if (s.regen) return "regen";
+  if (s.approved && s.approved.length) return "approved";
+  return (s.notes||"").trim() ? "noted" : "todo";
+};
+
+function counts(){
+  let a=0,r=0,t=0;
+  manifest.forEach(l=>{const s=status(l.id); if(s==="approved")a++; else if(s==="regen")r++; else t++;});
+  return {a,r,t};
+}
+
+function renderHeader(){
+  const c = counts();
+  document.getElementById("prog").innerHTML = `<b>${manifest.length-c.t}</b>/${manifest.length} reviewed`;
+  document.getElementById("stats").innerHTML =
+    `<b>${c.a}</b> approved · <b style="color:var(--bad)">${c.r}</b> regen · ${c.t} left`;
+  const fdefs=[["all","All"],["todo","To review"],["approved","Approved"],["regen","Regen"]];
+  document.getElementById("filters").innerHTML = fdefs.map(([k,lab])=>
+    `<button class="fbtn ${filter===k?"on":""}" onclick="setFilter('${k}')">${lab}</button>`).join("");
+}
+function setFilter(f){ filter=f; render(); }
+
+function fmtTake(line, v){
+  const s = st(line.id);
+  const key = `${line.id}_v${v}`;
+  const on = s.approved.includes(v);
+  const playing = playingKey===key;
+  return `<div class="take ${on?"approved":""}" id="tk-${key}">
+    <button class="pbtn ${playing?"playing":""}" id="pb-${key}" onclick="togglePlay('${line.id}',${v})">${playing?"■":"▶"}</button>
+    <div class="tmeta"><div class="tname">Take ${v}</div><div class="tsub" id="ts-${key}">${playing?"playing…":"tap to play"}</div>
+      <div class="bar"><i id="bar-${key}"></i></div></div>
+    <label class="chk"><input type="checkbox" ${on?"checked":""} onchange="toggleApprove('${line.id}',${v},this.checked)">
+      <span class="box">${on?"✓":""}</span><span class="cl">Approve</span></label>
+  </div>`;
+}
+
+function render(){
+  renderHeader();
+  const list = document.getElementById("list");
+  const groups = [];
+  let cur = null;
+  manifest.forEach(l=>{
+    if(filter!=="all"){
+      const s = status(l.id);
+      if(filter==="todo" && s!=="todo" && s!=="noted") return;
+      if(filter==="approved" && s!=="approved") return;
+      if(filter==="regen" && s!=="regen") return;
+    }
+    if(!cur || cur.name!==l.exercise){ cur={name:l.exercise,muscle:l.muscle,lines:[]}; groups.push(cur); }
+    cur.lines.push(l);
+  });
+  if(!groups.length){ list.innerHTML = `<div class="empty">Nothing here — switch filter above.</div>`; return; }
+  list.innerHTML = groups.map(g=>`
+    <div class="exhead"><span>${g.name}</span><span class="m">${g.muscle||""}</span></div>
+    ${g.lines.map(l=>{
+      const s = st(l.id), stt = status(l.id);
+      return `<div class="card ${stt==="approved"?"done-approved":stt==="regen"?"done-regen":""}" id="card-${l.id}">
+        <div class="lid">#${l.idx+1}</div>
+        <div class="ltext">${l.text}</div>
+        <div class="takes">${[1,2,3].map(v=>fmtTake(l,v)).join("")}</div>
+        <label class="regenrow"><input type="checkbox" ${s.regen?"checked":""} onchange="toggleRegen('${l.id}',this.checked)">
+          <span class="box">${s.regen?"✕":""}</span><span class="cl">Approve nothing — regenerate this line</span></label>
+        <textarea placeholder="Notes (what's wrong / how it should sound)…"
+          oninput="setNotes('${l.id}',this.value)">${s.notes||""}</textarea>
+      </div>`;
+    }).join("")}`).join("");
+}
+
+function toggleApprove(id,v,on){
+  const s = st(id);
+  if(on){ if(!s.approved.includes(v)) s.approved.push(v); s.regen=false; }
+  else s.approved = s.approved.filter(x=>x!==v);
+  save(); render();
+}
+function toggleRegen(id,on){
+  const s = st(id);
+  s.regen = on; if(on) s.approved = [];
+  save(); render();
+}
+let notesTimer=null;
+function setNotes(id,val){
+  st(id).notes = val;
+  clearTimeout(notesTimer); notesTimer=setTimeout(()=>{save(); renderHeader();},400);
+}
+
+function togglePlay(id,v){
+  const key = `${id}_v${v}`;
+  if(playingKey===key){ stopAudio(); render(); return; }
+  stopAudio();
+  playingKey = key;
+  audioEl = new Audio(`audio/${id}_v${v}.m4a`);
+  audioEl.addEventListener("error",()=>{
+    const pb=document.getElementById(`pb-${key}`), ts=document.getElementById(`ts-${key}`);
+    if(pb){pb.classList.add("missing");pb.textContent="✕";}
+    if(ts) ts.textContent="not generated yet";
+    playingKey=null;
+  });
+  audioEl.play().catch(()=>{ playingKey=null; render(); });
+  audioEl.addEventListener("timeupdate",()=>{
+    const b=document.getElementById(`bar-${key}`);
+    if(b && audioEl.duration) b.style.width=(audioEl.currentTime/audioEl.duration*100)+"%";
+  });
+  audioEl.addEventListener("ended",()=>{ playingKey=null; render(); });
+  render();
+}
+function stopAudio(){ if(audioEl){ audioEl.pause(); audioEl=null; } playingKey=null; }
+
+function exportResults(){
+  const out = manifest.map(l=>{
+    const s = state[l.id];
+    return { id:l.id, exercise:l.exercise, idx:l.idx, text:l.text,
+      approved:s?s.approved:[], regen:s?!!s.regen:false, notes:s?(s.notes||""):"" ,
+      status: status(l.id) };
+  });
+  const c = counts();
+  const blob = JSON.stringify({ exportedAt:new Date().toISOString(),
+    summary:{approved:c.a, regen:c.r, unreviewed:c.t, total:manifest.length}, lines:out }, null, 1);
+  const doToast = m => { const t=document.getElementById("toast");
+    t.textContent=m; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2200); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(blob).then(()=>doToast("Copied to clipboard ✓"),()=>dl(blob,doToast));
+  } else dl(blob,doToast);
+}
+function dl(blob,doToast){
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([blob],{type:"application/json"}));
+  a.download="voice-review-results.json"; a.click();
+  doToast("Downloaded results file");
+}
+document.getElementById("exportBtn").addEventListener("click",exportResults);
+
+load();
+fetch("manifest.json").then(r=>r.json()).then(m=>{ manifest=m; render(); })
+  .catch(()=>{ document.getElementById("list").innerHTML="<div class='empty'>Failed to load manifest.json</div>"; });
+</script>
+</body>
+</html>
