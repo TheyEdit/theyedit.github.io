@@ -58,6 +58,7 @@ const lbToKg = (lb) => Math.round((lb / 2.20462) * 10) / 10;
 const KG = 0.45359237;
 const dispW = (lb, unit) => (unit === "kg" ? Math.round(lb * KG * 10) / 10 : lb);   // dumbbell/lift weight: lb stays canonical, kg is the converted view
 const uw = (unit) => (unit === "kg" ? "kg" : "lb");
+const dbCount = (mem, ex) => (mem.dbMode && mem.dbMode[ex.name]) || (ex.single ? 1 : 2);   // how many DBs this lift uses right now — synced override, else the exercise default
 const ulen = (unit) => (unit === "kg" ? "cm" : "in");
 // Greek God / Kinobody Ch.14 standards — ratios of total load (the DB pair) to bodyweight, for 5 reps.
 // Barbell-based in the book, so DB numbers run a touch lower for the same person — treat as directional.
@@ -182,7 +183,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0706-1528";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0706-1752";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -542,7 +543,7 @@ const DEFAULT_FOODS = [
   { id: "whites200", label: "Egg whites", basis: "serving", basisGrams: 200, nutr: { kcal: 100, protein: 22, carbs: 1, fat: 0 }, source: "staple" },
   { id: "whey1", label: "Whey", basis: "serving", basisGrams: 30, nutr: { kcal: 120, protein: 24, carbs: 3, fat: 2 }, source: "staple" },
 ];
-const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb", dietUnit: "kg",
+const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb", dietUnit: "kg", dbMode: {},
   nutrition: { goals: { kcal: 2100, protein: 175, carbs: 215, fat: 60, steps: 15000, water: 3000, goalBwLb: 154.32, fiber: 30, sodium: 2300, calcium: 1000, iron: 8, potassium: 3400, caffeine: 400 }, days: {}, foods: DEFAULT_FOODS, meals: [], proxyUrl: "", geminiKey: "", usdaKey: "" },
   sleep: { def: { bed: "23:00", wake: "08:00" }, days: {} } };
 
@@ -685,34 +686,39 @@ const EXERCISES = {
     cues: ["Sink the heels as far below the step as they'll go before pressing.","Press all the way up onto the tips of your big toes.","Pause a full second at the top and a full second at the bottom.","Drive up through the big-toe side to keep the ankles honest.","Keep the knees straight but unlocked to bias the gastrocnemius.","Lower slow and controlled; never bounce off the Achilles.","Hold the dumbbells at your sides and stand tall and balanced.","Feel the stretch at the bottom as much as the squeeze up top.","Keep your ankles tracking straight, not rolling outward.","Run the rhythm 'stretch, pause, press, squeeze' every rep.","Stack load with the vest plus dumbbells when bodyweight gets easy.","Full, patient reps beat fast and shallow every time."] }),
 };
 // PROGRAM — 5 days. Slot = { exercise } with optional { sets, range } override for that day.
+// superset pairs (ss): exactly TWO adjacent slots per id — the pairing pass does not support 3+ slot chains.
 const PROGRAM = [
   { id: 1, focus: "Upper — push", sub: "Chest · Shoulders · Triceps", slots: [
     { exercise: "Incline DB Bench Press" }, { exercise: "Standing DB Shoulder Press" }, { exercise: "Flat DB Press" },
-    { exercise: "DB Lateral Raises" }, { exercise: "Overhead DB Triceps Extension" }, { exercise: "DB Skull Crushers" } ] },
+    { exercise: "DB Lateral Raises", ss: 1 }, { exercise: "DB Skull Crushers", ss: 1 }, { exercise: "Overhead DB Triceps Extension" } ] },
   { id: 2, focus: "Lower", sub: "Quads · Hamstrings · Calves", slots: [
-    { exercise: "Bulgarian Split Squat" }, { exercise: "DB Romanian Deadlift" }, { exercise: "DB Goblet Squat" },
-    { exercise: "Single-Leg RDL" }, { exercise: "Standing Calf Raise" } ] },
-  { id: 3, focus: "Upper — pull", sub: "Back · Rear delts · Biceps", slots: [
+    { exercise: "Bulgarian Split Squat" }, { exercise: "DB Romanian Deadlift" }, { exercise: "Single-Leg RDL" },
+    { exercise: "DB Goblet Squat", ss: 1 }, { exercise: "Standing Calf Raise", ss: 1 } ] },
+  { id: 3, focus: "Upper — pull", sub: "Back · Rear delts · Side delts · Biceps", slots: [
     { exercise: "Chest-Supported DB Row" }, { exercise: "One-Arm DB Row" }, { exercise: "Bent-Over DB Flyes" },
-    { exercise: "Incline DB Curls" }, { exercise: "Hammer Curl" }, { exercise: "Bench-Supported DB Pullover" } ] },
-  { id: 4, focus: "Lower + delts", sub: "Glutes · Quads · Side delts · Calves", slots: [
-    { exercise: "Reverse Lunge" }, { exercise: "DB Hip Thrust" }, { exercise: "DB Goblet Squat", sets: 3, range: [12, 20] },
-    { exercise: "DB Lateral Raises" }, { exercise: "Single-Leg Calf Raises" } ] },
+    { exercise: "DB Lateral Raises", ss: 1 }, { exercise: "Incline DB Curls", ss: 1 },
+    { exercise: "Hammer Curl", ss: 2 }, { exercise: "Bench-Supported DB Pullover", ss: 2 } ] },
+  { id: 4, focus: "Lower", sub: "Glutes · Quads · Calves", slots: [
+    { exercise: "Reverse Lunge" }, { exercise: "DB Hip Thrust" },
+    { exercise: "DB Goblet Squat", sets: 3, range: [12, 20], ss: 1 }, { exercise: "Single-Leg Calf Raises", ss: 1 } ] },
   { id: 5, focus: "Upper — arms/delts/chest", sub: "Arms · Side delts · Chest", slots: [
     { exercise: "Incline DB Bench Press", sets: 3, range: [8, 12] }, { exercise: "DB Lateral Raises" },
-    { exercise: "Chest-Supported DB Row", sets: 3, range: [10, 15] }, { exercise: "Incline DB Curls", sets: 3, range: [10, 12] },
-    { exercise: "Overhead DB Triceps Extension" }, { exercise: "Bent-Over DB Flyes", sets: 3, range: [15, 20] },
-    { exercise: "Weighted DB Crunch" } ] },
+    { exercise: "Chest-Supported DB Row", sets: 3, range: [10, 15] },
+    { exercise: "Incline DB Curls", sets: 3, range: [10, 12], ss: 1 }, { exercise: "Overhead DB Triceps Extension", ss: 1 },
+    { exercise: "Bent-Over DB Flyes", sets: 3, range: [15, 20], ss: 2 }, { exercise: "Weighted DB Crunch", ss: 2 } ] },
 ];
 // how many days per cycle a lift appears (used by projection + volume reasoning; never hardcoded)
 const exerciseFreq = (name) => PROGRAM.reduce((n, d) => n + d.slots.filter((s) => s.exercise === name).length, 0);
 // resolve a day's slots into { ex, sets, range } with per-slot overrides merged over the library defaults
 const daySlots = (dayId) => {
   const day = PROGRAM.find((d) => d.id === dayId) || PROGRAM[0];
-  return day.slots.map((s) => { const ex = EXERCISES[s.exercise]; return { ex, sets: s.sets ?? ex.sets, range: s.range ?? ex.range }; });
+  return day.slots.map((s) => { const ex = EXERCISES[s.exercise]; return { ex, sets: s.sets ?? ex.sets, range: s.range ?? ex.range, ss: s.ss }; });
 };
 // dev hook: exposes the static program (NOT user data) so progress tooling / debugging can read it
 if (typeof window !== "undefined") window.__wk = { EXERCISES, PROGRAM, exerciseFreq, daySlots };
+// program-shape fingerprint: stale live sessions are discarded, not misattributed
+const daySig = (d) => daySlots(d).map((s) => s.ex.name).join("|");
+const liveValid = (l) => !!(l && l.sig && l.sig === daySig(l.day));
 
 // fill any missing per-lift prescription from logged weight (or library start), at range bottom
 const seedTargets = (mem) => {
@@ -783,11 +789,23 @@ function buildStraightSets(ex, exIndex, nSets, range, target) {
 }
 // build a full day's plan from PROGRAM + per-lift prescription in mem.targets
 function buildDayPlan(dayId, mem) {
-  return daySlots(dayId).map((slot, i) => {
+  const items = daySlots(dayId).map((slot, i) => {
     const ex = slot.ex;
     const target = (mem.targets && mem.targets[ex.name]) || { load: ex.startLoad, reps: slot.range[0] };
     return { ex, w: target.load, target, sets: buildStraightSets(ex, i, slot.sets, slot.range, target), order: buildOrder(ex.cues, mem.recentCues[ex.name]) };
   });
+  // superset plumbing: two ADJACENT slots sharing an `ss` id form one pair. A = first, B = second.
+  // Zero rest after A-sets (the plate change IS the transition); one full rest after B-sets = max of both.
+  const slots = daySlots(dayId);
+  items.forEach((it, i) => {
+    const s = slots[i];
+    it.pair = null;
+    if (s.ss != null) {
+      if (i + 1 < items.length && slots[i + 1].ss === s.ss) it.pair = { id: s.ss, role: "A", partnerIdx: i + 1, postRest: Math.max(it.ex.rest, items[i + 1].ex.rest) };
+      else if (i > 0 && slots[i - 1].ss === s.ss) it.pair = { id: s.ss, role: "B", partnerIdx: i - 1, postRest: Math.max(it.ex.rest, items[i - 1].ex.rest) };
+    }
+  });
+  return items;
 }
 const dayMeta = (dayId) => PROGRAM.find((d) => d.id === dayId) || PROGRAM[0];
 const nextDayId = (dayId) => { const ids = PROGRAM.map((d) => d.id); const i = ids.indexOf(dayId); return ids[(i + 1) % ids.length]; };
@@ -818,14 +836,15 @@ function nextPrescription({ range, target, work, last, stall }) {
 
 // ── honest assessment (pure) ── thisLifts/lastLifts = { name: { top:{w,r}, tonnage } } snapshots
 function assess(thisLifts, lastLifts) {
+  const totW = (t, name) => t.w * (t.dbs || (EXERCISES[name]?.single ? 1 : 2));   // per-DB weight → TOTAL load, using the DB count logged with it
   const rows = []; let tThis = 0, tLast = 0, down = 0; const pcts = [];
   Object.keys(thisLifts).forEach((name) => {
     const cur = thisLifts[name], prev = lastLifts && lastLifts[name];
     tThis += cur.tonnage || 0;
-    const eNew = e1rm(cur.top.w, cur.top.r);
+    const eNew = e1rm(totW(cur.top, name), cur.top.r);
     let pct = null, dir = "flat", eOld = null;
     if (prev) {
-      eOld = e1rm(prev.top.w, prev.top.r); tLast += prev.tonnage || 0;
+      eOld = e1rm(totW(prev.top, name), prev.top.r); tLast += prev.tonnage || 0;
       if (eOld > 0) { pct = ((eNew - eOld) / eOld) * 100; dir = pct > 0.5 ? "up" : pct < -0.5 ? "down" : "flat"; if (dir === "down") down++; pcts.push(pct); }
     }
     rows.push({ name, eOld, eNew, pct, dir });
@@ -853,7 +872,7 @@ function planForward(range, target, freq, weeks = 26) {
   }
   return out;
 }
-if (typeof window !== "undefined" && window.__wk) { window.__wk.nextPrescription = nextPrescription; window.__wk.assess = assess; window.__wk.planForward = planForward; }
+if (typeof window !== "undefined" && window.__wk) { window.__wk.nextPrescription = nextPrescription; window.__wk.assess = assess; window.__wk.planForward = planForward; window.__wk.buildDayPlan = buildDayPlan; }
 
 const SET_EXEC = 40, TRANSITION = 90;
 const fmtClock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -938,14 +957,16 @@ const ProgressChart = React.memo(function ProgressChart({ mem }) {
   const ex = ALL_EX.find((e) => e.name === sel);
   const rp = ex.repProgress;
   const pref = mem.unit || "lb";
+  const cnt = dbCount(mem, ex);
+  const totalOf = (h) => h.w * (h.dbs || (ex.single ? 1 : 2));   // a history point's per-DB weight → TOTAL load, using the DB count logged with it
   const D = (v) => (rp ? v : dispW(v, pref));                 // convert weights for display; reps pass through
-  const unit = rp ? " reps" : ` ${uw(pref)}`;
+  const unit = rp ? " reps" : ` total ${uw(pref)}`;
   const hist = (mem.history?.[ex.name]) || [];
   const target = mem.targets?.[ex.name] || { load: ex.startLoad, reps: ex.range[0] };
   const freq = exerciseFreq(ex.name);
-  const w0 = rp ? (hist.length ? hist[hist.length - 1].r : ex.range[0]) : target.load;
+  const w0 = rp ? (hist.length ? hist[hist.length - 1].r : ex.range[0]) : target.load * cnt;
   const nowMs = Date.now();
-  const histPts = hist.map((h) => ({ week: Math.round((new Date(h.t).getTime() - nowMs) / (7 * 864e5)), w: rp ? h.r : h.w, r: h.r }));
+  const histPts = hist.map((h) => ({ week: Math.round((new Date(h.t).getTime() - nowMs) / (7 * 864e5)), w: rp ? h.r : totalOf(h), r: h.r }));
 
   // PLAN-DRIVEN forecast: fast-forward the actual progression rules if every target is hit, 26 weeks.
   const fwd = planForward(ex.range, target, freq);
@@ -953,15 +974,15 @@ const ProgressChart = React.memo(function ProgressChart({ mem }) {
   const minW = Math.min(0, ...histPts.map((p) => p.week));
   const map = new Map();
   for (let wk = minW; wk <= 26; wk++) map.set(wk, { week: wk });
-  for (let wk = 0; wk <= 26; wk++) { const f = fwdAt(wk); map.get(wk).projected = rp ? f.reps : Math.round(f.load * 10) / 10; }
+  for (let wk = 0; wk <= 26; wk++) { const f = fwdAt(wk); map.get(wk).projected = rp ? f.reps : Math.round(f.load * cnt * 10) / 10; }
   histPts.forEach((p) => { const o = map.get(p.week) || { week: p.week }; o.actual = p.w; o.reps = p.r; map.set(p.week, o); });
-  map.get(0).actual = rp ? w0 : target.load;
+  map.get(0).actual = w0;
   const data = [...map.values()].sort((a, b) => a.week - b.week).map((d) => ({ week: d.week, actual: d.actual != null ? D(d.actual) : undefined, projected: d.projected != null ? D(d.projected) : undefined, reps: d.reps }));
 
-  const best = rp ? hist.reduce((b, h) => (!b || h.r > b.r ? h : b), null) : hist.reduce((b, h) => (!b || h.w > b.w || (h.w === b.w && h.r > b.r) ? h : b), null);
-  const bestVal = best ? (rp ? best.r : best.w) : w0;
+  const best = rp ? hist.reduce((b, h) => (!b || h.r > b.r ? h : b), null) : hist.reduce((b, h) => (!b || totalOf(h) > totalOf(b) || (totalOf(h) === totalOf(b) && h.r > b.r) ? h : b), null);
+  const bestVal = best ? (rp ? best.r : totalOf(best)) : w0;
   const personalized = hist.length >= 2;
-  const milestones = [[0, "today"], [4, "1 mo"], [12, "3 mo"], [26, "6 mo"]].map(([wk, label]) => { const f = fwdAt(wk); return { label, val: rp ? f.reps : f.load, e1: Math.round(f.e1rm) }; });
+  const milestones = [[0, "today"], [4, "1 mo"], [12, "3 mo"], [26, "6 mo"]].map(([wk, label]) => { const f = fwdAt(wk); return { label, val: rp ? f.reps : f.load * cnt, e1: Math.round(f.e1rm) }; });
 
   return (
     <div className="mt-8 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
@@ -1014,12 +1035,12 @@ const ProgressChart = React.memo(function ProgressChart({ mem }) {
         {milestones.map((m) => (
           <div key={m.label} className="rounded-lg border p-2 text-center" style={{ borderColor: C.edge }}>
             <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>{m.label}</p>
-            <p className="font-mono text-sm font-bold" style={{ color: C.bone }}>{D(m.val)}<span className="text-[10px] font-normal" style={{ color: C.ash }}>{rp ? "" : ` ${uw(pref)}`}</span></p>
+            <p className="font-mono text-sm font-bold" style={{ color: C.bone }}>{D(m.val)}<span className="text-[10px] font-normal" style={{ color: C.ash }}>{rp ? "" : ` total ${uw(pref)}`}</span></p>
             {!rp && <p className="font-mono text-[8px]" style={{ color: C.ashDim }}>e1RM {D(m.e1)}</p>}
           </div>
         ))}
       </div>
-      <p className="mt-3 font-mono text-[9px]" style={{ color: C.ashDim }}>plan = if you hit every target ({freq}×/week) · {rp ? "reps" : ex.single ? "single DB" : "per hand"} · theoretical ceiling, your logged line shows reality</p>
+      <p className="mt-3 font-mono text-[9px]" style={{ color: C.ashDim }}>plan = if you hit every target ({freq}×/week) · {rp ? "reps" : dbCount(mem, ex) === 1 ? "single DB" : "per hand"} · theoretical ceiling, your logged line shows reality</p>
     </div>
   );
 });
@@ -2149,7 +2170,7 @@ function App() {
       if (s && hasStore && !(await localTs())) await bumpChange();
       setDay(m.lastDay ? nextDayId(m.lastDay) : 1);
       const live = hasStore ? await loadLive() : null;
-      const liveOk = live && Array.isArray(live.done) && (live.done.length > 0 || live.active);
+      const liveOk = live && Array.isArray(live.done) && (live.done.length > 0 || live.active) && liveValid(live);
       if (liveOk && Date.now() - (live.ts || 0) < 86400000) { setPending(live); liveRef.current = live; }
       const saved = hasStore ? await loadSyncCfg() : null;
       let cfg = saved && saved.repo && saved.token ? saved : null;   // a prior unlock persisted the cfg here → no password needed again
@@ -2183,7 +2204,7 @@ function App() {
     await LS.set(TSKEY, adoptTs);        // local "change" clock == what we just adopted
     await setSyncedTs(adoptTs);          // ...and we are in sync with it
     if (setTagToo) setDay(rmem.lastDay ? nextDayId(rmem.lastDay) : 1);   // adopted: suggest next day (auto-resume overrides to the live session's day if present)
-    const liveOk = rlive && Array.isArray(rlive.done) && (rlive.done.length > 0 || rlive.active);
+    const liveOk = rlive && Array.isArray(rlive.done) && (rlive.done.length > 0 || rlive.active) && liveValid(rlive);
     if (liveOk) { liveRef.current = rlive; if (hasStore) await LS.set(LIVE, rlive); setPending(rlive); }
     else { liveRef.current = null; if (hasStore) await LS.del(LIVE); setPending(null); }
     liveClearedRef.current = false;                 // we adopted remote state, not a local clear
@@ -2196,7 +2217,7 @@ function App() {
     const lt = await localTs();
     const remoteLive = remote && remote.data ? remote.data.live : null;
     let live = liveRef.current;
-    if (!live && !liveClearedRef.current && remoteLive && Array.isArray(remoteLive.done) && (remoteLive.done.length > 0 || remoteLive.active)) {
+    if (!live && !liveClearedRef.current && remoteLive && Array.isArray(remoteLive.done) && (remoteLive.done.length > 0 || remoteLive.active) && liveValid(remoteLive)) {
       live = remoteLive; liveRef.current = remoteLive; if (hasStore) await LS.set(LIVE, remoteLive); setPending(remoteLive);   // adopt the other device's session locally too, so it shows here as well
     }
     if (liveClearedRef.current) live = null;
@@ -2313,7 +2334,7 @@ function App() {
     return buildDayPlan(day, mem);
   }, [day, mem, loaded]);
 
-  const estMin = useMemo(() => { let t = 0; plan.forEach((it) => { it.sets.forEach((s) => { t += SET_EXEC + s.rest; }); t += TRANSITION; }); return Math.round(t / 60); }, [plan]);
+  const estMin = useMemo(() => { let t = 0; plan.forEach((it) => { it.sets.forEach((s) => { t += SET_EXEC + (it.pair ? (it.pair.role === "A" && s.kind === "work" ? 0 : it.pair.postRest) : s.rest); }); t += TRANSITION; }); return Math.round(t / 60); }, [plan]);
 
   const [active, setActive] = useState(null);
   const [cue, setCue] = useState("");
@@ -2325,6 +2346,9 @@ function App() {
   const [openInfo, setOpenInfo] = useState(null);
   const [confirm, setConfirm] = useState(null);   // null | "finish" | "reset"
   const [pending, setPending] = useState(null);    // saved in-progress session offered for resume
+  const [brokenPairs, setBrokenPairs] = useState(() => new Set());   // per-session only: "straight sets today"
+  const pairActive = (item) => !!(item.pair && !brokenPairs.has(`${day}-${item.pair.id}`));
+  const breakPair = (pairId) => setBrokenPairs((b) => { const n = new Set(b); const k = `${day}-${pairId}`; n.has(k) ? n.delete(k) : n.add(k); return n; });
   const cursors = useRef({});
   const audioCtx = useRef(null);
   const skipNextReset = useRef(false);
@@ -2388,7 +2412,7 @@ function App() {
   useEffect(() => {
     if (!loaded) return;
     const started = done.size > 0 || active !== null;
-    const liveObj = started ? { day, logs, done: [...done], active, ts: Date.now() } : (pending || null);
+    const liveObj = started ? { day, logs, done: [...done], active, ts: Date.now(), sig: daySig(day) } : (pending || null);
     liveRef.current = liveObj;
     if (hasStore && started) saveLive(liveObj);
     // Only mark the device "dirty" (bump the change clock + push) when the session GENUINELY changed —
@@ -2429,10 +2453,28 @@ function App() {
     if (lf && lf.key !== key) setLogs((L) => (L[lf.key] && L[lf.key].restActual == null ? { ...L, [lf.key]: { ...L[lf.key], restActual: Math.round((now - lf.at) / 1000) } } : L));   // real rest since the last set finished
     setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), startedAt: now } }));
     setActive(key); setOpenInfo(null); } };
-  const finishSet = (set) => { const key = active; const now = Date.now(); primeAudio();
-    setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), finishedAt: now, restPrescribed: set.rest } }));
+  const finishSet = (set, exIdx) => { const key = active; const now = Date.now(); primeAudio();
+    // superset rest: A-set with the partner's same-round set still pending → NO timer (the plate
+    // change is the transition); B-set (or A once the round is complete) → one full rest = max of the pair.
+    const item = plan[exIdx];
+    let effRest = set.rest;
+    if (set.kind === "work" && item && pairActive(item)) {
+      if (item.pair.role === "A") {
+        const partner = plan[item.pair.partnerIdx];
+        const myWork = item.sets.filter((s) => s.kind === "work");
+        const round = myWork.indexOf(set);
+        const pWork = partner ? partner.sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "work") : [];
+        const pSet = pWork[round];
+        if (pSet && !done.has(`${item.pair.partnerIdx}-${pSet.si}`)) effRest = 0;
+        else effRest = item.pair.postRest;
+      } else effRest = item.pair.postRest;
+    }
+    setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), finishedAt: now, restPrescribed: effRest, dbs: dbCount(mem, plan[exIdx].ex), ...(effRest === 0 ? { restEndedVia: "superset" } : {}) } }));
     lastFinishRef.current = { key, at: now };
-    setActive(null); setCue(""); setRestLeft(set.rest); setRest({ key, endAt: now + set.rest * 1000, total: set.rest }); setOpenInfo(null); };
+    setActive(null); setCue("");
+    if (effRest > 0) { setRestLeft(effRest); setRest({ key, endAt: now + effRest * 1000, total: effRest }); }
+    else { setDone((d) => new Set(d).add(key)); }   // zero-rest superset transition — no rest phase to mark it done, so do it here
+    setOpenInfo(null); };
   const skipRest = () => { const key = rest.key, now = Date.now();
     setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), restEndedVia: "skip", restAppElapsed: L[key]?.finishedAt ? Math.round((now - L[key].finishedAt) / 1000) : null } }));
     setDone((d) => new Set(d).add(rest.key)); setRest(null); setOpenInfo(null); };
@@ -2458,7 +2500,7 @@ function App() {
       const work = item.sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "work");
       const range = work[0]?.s.range || item.ex.range;
       const loggedKeys = work.map((x) => `${exIdx}-${x.si}`).filter((k) => done.has(k));
-      const logged = loggedKeys.map((k) => ({ w: logs[k].weight, r: logs[k].reps, e: logs[k].e }));
+      const logged = loggedKeys.map((k) => ({ w: logs[k].weight, r: logs[k].reps, e: logs[k].e, dbs: logs[k].dbs }));
       const c = cursors.current[exIdx] ?? 0; recentCues[name] = item.order.slice(0, c);   // cue rotation memory
       if (!logged.length) return;                                                          // skip lifts you didn't log
       const target = newTargets[name] || { load: item.target.load, reps: range[0] };
@@ -2466,14 +2508,14 @@ function App() {
       newTargets[name] = { load: res.load, reps: res.reps };
       newWeights[name] = res.load;
       newStalls[name] = res.stall;
-      changes.push({ name, decision: res.decision, fromLoad: target.load, toLoad: res.load, fromReps: target.reps, toReps: res.reps, single: !!item.ex.single });
-      const single = !!item.ex.single;
-      const tonnage = logged.reduce((a, s) => a + s.w * s.r * (single ? 2 : 1), 0);
+      const cnt = dbCount(mem, item.ex);
+      changes.push({ name, decision: res.decision, fromLoad: target.load, toLoad: res.load, fromReps: target.reps, toReps: res.reps, single: cnt === 1 });
+      const tonnage = logged.reduce((a, s) => a + s.w * s.r * (s.dbs || cnt), 0);
       const topS = logged.reduce((b, s) => (!b || e1rm(s.w, s.r) > e1rm(b.w, b.r) ? s : b), null);
-      snap.lifts[name] = { sets: logged, top: { w: topS.w, r: topS.r, e: topS.e }, tonnage };
-      newHistory[name] = [...(newHistory[name] || []), { t: stamp, w: topS.w, r: topS.r }].slice(-40);
+      snap.lifts[name] = { sets: logged, top: { w: topS.w, r: topS.r, e: topS.e, dbs: topS.dbs || cnt }, tonnage };
+      newHistory[name] = [...(newHistory[name] || []), { t: stamp, w: topS.w, r: topS.r, dbs: topS.dbs || cnt }].slice(-40);
       const sh = { ...(newSetHistory[name] || {}) };
-      work.forEach((x) => { const k = `${exIdx}-${x.si}`; if (done.has(k)) sh[x.s.label] = [...(sh[x.s.label] || []), { t: stamp, w: logs[k].weight, r: logs[k].reps, e: logs[k].e }].slice(-30); });
+      work.forEach((x) => { const k = `${exIdx}-${x.si}`; if (done.has(k)) sh[x.s.label] = [...(sh[x.s.label] || []), { t: stamp, w: logs[k].weight, r: logs[k].reps, e: logs[k].e, dbs: logs[k].dbs }].slice(-30); });
       newSetHistory[name] = sh;
     });
 
@@ -2486,7 +2528,7 @@ function App() {
     plan.forEach((item, exIdx) => {
       const work = item.sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "work");
       work.forEach((x) => { const k = `${exIdx}-${x.si}`; if (done.has(k)) { const lg = logs[k] || {};
-        auditSets.push({ ex: item.ex.name, set: x.s.label, w: lg.weight, r: lg.reps, e: lg.e || null,
+        auditSets.push({ ex: item.ex.name, set: x.s.label, w: lg.weight, r: lg.reps, e: lg.e || null, dbs: lg.dbs ?? null,
           startedAt: isoOrNull(lg.startedAt), finishedAt: isoOrNull(lg.finishedAt),
           restPrescribed: lg.restPrescribed ?? null, restEndedVia: lg.restEndedVia ?? null,
           restAppElapsed: lg.restAppElapsed ?? null, restActual: lg.restActual ?? null }); } });
@@ -2520,6 +2562,15 @@ function App() {
 
   const setBody = async (patch) => { const body = { ...(mem.body || {}), ...patch }; const nm = { ...mem, body }; if (hasStore) await saveState(nm); setMem(nm); };
   const setUnit = async (u) => { const nm = { ...mem, unit: u }; if (hasStore) await saveState(nm); setMem(nm); };
+  // flip an exercise 2⇄1 DB. Converts the prescription so TOTAL load carries over (2×30 → 1×60),
+  // rounded to a real DB step, then double progression resumes from there.
+  const setDbMode = async (name, count) => { const ex = EXERCISES[name]; const old = dbCount(mem, ex);
+    if (count === old) return;
+    const t = (mem.targets || {})[name];
+    const newTargets = t ? { ...mem.targets, [name]: { ...t, load: nearest(t.load * old / count) } } : mem.targets;
+    const newWeights = (mem.weights || {})[name] != null ? { ...mem.weights, [name]: nearest(mem.weights[name] * old / count) } : mem.weights;
+    const nm = { ...mem, dbMode: { ...(mem.dbMode || {}), [name]: count }, targets: newTargets, weights: newWeights };
+    if (hasStore) await saveState(nm); setMem(nm); };
   const setDietUnit = async (u) => { const nm = { ...mem, dietUnit: u }; if (hasStore) await saveState(nm); setMem(nm); };
 
   // ── diet handlers (each persists locally + rides the existing sync, like setBody) ──
@@ -2824,10 +2875,27 @@ function App() {
         <div className="mt-6 space-y-4">
           {plan.map((item, exIdx) => {
             const chg = mem.lastChanges?.[item.ex.name];
+            const cnt = dbCount(mem, item.ex);
             const px = `${exIdx}-`;
             const exLocked = (active && active.startsWith(px)) || (rest && rest.key.startsWith(px)) || [...done].some((k) => k.startsWith(px));
+            const joined = pairActive(item);
+            const cardCls = "rounded-2xl border p-5"
+              + (joined && item.pair.role === "A" ? " rounded-b-none border-b-0" : "")
+              + (joined && item.pair.role === "B" ? " rounded-t-none border-t-0 -mt-4" : "");
             return (
-            <div key={item.ex.name} className="rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
+            <div key={item.ex.name} className={cardCls} style={{ background: C.card, borderColor: C.edge }}>
+              {item.pair && item.pair.role === "B" && joined && (
+                <div className="-mx-5 -mt-5 mb-3 flex items-center justify-between border-b px-5 py-1.5" style={{ borderColor: C.goldDim, background: "#1A1609" }}>
+                  <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>superset · no rest between</span>
+                  <button onClick={() => breakPair(item.pair.id)} className="flex min-h-[32px] items-center font-mono text-[9px] uppercase tracking-wider active:scale-95" style={{ color: C.ashDim }}>straight sets today</button>
+                </div>
+              )}
+              {item.pair && item.pair.role === "B" && !joined && (
+                <div className="-mx-5 -mt-5 mb-3 flex items-center justify-between border-b px-5 py-1.5" style={{ borderColor: C.edge, background: "#15120A" }}>
+                  <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>superset off — tap to restore</span>
+                  <button onClick={() => breakPair(item.pair.id)} className="flex min-h-[32px] items-center font-mono text-[9px] uppercase tracking-wider active:scale-95" style={{ color: C.gold }}>restore</button>
+                </div>
+              )}
               <div className="flex items-baseline gap-3">
                 <span className="font-mono text-xs" style={{ color: C.gold }}>{String(exIdx + 1).padStart(2, "0")}</span>
                 <div className="flex-1">
@@ -2889,9 +2957,10 @@ function App() {
                   const rp = item.ex.repProgress;
                   const recs = mem.setHistory?.[item.ex.name]?.[set.label] || [];
                   const showPct = set.kind === "work" && recs.length > 0;
-                  const curE = e1rm(log.weight, log.reps);
-                  const overallPct = !showPct ? 0 : rp ? (log.reps / recs[0].r - 1) * 100 : (curE / e1rm(recs[0].w, recs[0].r) - 1) * 100;
-                  const lastPct = !showPct ? 0 : rp ? (log.reps / recs[recs.length - 1].r - 1) * 100 : (curE / e1rm(recs[recs.length - 1].w, recs[recs.length - 1].r) - 1) * 100;
+                  const totW = (w, dbs, fb) => w * (dbs || fb);   // per-DB weight → TOTAL load; fallback handles unstamped history
+                  const curE = e1rm(totW(log.weight, log.dbs, cnt), log.reps);
+                  const overallPct = !showPct ? 0 : rp ? (log.reps / recs[0].r - 1) * 100 : (curE / e1rm(totW(recs[0].w, recs[0].dbs, item.ex.single ? 1 : 2), recs[0].r) - 1) * 100;
+                  const lastPct = !showPct ? 0 : rp ? (log.reps / recs[recs.length - 1].r - 1) * 100 : (curE / e1rm(totW(recs[recs.length - 1].w, recs[recs.length - 1].dbs, item.ex.single ? 1 : 2), recs[recs.length - 1].r) - 1) * 100;
                   return (
                     <div key={key} className="rounded-xl border" style={{ borderColor: isActive ? C.activeEdge : "transparent", background: isActive ? "#1F1A0E" : "transparent" }}>
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-2 px-2 py-2">
@@ -2902,7 +2971,11 @@ function App() {
                           ) : (
                             <>
                               <Stepper value={log.weight} onStep={(d) => stepW(key, d, set)} minW={34} disabled={isDone} label="weight" fmt={(v) => dispW(v, unit)} />
-                              <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{item.ex.single ? `${uw(unit)} · 1 DB` : `${uw(unit)}/hand`}</span>
+                              <button onClick={() => setDbMode(item.ex.name, cnt === 1 ? 2 : 1)} aria-label="switch between one and two dumbbells"
+                                disabled={sessionStarted} title={sessionStarted ? "finish or reset the session to switch" : undefined}
+                                className="flex min-h-[32px] items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] active:scale-95" style={{ borderColor: C.edge, color: C.ash, opacity: sessionStarted ? 0.45 : 1 }}>
+                                {cnt === 1 ? `${uw(unit)} · 1 DB` : `${uw(unit)}/hand · 2 DB`}<ArrowLeftRight size={10} />
+                              </button>
                               <span className="font-mono text-xs" style={{ color: C.ash }}>×</span>
                             </>
                           )}
@@ -2917,7 +2990,7 @@ function App() {
                           ) : isActive ? (
                             <>
                               <button onClick={cancelSet} aria-label="cancel set" className="flex h-9 w-9 items-center justify-center rounded-full border active:scale-90" style={{ borderColor: C.edge, color: C.ash }}><X size={14} /></button>
-                              <button onClick={() => finishSet(set)} className="flex items-center gap-1.5 rounded-full px-4 py-1.5 font-mono text-xs font-bold active:scale-95" style={{ background: C.gold, color: C.bg }}><Check size={13} /> Finish</button>
+                              <button onClick={() => finishSet(set, exIdx)} className="flex items-center gap-1.5 rounded-full px-4 py-1.5 font-mono text-xs font-bold active:scale-95" style={{ background: C.gold, color: C.bg }}><Check size={13} /> Finish</button>
                             </>
                           ) : isResting ? null : (
                             <button onClick={() => startSet(key)} disabled={busy} aria-label="start set" className="flex items-center gap-1.5 rounded-full border px-4 py-1.5 font-mono text-xs active:scale-95"
@@ -2926,7 +2999,7 @@ function App() {
                         </div>
                       </div>
                       <div className="px-2 pb-1.5 pl-7 font-mono text-[10px]" style={{ color: C.ash }}>
-                        {rp ? "bodyweight" : item.ex.single ? `${dispW(log.weight, unit)} ${uw(unit)}` : `${dispW(log.weight * 2, unit)} ${uw(unit)} total`}{isWarm ? " · warm-up" : `  ·  ${set.repsLabel}${set.aim ? ` · aim ${set.aim}` : ""}`}
+                        {rp ? "bodyweight" : cnt === 1 ? `${dispW(log.weight, unit)} ${uw(unit)}` : `${dispW(log.weight * 2, unit)} ${uw(unit)} total`}{isWarm ? " · warm-up" : `  ·  ${set.repsLabel}${set.aim ? ` · aim ${set.aim}` : ""}`}
                         <span style={{ color: C.ashDim }}>{edited && !rp ? `  ·  proj ${dispW(set.load, unit)} × ${set.repsNum}` : ""}</span>
                       </div>
                       {isDone && !isWarm && (
@@ -2964,7 +3037,7 @@ function App() {
                           <div className="mt-2 h-1 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
                             <div className="h-full rounded-full" style={{ width: `${rest.total ? (restLeft / rest.total) * 100 : 0}%`, background: C.gold, transition: "width .5s linear" }} />
                           </div>
-                          <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>logged {rp ? "bodyweight" : `${dispW(log.weight, unit)} ${uw(unit)}${item.ex.single ? "" : "/hand"}`} × {log.reps} reps — adjust above if that's off</p>
+                          <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>logged {rp ? "bodyweight" : `${dispW(log.weight, unit)} ${uw(unit)}${cnt === 1 ? "" : "/hand"}`} × {log.reps} reps — adjust above if that's off</p>
                           <div className="mt-2 flex gap-2">
                             <button onClick={addRest} aria-label="add 30 seconds rest" className="rounded-full border px-3 py-1 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>+30s</button>
                             <button onClick={skipRest} aria-label="skip rest" className="flex items-center gap-1 rounded-full border px-3 py-1 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}><SkipForward size={11} /> Skip</button>
@@ -2977,8 +3050,16 @@ function App() {
               </div>
 
               <p className="mt-3 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>
-                {item.ex.type === "rpt" ? "reverse pyramid · −10% per set · rest " : "straight sets · rest "}{fmtRest(item.ex.rest)}
-                {exIdx === 0 && item.ex.type === "rpt" ? " · warm-up ramp first" : exIdx === 1 && item.ex.type === "rpt" ? " · one ramp set" : ""}
+                {joined && item.pair.role === "A" ? (
+                  <>superset with {plan[item.pair.partnerIdx]?.ex.name} · no rest → partner</>
+                ) : joined && item.pair.role === "B" ? (
+                  <>superset · rest {fmtRest(item.pair.postRest)} after each round</>
+                ) : (
+                  <>
+                    {item.ex.type === "rpt" ? "reverse pyramid · −10% per set · rest " : "straight sets · rest "}{fmtRest(item.ex.rest)}
+                    {exIdx === 0 && item.ex.type === "rpt" ? " · warm-up ramp first" : exIdx === 1 && item.ex.type === "rpt" ? " · one ramp set" : ""}
+                  </>
+                )}
               </p>
             </div>
           );})}
