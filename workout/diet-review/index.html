@@ -32,7 +32,7 @@
 <script type="text/babel" data-type="module" data-presets="react">
 const _b = document.getElementById("boot"); if (_b) _b.remove();
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package } from "lucide-react";
+import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package, Camera, Sparkles, ScanBarcode } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { readBarcodes } from "zxing-wasm";
@@ -182,7 +182,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0706-review1203";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0706-review1433";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -206,6 +206,7 @@ const hasAI = (ai) => !!(ai && (ai.geminiKey || ai.proxyUrl));
 const geminiPrompt = (task, text) => {
   const common = "You are a nutrition data extractor. Respond with ONLY a single strict JSON object, no markdown, no prose, no code fences. The label or text may be in Japanese or English.";
   if (task === "label") return common + ' The image is a nutrition facts label (栄養成分表示 if Japanese). Return {"label":<short food name string, in English if you can tell what the product is>,"per100":{"kcal":<number>,"protein":<g>,"carbs":<g>,"fat":<g>,"fiber":<g optional>,"sugar":<g optional>,"sodium":<mg optional>,"caffeine":<mg optional>}}. Give values per 100g (or 100ml for drinks). If the label only lists a per-serving amount (1食/1本/1袋/1個), convert to per-100g using the serving size shown. Japanese labels give 食塩相当量 (salt equivalent) in g — convert to sodium mg by multiplying by 400. Numbers only, no units in values.';
+  if (task === "front") return common + ' The image is the FRONT of a packaged food product. Identify the product and its brand. Return {"label":<short product name IN ENGLISH — translate or romanize, e.g. "Milk Bread" or "Pocky Chocolate">,"brand":<brand name in English/romaji, or omit if unclear>}. Keep the label under 5 words, no brand inside the label.';
   if (task === "plate") return common + ' The image is a plate/meal of food. Identify each distinct food item, estimate a coarse portion weight in grams, and estimate its macros for that portion. Return {"items":[{"label":<string>,"grams":<number>,"kcal":<number>,"protein":<g>,"carbs":<g>,"fat":<g>}]}. If several identical items, combine into one row and reflect the total count in the grams.';
   return common + " Parse this plain-English food description into individual items with estimated grams and macros: " + JSON.stringify(text || "") + '. Return {"items":[{"label":<string>,"grams":<number optional>,"kcal":<number>,"protein":<g>,"carbs":<g>,"fat":<g>}]}.';
 };
@@ -1277,8 +1278,8 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, onLabelFoo
   const [status, setStatus] = useState("starting");   // starting | scanning | error
   const [errMsg, setErrMsg] = useState("");
   const [manual, setManual] = useState("");
-  const [aiErr, setAiErr] = useState("");   // AI label-photo failure shown inline (key invalid / quota / network)
-  // a not-found result keeps the scanner open (parent shows the overlay) — re-arm so another code can be tried
+  const [wizard, setWizard] = useState(false);   // "no barcode? photo the product" path (not-found embeds its own wizard)
+  // a not-found result keeps the scanner open (the sheet shows the card) — re-arm so another code can be tried
   useEffect(() => { if (scanState && scanState.notFound) { doneRef.current = false; } }, [scanState]);
 
   const stopTracks = useCallback(() => {
@@ -1337,68 +1338,72 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, onLabelFoo
   }, [finish, stopTracks]);
 
   const submitManual = () => { const code = manual.replace(/\D/g, ""); if (code) finish(code); };
+  // "no barcode" path: decoding stops and the sheet becomes the capture wizard. On the not-found path the camera
+  // is already stopped (finish() stops tracks), so photo capture never fights a live stream.
+  const startWizard = () => { doneRef.current = true; stopTracks(); setWizard(true); };
   const inp = { background: "#100E09", border: `1px solid ${C.edge}`, color: C.bone };
+  const ghost = "flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95";
+  const emit = (food) => { onLabelFood && onLabelFood(food); };
+  const mode = wizard ? "wizard" : scanState && scanState.looking ? "looking" : scanState && scanState.notFound ? "notFound" : status;
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "rgba(0,0,0,0.92)" }}>
-      <div className="flex items-center justify-between px-4 py-3">
-        <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>scan barcode</span>
-        <button onClick={close} aria-label="close" className="active:scale-90" style={{ color: C.ash }}><X size={20} /></button>
+      <div className="flex items-center justify-between px-4 py-2">
+        <span className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.gold }}><ScanBarcode size={14} />scan barcode</span>
+        <button onClick={close} aria-label="close" className="-mr-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.ash }}><X size={20} /></button>
       </div>
       <div className="relative flex-1 overflow-hidden">
-        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
+        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" style={{ opacity: mode === "scanning" || mode === "starting" ? 1 : 0.2, transition: "opacity .3s ease" }} />
         <canvas ref={canvasRef} className="hidden" />
-        {status === "scanning" && (
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+        {mode === "scanning" && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             <div className="h-40 w-72 rounded-xl border-2" style={{ borderColor: C.gold, boxShadow: "0 0 0 100vmax rgba(0,0,0,0.45)" }} />
-            <p className="mt-4 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.bone }}>point at a product barcode</p>
-          </div>
-        )}
-        {status === "starting" && <div className="absolute inset-0 flex items-center justify-center font-mono text-[11px] uppercase tracking-wider" style={{ color: C.ashDim }}>starting camera…</div>}
-        {status === "error" && !scanState && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center">
-            <p className="font-mono text-[12px]" style={{ color: C.rust }}>{errMsg}</p>
-            <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>Enter the barcode number below instead.</p>
-          </div>
-        )}
-        {/* resolution ladder overlay: OFF lookup in progress */}
-        {scanState && scanState.looking && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center" style={{ background: "rgba(0,0,0,0.6)" }}>
-            <p className="font-mono text-[11px] uppercase tracking-wider" style={{ color: C.gold }}>looking up…</p>
-            <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>{scanState.code}</p>
-          </div>
-        )}
-        {/* resolution ladder overlay: not in memory or Open Food Facts */}
-        {scanState && scanState.notFound && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center" style={{ background: "rgba(0,0,0,0.72)" }}>
-            <p className="font-mono text-[12px]" style={{ color: C.rust }}>Not found</p>
-            <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>No product for <span style={{ color: C.bone }}>{scanState.code}</span> in your library or Open Food Facts.</p>
-            {/* Photo the nutrition label is the PRIMARY action; ALWAYS usable — OCR (no proxy) is the fallback, Gemini upgrades it. */}
-            <div className="mt-4 flex flex-col items-center gap-1">
-              <LabelPhotoButton ai={ai} barcode={scanState.code} onFood={(food) => { onLabelFood && onLabelFood(food); }}
-                onFallback={(msg, draft) => { if (draft && onLabelFood) onLabelFood(draft); else setAiErr(msg || "Couldn't read the label — enter it manually."); }}
-                className="flex min-h-[44px] items-center justify-center rounded-full px-5 py-2.5 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }} />
-              <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{hasAI(ai) ? "reads macros from the nutrition label" : "reads the label on-device — check the numbers"}</span>
-              {aiErr && <p className="mt-1 font-mono text-[10px]" style={{ color: C.rust }}>{aiErr}</p>}
-            </div>
-            <div className="mt-4 flex gap-2">
-              <button onClick={() => onManual(scanState.code)} className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Enter manually</button>
-              <button onClick={close} className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Cancel</button>
-            </div>
           </div>
         )}
       </div>
-      <div className="border-t p-4" style={{ borderColor: C.edge, background: C.card }}>
-        <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>enter code manually</p>
-        <div className="mt-2 flex gap-2">
-          <input value={manual} onChange={(e) => setManual(e.target.value)} inputMode="numeric" pattern="[0-9]*" placeholder="e.g. 3017620422003" autoCapitalize="off" autoCorrect="off" spellCheck="false" onKeyDown={(e) => { if (e.key === "Enter") submitManual(); }} className="flex-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} />
-          <button onClick={submitManual} className="rounded-lg px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>go</button>
-        </div>
-        <div className="mt-3 flex flex-col items-center">
-          <LabelPhotoButton ai={ai} onFood={(food) => { onLabelFood && onLabelFood(food); }}
-            onFallback={(msg, draft) => { if (draft && onLabelFood) onLabelFood(draft); else setAiErr(msg || "Couldn't read the label — enter the code or values manually."); }}
-            label="📷 can't scan? photo the nutrition label" className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[10px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }} />
-          {aiErr && <p className="mt-1 text-center font-mono text-[10px]" style={{ color: C.rust }}>{aiErr}</p>}
-        </div>
+      {/* the sheet: every state reads on solid card — nothing floats over the camera feed */}
+      <div className="border-t p-4 pb-6" style={{ borderColor: C.edge, background: C.card }}>
+        {mode === "looking" && (
+          <div className="flex items-baseline justify-between py-2">
+            <p className="animate-pulse font-mono text-[11px] uppercase tracking-wider" style={{ color: C.gold }}>looking up…</p>
+            <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>{scanState.code}</p>
+          </div>
+        )}
+        {mode === "notFound" && (
+          <div>
+            <div className="flex items-baseline justify-between">
+              <p className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.rust }}>not found</p>
+              <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>{scanState.code}</p>
+            </div>
+            <div className="mt-2">
+              <CaptureWizard key={scanState.code} ai={ai} barcode={scanState.code} onFood={emit} />
+            </div>
+            <div className="mt-4 flex items-center gap-2 border-t pt-3" style={{ borderColor: C.edge }}>
+              <button onClick={() => onManual(scanState.code)} className={ghost} style={{ borderColor: C.edge, color: C.ash }}>Enter manually</button>
+              <button onClick={close} className={ghost} style={{ borderColor: C.edge, color: C.ash }}>Cancel</button>
+            </div>
+            {!hasAI(ai) && <p className="mt-2 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>tip: add your free Gemini key in Diet › edit goals — photos then read names and numbers accurately</p>}
+          </div>
+        )}
+        {mode === "wizard" && (
+          <div>
+            <p className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>no barcode</p>
+            <div className="mt-2"><CaptureWizard ai={ai} onFood={emit} /></div>
+          </div>
+        )}
+        {(mode === "scanning" || mode === "starting" || mode === "error") && (
+          <div>
+            {mode === "error"
+              ? <p className="text-[13px] leading-snug" style={{ color: C.rust }}>{errMsg} <span style={{ color: C.ash }}>Enter the code below instead.</span></p>
+              : <p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: mode === "scanning" ? C.bone : C.ashDim }}>{mode === "scanning" ? "point at the barcode" : "starting camera…"}</p>}
+            <div className="mt-2 flex gap-2">
+              <input value={manual} onChange={(e) => setManual(e.target.value)} inputMode="numeric" pattern="[0-9]*" placeholder="or type the code — e.g. 4901234567894" autoCapitalize="off" autoCorrect="off" spellCheck="false" onKeyDown={(e) => { if (e.key === "Enter") submitManual(); }} className="min-h-[44px] flex-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} aria-label="barcode number" />
+              <button onClick={submitManual} className="min-h-[44px] rounded-lg px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>go</button>
+            </div>
+            <div className="mt-3 flex justify-center">
+              <button onClick={startWizard} className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-full border px-4 py-2 font-mono text-[10px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}><Camera size={13} />no barcode? photo the product</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1474,8 +1479,8 @@ function AddFlow({ onPick, ai, usdaKey, onParsed, onManual }) {
         <input value={q} onChange={(e) => { setQ(e.target.value); setDraft(null); setParseErr(""); }} placeholder="banana, greek yogurt, nutella…" autoCapitalize="off" autoCorrect="off" spellCheck="false" className="w-full rounded-lg py-2 pl-9 pr-3 font-mono text-[12px] outline-none" style={inp} />
       </div>
       {aiEligible && !draft && (
-        <button onClick={parseAI} disabled={parsing} className="mt-2 w-full truncate rounded-lg border py-2 px-3 text-left font-mono text-[11px] active:scale-[0.99]" style={{ borderColor: C.goldDim, color: C.gold }}>
-          {parsing ? "parsing with AI…" : `✨ Parse “${query}” with AI`}
+        <button onClick={parseAI} disabled={parsing} className="mt-2 flex w-full items-center gap-1.5 rounded-lg border py-2 px-3 text-left font-mono text-[11px] active:scale-[0.99]" style={{ borderColor: C.goldDim, color: C.gold }}>
+          <Sparkles size={12} className="shrink-0" /><span className="truncate">{parsing ? "parsing with AI…" : `Parse “${query}” with AI`}</span>
         </button>
       )}
       {parseErr && <p className="mt-2 font-mono text-[10px]" style={{ color: C.rust }}>{parseErr}</p>}
@@ -1522,54 +1527,94 @@ function AddFlow({ onPick, ai, usdaKey, onParsed, onManual }) {
     </div>
   );
 }
-// "Photo the label" affordance: hidden camera/gallery file input + button. On pick → downscale → callGemini({task:'label'})
-// → build an AI Food {basis:'per100'} (with the not-found barcode if seeded) → onFood(food) opens FoodDetail prefilled.
-// On error / no AI → onFallback(message) (caller shows a message + routes to manual entry). Never crashes.
-// Two paths: ai configured (key or proxy) → Gemini (best). No AI → in-browser Tesseract OCR (no setup needed) — this is the
-// default fallback so the button ALWAYS works. OCR opens FoodDetail prefilled+editable so the owner fixes any misreads.
-// If OCR reads nothing usable, onFallback(msg, draftFood) lets the caller open the manual form prefilled.
-function LabelPhotoButton({ ai, barcode, onFood, onFallback, className, style, label = "📷 Photo the label" }) {
+// readLabelPhoto(file, ai, barcode) → { food, rough } from a nutrition-facts photo. AI configured → Gemini (reads
+// Japanese labels); else on-device OCR — `rough` marks an OCR read that extracted nothing, so callers can still
+// open the editable draft. AI-path failures throw with a user-facing message.
+const readLabelPhoto = async (file, ai, barcode) => {
+  if (hasAI(ai)) {
+    const image = await downscaleImage(file);
+    const r = await callGemini({ task: "label", image }, ai);
+    const per100 = (r && r.per100) || {};
+    return { food: { id: uid(), label: (r && r.label) || "food", basis: "per100", basisGrams: 100, nutr: per100, source: "ai", barcode: barcode || undefined }, rough: false };
+  }
+  const text = await ocrLabel(file);
+  const d = parseNutritionText(text);
+  const draft = { id: uid(), label: d.label || "food", basis: d.basis, basisGrams: d.basisGrams, nutr: d.nutr || {}, source: "ocr", barcode: barcode || undefined };
+  return { food: draft, rough: !(draft.nutr && Object.keys(draft.nutr).length > 0) };
+};
+// readFrontPhoto(file, ai) → { label, brand } — English product name read off the front of the pack. AI only.
+const readFrontPhoto = async (file, ai) => {
+  const image = await downscaleImage(file);
+  const r = await callGemini({ task: "front", image }, ai);
+  return { label: (r && r.label) || null, brand: (r && r.brand) || undefined };
+};
+// Hidden camera/gallery input + app-styled pill button with the lucide Camera glyph.
+function CamButton({ label, busyLabel, onFile, busy, primary }) {
   const inputRef = useRef(null);
-  const [busy, setBusy] = useState(false);
-  const [phase, setPhase] = useState("");   // "reading label…" for OCR
-  const pick = async (e) => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = "";   // allow re-picking the same file
-    if (!file) return;
-    setBusy(true);
-    try {
-      if (hasAI(ai)) {
-        setPhase("reading label…");
-        const image = await downscaleImage(file);
-        const r = await callGemini({ task: "label", image }, ai);
-        const per100 = (r && r.per100) || {};
-        const food = { id: uid(), label: (r && r.label) || "food", basis: "per100", basisGrams: 100, nutr: per100, source: "ai", barcode: barcode || undefined };
-        onFood(food);
-      } else {
-        // No proxy → OCR in the browser.
-        setPhase("reading label…");
-        const text = await ocrLabel(file);
-        const d = parseNutritionText(text);
-        const draft = { id: uid(), label: d.label || "food", basis: d.basis, basisGrams: d.basisGrams, nutr: d.nutr || {}, source: "ocr", barcode: barcode || undefined };
-        const gotSomething = draft.nutr && Object.keys(draft.nutr).length > 0;
-        if (gotSomething) onFood(draft);
-        else onFallback && onFallback("Couldn't read it all — check the numbers.", draft);
-      }
-    } catch (err) {
-      onFallback && onFallback((err && err.message) || "Couldn't read the label — enter it manually.");
-    } finally { setBusy(false); setPhase(""); }
-  };
+  const pick = (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) onFile(f); };
   return (
     <>
       <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={pick} />
-      <button onClick={() => inputRef.current && inputRef.current.click()} disabled={busy} className={className} style={style}>{busy ? (phase || "reading label…") : label}</button>
+      <button onClick={() => inputRef.current && inputRef.current.click()} disabled={busy}
+        className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-full px-5 py-2.5 font-mono text-[11px] uppercase tracking-wider active:scale-95 ${primary ? "font-bold" : "border"}`}
+        style={primary ? { background: C.gold, color: C.bg, opacity: busy ? 0.7 : 1 } : { borderColor: C.goldDim, color: C.gold, opacity: busy ? 0.7 : 1 }}>
+        <Camera size={13} />{busy ? (busyLabel || "reading…") : label}
+      </button>
     </>
+  );
+}
+// Two-step product capture: (1) optional front-of-pack photo → English name via AI; (2) nutrition-facts photo →
+// macros. Merged into one prefilled food (barcode tied when it came from a scan). Without AI the front step is
+// skipped (naming needs vision) and the facts photo falls back to on-device OCR.
+function CaptureWizard({ ai, barcode, onFood }) {
+  const withAI = hasAI(ai);
+  const [step, setStep] = useState(withAI ? "front" : "facts");
+  const [front, setFront] = useState(null);   // {label, brand} once step 1 reads
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const takeFront = async (file) => {
+    setBusy(true); setErr("");
+    try { const r = await readFrontPhoto(file, ai); if (r.label) setFront(r); setStep("facts"); }
+    catch (e) { setErr((e && e.message) || "Couldn't read the front — you can skip this step."); }
+    finally { setBusy(false); }
+  };
+  const takeFacts = async (file) => {
+    setBusy(true); setErr("");
+    try {
+      const { food } = await readLabelPhoto(file, ai, barcode);
+      onFood(front && front.label ? { ...food, label: front.label, brand: front.brand || food.brand } : food);
+    } catch (e) { setErr((e && e.message) || "Couldn't read the label — try again or enter it manually."); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div>
+      {step === "front" ? (
+        <>
+          <p className="mt-1 text-[13px] leading-snug" style={{ color: C.bone }}>The front of the pack first <span style={{ color: C.ashDim }}>— optional, names the food in English.</span></p>
+          <div className="mt-3 flex items-center gap-2">
+            <CamButton primary label="Photo the front" busyLabel="reading front…" busy={busy} onFile={takeFront} />
+            <button onClick={() => { setErr(""); setStep("facts"); }} disabled={busy} className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Skip</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="mt-1 text-[13px] leading-snug" style={{ color: C.bone }}>
+            {front && front.label ? <>Got it — <span style={{ color: C.gold }}>{front.label}</span>. Now the nutrition facts panel.</> : <>Now the nutrition facts panel{withAI ? "" : <span style={{ color: C.ashDim }}> — read on-device, check the numbers after</span>}.</>}
+          </p>
+          <div className="mt-3 flex items-center gap-2">
+            <CamButton primary label="Photo the facts" busyLabel="reading label…" busy={busy} onFile={takeFacts} />
+            {withAI && !front && <button onClick={() => { setErr(""); setStep("front"); }} disabled={busy} className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Back</button>}
+          </div>
+        </>
+      )}
+      {err && <p className="mt-2 font-mono text-[10px]" style={{ color: C.rust }}>{err}</p>}
+    </div>
   );
 }
 // "Photo my plate": hidden camera/gallery input + button. On pick → downscale → callGemini({task:'plate'})
 // → {items:[{label,grams,kcal,protein,carbs,fat}]} → onDraft(items) opens the editable PlateDraft list.
 // On error / no AI → onFallback(message). Never crashes.
-function PlatePhotoButton({ ai, onDraft, onFallback, className, style, label = "📷 Photo my plate" }) {
+function PlatePhotoButton({ ai, onDraft, onFallback, className, style, label = "Photo my plate" }) {
   const inputRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const pick = async (e) => {
@@ -1591,7 +1636,7 @@ function PlatePhotoButton({ ai, onDraft, onFallback, className, style, label = "
   return (
     <>
       <input ref={inputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={pick} />
-      <button onClick={() => inputRef.current && inputRef.current.click()} disabled={busy} className={className} style={style}>{busy ? "reading plate…" : label}</button>
+      <button onClick={() => inputRef.current && inputRef.current.click()} disabled={busy} className={className} style={style}><span className="inline-flex items-center gap-1.5"><Camera size={13} className="shrink-0" />{busy ? "reading plate…" : label}</span></button>
     </>
   );
 }
@@ -1793,7 +1838,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
         <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>Caffeine <span style={{ color: (dt.caffeine || 0) > g.caffeine ? C.rust : C.ash }}>{Math.round(dt.caffeine || 0)} / {g.caffeine} mg</span></p>
 
         {/* external DB search */}
-        <button onClick={() => setScanOpen(true)} className="mt-3 flex min-h-[44px] w-full items-center justify-center rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }}>Scan barcode</button>
+        <button onClick={() => setScanOpen(true)} className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }}><ScanBarcode size={14} />Scan barcode</button>
         {hasAI(ai) && <PlatePhotoButton ai={ai} onDraft={(items) => setPlate(items)} onFallback={(msg) => flash(msg)}
           className="mt-2 flex min-h-[44px] w-full items-center justify-center rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }} />}
         {plate && <PlateDraft items={plate} onCancel={() => setPlate(null)}
