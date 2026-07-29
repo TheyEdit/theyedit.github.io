@@ -183,7 +183,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0729-1847";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0729-1854";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -543,7 +543,7 @@ const DEFAULT_FOODS = [
   { id: "whites200", label: "Egg whites", basis: "serving", basisGrams: 200, nutr: { kcal: 100, protein: 22, carbs: 1, fat: 0 }, source: "staple" },
   { id: "whey1", label: "Whey", basis: "serving", basisGrams: 30, nutr: { kcal: 120, protein: 24, carbs: 3, fat: 2 }, source: "staple" },
 ];
-const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb", dietUnit: "kg", dbMode: {}, rebasedTargets: false,
+const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb", dietUnit: "kg", dbMode: {}, rebasedTargets: false, seededStalls: false,
   nutrition: { goals: { kcal: 2100, protein: 175, carbs: 215, fat: 60, steps: 15000, water: 3000, goalBwLb: 154.32, fiber: 30, sodium: 2300, calcium: 1000, iron: 8, potassium: 3400, caffeine: 400 }, days: {}, foods: DEFAULT_FOODS, meals: [], proxyUrl: "", geminiKey: "", usdaKey: "" },
   sleep: { def: { bed: "23:00", wake: "08:00" }, days: {} } };
 
@@ -729,6 +729,9 @@ const benchLoad = (sets, bot) => {
   return sets.reduce((b, s) => ((s.r || 0) > (b.r || 0) || ((s.r || 0) === (b.r || 0) && s.w > b.w) ? s : b), sets[0]).w;
 };
 const dbsOf = (sets) => { const s = sets && sets.find((x) => x.dbs); return s ? s.dbs : null; };
+// A deload is a PERCENTAGE of the load, not a fixed number of plate steps: two steps off 90 lb is -6%,
+// two steps off 17.5 lb is -43%. Take ~10% off, snapped to a real plate, always at least one step down.
+const deloadTo = (w) => { const t = nearest(w * 0.9); return t < w ? t : stepPlate(w, -1); };
 
 // fill any missing per-lift prescription from logged weight (or library start), at range bottom
 const seedTargets = (mem) => {
@@ -777,6 +780,23 @@ const migrateMem = (raw) => {
     m.targets = t;
   }
   m.rebasedTargets = true;
+  // Seed stall counters from real history, so a lift that has genuinely stopped moving can act on the very
+  // next session instead of grinding three more. Counts trailing sessions at the current load that set no
+  // new rep best — capped at 2, so a stuck lift always gets one more honest attempt before it deloads.
+  if (!m.seededStalls) {
+    const st = { ...(m.stalls || {}) };
+    Object.keys(m.history || {}).forEach((name) => {
+      const h = m.history[name] || [];
+      let i = h.length - 1; if (i < 1) return;
+      while (i > 0 && h[i - 1].w === h[h.length - 1].w) i--;          // start of the trailing run at this load
+      const run = h.slice(i); if (run.length < 2) return;
+      let best = -1, since = 0;
+      run.forEach((x) => { if ((x.r || 0) > best) { best = x.r || 0; since = 0; } else since++; });
+      st[name] = Math.min(2, since);
+    });
+    m.stalls = st;
+  }
+  m.seededStalls = true;
   const rn = raw.nutrition && typeof raw.nutrition === "object" ? raw.nutrition : {};
   // one-time corrective re-seed: any stored food whose id is a current default staple is REPLACED with the
   // present DEFAULT_FOODS definition (new gram basis + label), preserving the user's fav + lastGrams. This
@@ -866,9 +886,13 @@ function nextPrescription({ range, target, work, last, stall }) {
   const cnt = dbsOf(work), pcnt = dbsOf(last);
   const lastBase = last && last.length ? benchLoad(last, bot) * (cnt && pcnt && cnt !== pcnt ? pcnt / cnt : 1) : null;
   const raised = lastBase != null && base > lastBase + 1e-6;
+  const sameAsLast = lastBase != null && Math.abs(lastBase - base) < 1e-6;
   const lastTotal = last && last.length ? last.reduce((a, s) => a + (s.r || 0), 0) : null;
   const thisTotal = work.reduce((a, s) => a + (s.r || 0), 0);
-  const regressed = belowBottom || (!raised && lastTotal != null && thisTotal < lastTotal);
+  const gained = lastTotal != null && thisTotal > lastTotal;
+  // A stall is NO PROGRESS at the same load — not merely working below the range. Grinding extra reps out
+  // of a weight that's still too heavy is exactly how you earn your way into the range; that isn't a stall.
+  const regressed = (sameAsLast && lastTotal != null && thisTotal <= lastTotal) || (belowBottom && !gained);
   const allHardMaxed = efforts.length === atBase.length && efforts.every((e) => e === "hard" || e === "fail");
   const allEasy = efforts.length === atBase.length && efforts.every((e) => e === "easy");
   const repFloor = rebased ? bot : Math.max(bot, Math.min(top, target.reps || bot));   // the old rep goal only carries over at the same load
@@ -877,7 +901,7 @@ function nextPrescription({ range, target, work, last, stall }) {
   if (allTop) return out(stepPlate(base, 1), bot, 0, allEasy ? "add-load-overdue" : "add-load");
   if (regressed) {
     const ns = raised ? 0 : held + 1;                                 // raising the standard is progress — it never counts as a stall
-    if (ns >= 3) return out(stepPlate(base, -2), bot, 0, "deload");
+    if (ns >= 3) return out(deloadTo(base), bot, 0, "deload");
     return out(base, belowBottom ? bot : Math.max(repFloor, minReps), ns, "hold");
   }
   if (allHardMaxed && minReps >= repFloor) return out(base, Math.max(repFloor, minReps), held, "hold-effort");
