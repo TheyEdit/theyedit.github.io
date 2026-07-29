@@ -183,7 +183,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0706-1752";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0729-1847";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -543,7 +543,7 @@ const DEFAULT_FOODS = [
   { id: "whites200", label: "Egg whites", basis: "serving", basisGrams: 200, nutr: { kcal: 100, protein: 22, carbs: 1, fat: 0 }, source: "staple" },
   { id: "whey1", label: "Whey", basis: "serving", basisGrams: 30, nutr: { kcal: 120, protein: 24, carbs: 3, fat: 2 }, source: "staple" },
 ];
-const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb", dietUnit: "kg", dbMode: {},
+const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb", dietUnit: "kg", dbMode: {}, rebasedTargets: false,
   nutrition: { goals: { kcal: 2100, protein: 175, carbs: 215, fat: 60, steps: 15000, water: 3000, goalBwLb: 154.32, fiber: 30, sodium: 2300, calcium: 1000, iron: 8, potassium: 3400, caffeine: 400 }, days: {}, foods: DEFAULT_FOODS, meals: [], proxyUrl: "", geminiKey: "", usdaKey: "" },
   sleep: { def: { bed: "23:00", wake: "08:00" }, days: {} } };
 
@@ -720,6 +720,16 @@ if (typeof window !== "undefined") window.__wk = { EXERCISES, PROGRAM, exerciseF
 const daySig = (d) => daySlots(d).map((s) => s.ex.name).join("|");
 const liveValid = (l) => !!(l && l.sig && l.sig === daySig(l.day));
 
+// The benchmark load of a set of logged sets: the heaviest weight actually held INSIDE the rep range.
+// If nothing reached the range bottom, fall back to the best set's load (heaviest on a rep tie).
+const benchLoad = (sets, bot) => {
+  if (!sets || !sets.length) return null;
+  const inRange = sets.filter((s) => (s.r || 0) >= bot);
+  if (inRange.length) return inRange.reduce((b, s) => (s.w > b.w ? s : b), inRange[0]).w;
+  return sets.reduce((b, s) => ((s.r || 0) > (b.r || 0) || ((s.r || 0) === (b.r || 0) && s.w > b.w) ? s : b), sets[0]).w;
+};
+const dbsOf = (sets) => { const s = sets && sets.find((x) => x.dbs); return s ? s.dbs : null; };
+
 // fill any missing per-lift prescription from logged weight (or library start), at range bottom
 const seedTargets = (mem) => {
   const t = { ...(mem.targets || {}) };
@@ -743,6 +753,30 @@ const migrateMem = (raw) => {
   m.targets = seedTargets(m);
   m.lastByDay = m.lastByDay || {};
   m.audit = Array.isArray(m.audit) ? m.audit : [];
+  // one-time repair for the "planned load, not lifted load" bug: every prescription used to be built from
+  // the PLANNED weight, so sessions worked heavier than prescribed never raised the standard and the app
+  // kept handing back a weight already too easy. Re-derive each stale target from the last session the lift
+  // was really logged in. Runs once (flagged), and only ever moves a load UP.
+  if (!m.rebasedTargets) {
+    const t = { ...m.targets };
+    Object.keys(m.lastByDay).forEach((dk) => {
+      const snap = m.lastByDay[dk] || {}, slots = daySlots(Number(dk));
+      Object.keys(snap.lifts || {}).forEach((name) => {
+        const lift = snap.lifts[name], slot = slots.find((s) => s.ex.name === name), cur = t[name];
+        if (!slot || !cur || !lift || !lift.sets || !lift.sets.length) return;
+        const [bot, top] = slot.range;
+        const bl = benchLoad(lift.sets, bot);
+        const cnt = dbCount(m, slot.ex), sd = dbsOf(lift.sets) || cnt;
+        const load = nearest(bl * (sd / cnt));                              // per-DB load in today's DB-count terms
+        if (!(load > cur.load + 1e-6)) return;                              // only lifts the engine was under-prescribing
+        const at = lift.sets.filter((s) => s.w >= bl - 1e-6).map((s) => s.r || 0);
+        const goal = Math.max(...at) < bot ? bot : Math.min(...at) + 1;
+        t[name] = { load, reps: Math.max(bot, Math.min(top, goal)) };
+      });
+    });
+    m.targets = t;
+  }
+  m.rebasedTargets = true;
   const rn = raw.nutrition && typeof raw.nutrition === "object" ? raw.nutrition : {};
   // one-time corrective re-seed: any stored food whose id is a current default staple is REPLACED with the
   // present DEFAULT_FOODS definition (new gram basis + label), preserving the user's fav + lastGrams. This
@@ -813,25 +847,41 @@ const nextDayId = (dayId) => { const ids = PROGRAM.map((d) => d.id); const i = i
 // ── double-progression engine (pure) ──
 // Given this session's completed work sets + the same lift's last-same-day work sets, decide the
 // NEXT prescription. work/last = [{ w, r, e }] (e = "easy"|"good"|"hard"|"fail"|undefined).
+// The standard is what you ACTUALLY lifted, never what the plan said. Work heavier than prescribed and
+// that load becomes the benchmark on the spot: the next prescription is built from there (more reps, then
+// more load once the range is topped) and never falls back to the easy weight. The only way down is a
+// deload after three straight sessions where neither reps nor load could move.
 function nextPrescription({ range, target, work, last, stall }) {
   const [bot, top] = range; stall = stall || 0;
   if (!work || work.length === 0) return { load: target.load, reps: target.reps, stall, decision: "skip" };
-  const reps = work.map((s) => s.r || 0);
-  const efforts = work.map((s) => s.e).filter(Boolean);
-  const allTop = reps.every((r) => r >= top);
+  const base = benchLoad(work, bot);                                  // ← the real standard, read off the logged sets
+  const rebased = Math.abs(base - target.load) > 1e-6;                // plan and reality disagreed → reality wins
+  const atBase = work.filter((s) => s.w >= base - 1e-6);              // back-off sets below the benchmark don't set the goal
+  const reps = atBase.map((s) => s.r || 0);
+  const efforts = atBase.map((s) => s.e).filter(Boolean);
   const minReps = Math.min(...reps);
-  const belowBottom = reps[0] < bot;                                  // top/first work set under the range → too heavy
+  const allTop = atBase.length === work.length && reps.every((r) => r >= top);
+  const belowBottom = Math.max(...reps) < bot;                        // never reached the range → too heavy
+  // last session, converted into today's DB-count terms so a 1⇄2 flip doesn't read as a jump
+  const cnt = dbsOf(work), pcnt = dbsOf(last);
+  const lastBase = last && last.length ? benchLoad(last, bot) * (cnt && pcnt && cnt !== pcnt ? pcnt / cnt : 1) : null;
+  const raised = lastBase != null && base > lastBase + 1e-6;
   const lastTotal = last && last.length ? last.reduce((a, s) => a + (s.r || 0), 0) : null;
-  const thisTotal = reps.reduce((a, r) => a + r, 0);
-  const sameLoad = last && last.length ? Math.abs((last[0]?.w ?? target.load) - target.load) < 1e-6 : true;
-  const regressed = (lastTotal != null && sameLoad && thisTotal < lastTotal) || belowBottom;
-  const allHardMaxed = efforts.length === work.length && efforts.every((e) => e === "hard" || e === "fail");
-  const allEasy = efforts.length === work.length && efforts.every((e) => e === "easy");
-  if (allTop) return { load: stepPlate(target.load, 1), reps: bot, stall: 0, decision: allEasy ? "add-load-overdue" : "add-load" };
-  if (regressed) { const ns = stall + 1; return ns >= 3 ? { load: stepPlate(target.load, -2), reps: bot, stall: 0, decision: "deload" } : { load: target.load, reps: target.reps, stall: ns, decision: "hold" }; }
-  if (allHardMaxed && minReps >= target.reps) return { load: target.load, reps: target.reps, stall, decision: "hold-effort" };
-  const nextReps = Math.min(top, Math.max(target.reps, minReps) + 1);  // base goal on weakest set so all sets reach it
-  return { load: target.load, reps: nextReps, stall: 0, decision: "add-rep" };
+  const thisTotal = work.reduce((a, s) => a + (s.r || 0), 0);
+  const regressed = belowBottom || (!raised && lastTotal != null && thisTotal < lastTotal);
+  const allHardMaxed = efforts.length === atBase.length && efforts.every((e) => e === "hard" || e === "fail");
+  const allEasy = efforts.length === atBase.length && efforts.every((e) => e === "easy");
+  const repFloor = rebased ? bot : Math.max(bot, Math.min(top, target.reps || bot));   // the old rep goal only carries over at the same load
+  const held = rebased ? 0 : stall;                                   // stalls count failures at ONE load — a new standard starts the count over
+  const out = (load, r, st, decision) => ({ load, reps: Math.max(bot, Math.min(top, r)), stall: st, decision, base, rebased });
+  if (allTop) return out(stepPlate(base, 1), bot, 0, allEasy ? "add-load-overdue" : "add-load");
+  if (regressed) {
+    const ns = raised ? 0 : held + 1;                                 // raising the standard is progress — it never counts as a stall
+    if (ns >= 3) return out(stepPlate(base, -2), bot, 0, "deload");
+    return out(base, belowBottom ? bot : Math.max(repFloor, minReps), ns, "hold");
+  }
+  if (allHardMaxed && minReps >= repFloor) return out(base, Math.max(repFloor, minReps), held, "hold-effort");
+  return out(base, Math.max(repFloor, minReps) + 1, 0, "add-rep");    // goal set by the weakest set at the benchmark
 }
 
 // ── honest assessment (pure) ── thisLifts/lastLifts = { name: { top:{w,r}, tonnage } } snapshots
@@ -2509,7 +2559,7 @@ function App() {
       newWeights[name] = res.load;
       newStalls[name] = res.stall;
       const cnt = dbCount(mem, item.ex);
-      changes.push({ name, decision: res.decision, fromLoad: target.load, toLoad: res.load, fromReps: target.reps, toReps: res.reps, single: cnt === 1 });
+      changes.push({ name, decision: res.decision, fromLoad: target.load, toLoad: res.load, fromReps: target.reps, toReps: res.reps, single: cnt === 1, rebased: res.rebased });
       const tonnage = logged.reduce((a, s) => a + s.w * s.r * (s.dbs || cnt), 0);
       const topS = logged.reduce((b, s) => (!b || e1rm(s.w, s.r) > e1rm(b.w, b.r) ? s : b), null);
       snap.lifts[name] = { sets: logged, top: { w: topS.w, r: topS.r, e: topS.e, dbs: topS.dbs || cnt }, tonnage };
@@ -2835,7 +2885,7 @@ function App() {
                     <span className="truncate">{r.name}</span>
                   </span>
                   <span className="font-mono shrink-0" style={{ color: C.ash }}>
-                    {r.pct != null ? `${r.pct >= 0 ? "+" : ""}${r.pct.toFixed(1)}%` : "new"}{c ? ` · ${decLabel[c.decision] || c.decision}` : ""}
+                    {r.pct != null ? `${r.pct >= 0 ? "+" : ""}${r.pct.toFixed(1)}%` : "new"}{c ? ` · ${decLabel[c.decision] || c.decision}` : ""}{c && c.rebased && c.toLoad > c.fromLoad ? " · new standard" : ""}
                   </span>
                 </div>
               ); })}
