@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <meta name="theme-color" content="#0E0D0B" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -23,7 +23,7 @@
 }
 </script>
 <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
-<style> html,body{margin:0;background:#0E0D0B} #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#6E5A1E;font:600 12px ui-monospace,monospace;letter-spacing:.2em;text-transform:uppercase} </style>
+<style> html,body{margin:0;background:#0E0D0B} html{-webkit-text-size-adjust:100%;text-size-adjust:100%} *{touch-action:manipulation} body{-webkit-tap-highlight-color:transparent} #boot{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#6E5A1E;font:600 12px ui-monospace,monospace;letter-spacing:.2em;text-transform:uppercase} </style>
 </head>
 <body>
 <div id="root"></div>
@@ -31,8 +31,8 @@
 <noscript style="color:#ECE6D8;font-family:sans-serif;padding:2rem;display:block">This app needs JavaScript enabled.</noscript>
 <script type="text/babel" data-type="module" data-presets="react">
 const _b = document.getElementById("boot"); if (_b) _b.remove();
-import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { Dumbbell, Clock, ArrowLeftRight, Play, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package, Camera, Sparkles, ScanBarcode } from "lucide-react";
+import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import { Dumbbell, Clock, ArrowLeftRight, Play, Pause, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package, Camera, Sparkles, ScanBarcode, Unlink, Link2, List } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { readBarcodes } from "zxing-wasm";
@@ -183,7 +183,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0729-1854";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0729-1905";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -206,7 +206,7 @@ const hasAI = (ai) => !!(ai && (ai.geminiKey || ai.proxyUrl));
 // Per-task prompts (ported from docs/gemini-proxy/worker.js so direct + proxy return identical JSON shapes).
 const geminiPrompt = (task, text) => {
   const common = "You are a nutrition data extractor. Respond with ONLY a single strict JSON object, no markdown, no prose, no code fences. The label or text may be in Japanese or English.";
-  if (task === "label") return common + ' The image is a nutrition facts label (栄養成分表示 if Japanese). Return {"label":<short food name string, in English if you can tell what the product is>,"per100":{"kcal":<number>,"protein":<g>,"carbs":<g>,"fat":<g>,"fiber":<g optional>,"sugar":<g optional>,"sodium":<mg optional>,"caffeine":<mg optional>}}. Give values per 100g (or 100ml for drinks). If the label only lists a per-serving amount (1食/1本/1袋/1個), convert to per-100g using the serving size shown. Japanese labels give 食塩相当量 (salt equivalent) in g — convert to sodium mg by multiplying by 400. Numbers only, no units in values.';
+  if (task === "label") return common + ' The image is a nutrition facts label (栄養成分表示 if Japanese). Return {"label":<short food name string, in English if you can tell what the product is>,"per100":{"kcal":<number>,"protein":<g>,"carbs":<g>,"fat":<g>,"fiber":<g optional>,"sugar":<g optional>,"sodium":<mg optional>,"caffeine":<mg optional>},"servingGrams":<number|null>,"packageGrams":<number|null>}. Give per100 values per 100g (or 100ml for drinks). If the label only lists a per-serving amount (1食/1本/1袋/1個), convert to per-100g using the serving size shown. servingGrams is the labeled single-serving/portion size in grams (from 1食あたり/serving size), or null if not shown. packageGrams is the total net weight of the package (内容量/net wt), in grams, or null if not shown. Japanese labels give 食塩相当量 (salt equivalent) in g — convert to sodium mg by multiplying by 400. Numbers only, no units in values.';
   if (task === "front") return common + ' The image is the FRONT of a packaged food product. Identify the product and its brand. Return {"label":<short product name IN ENGLISH — translate or romanize, e.g. "Milk Bread" or "Pocky Chocolate">,"brand":<brand name in English/romaji, or omit if unclear>}. Keep the label under 5 words, no brand inside the label.';
   if (task === "plate") return common + ' The image is a plate/meal of food. Identify each distinct food item, estimate a coarse portion weight in grams, and estimate its macros for that portion. Return {"items":[{"label":<string>,"grams":<number>,"kcal":<number>,"protein":<g>,"carbs":<g>,"fat":<g>}]}. If several identical items, combine into one row and reflect the total count in the grams.';
   return common + " Parse this plain-English food description into individual items with estimated grams and macros: " + JSON.stringify(text || "") + '. Return {"items":[{"label":<string>,"grams":<number optional>,"kcal":<number>,"protein":<g>,"carbs":<g>,"fat":<g>}]}.';
@@ -306,7 +306,8 @@ const parseNutritionText = (text) => {
   let basis = "per100", basisGrams = 100;
   if (/per\s*100\s*(g|ml|9|m1)/.test(norm) || /\/\s*100\s*(g|ml)/.test(norm) || /100\s*(g|ml|9)\b/.test(norm)) { basis = "per100"; basisGrams = 100; }
   const servMatch = norm.match(/serving\s*size[^0-9]{0,8}([0-9oOlI|sS.,]{1,6})\s*(g|ml|9)/) || norm.match(/per\s*serving[^0-9]{0,12}([0-9oOlI|sS.,]{1,6})\s*(g|ml|9)/);
-  if (!/per\s*100/.test(norm) && servMatch) { const g = parseFloat(numFix(servMatch[1])); if (isFinite(g) && g > 0) { basis = "serving"; basisGrams = g; } }
+  const servSizeG = (() => { if (!servMatch) return null; const v = parseFloat(numFix(servMatch[1])); return isFinite(v) && v > 0 ? Math.round(v) : null; })();
+  if (!/per\s*100/.test(norm) && servSizeG) { basis = "serving"; basisGrams = servSizeG; }
   const nutr = {};
   // energy: prefer kcal; else kJ / 4.184
   let kcal = grab(/(?:calories|energy|kcal|energ[iy])[^0-9kj]{0,12}([0-9oOlI|sS.,]{1,6})\s*(?:kcal|cal|$|\n)/) ?? grab(/(?:calories|energy|kcal)[^0-9]{0,12}([0-9oOlI|sS.,]{1,6})/);
@@ -329,7 +330,9 @@ const parseNutritionText = (text) => {
     if (/^[0-9\s.,%a-z]{0,4}$/i.test(ln)) continue;
     if (/[a-z]{3,}/i.test(ln) && !/^\d/.test(ln)) { label = ln.slice(0, 40); break; }
   }
-  return { label, basis, basisGrams, nutr, source: "ocr" };
+  // real-portion default: a labeled serving basis IS the portion; else a per100 read that still mentions a serving size gets one.
+  const portionG = (basis === "serving" && basisGrams > 0) ? basisGrams : resolvePortionG({ servingG: servSizeG, packageG: null });
+  return { label, basis, basisGrams, nutr, source: "ocr", ...(portionG ? { portionG } : {}) };
 };
 const blankDay = () => ({ kcal: 0, protein: 0, carbs: 0, fat: 0, steps: 0, water: 0, entries: [], waterEntries: [] });
 // canonical nutrient dictionary — NOT stored; drives extraction, display, goals. netCarbs is DERIVED (carbs-fiber), not listed.
@@ -369,9 +372,22 @@ const NUTRIENTS = [
   { key: "b12", label: "B12", unit: "µg", group: "vitamin", rda: 2.4 },
 ];
 // USDA FoodData Central nutrientId → our key
-const USDA_MAP = { 1008: "kcal", 1003: "protein", 1005: "carbs", 1004: "fat", 1079: "fiber", 2000: "sugar", 1258: "satFat", 1253: "cholesterol", 1093: "sodium", 1092: "potassium", 1087: "calcium", 1089: "iron", 1090: "magnesium", 1095: "zinc", 1091: "phosphorus", 1098: "copper", 1101: "manganese", 1103: "selenium", 1057: "caffeine", 1018: "alcohol", 1106: "vitA", 1162: "vitC", 1114: "vitD", 1109: "vitE", 1185: "vitK", 1165: "b1", 1166: "b2", 1167: "b3", 1170: "b5", 1175: "b6", 1177: "folate", 1178: "b12" };
+const USDA_MAP = { 1008: "kcal", 1003: "protein", 1005: "carbs", 1004: "fat", 1079: "fiber", 2000: "sugar", 1258: "satFat", 1253: "cholesterol", 1093: "sodium", 1092: "potassium", 1087: "calcium", 1089: "iron", 1090: "magnesium", 1095: "zinc", 1091: "phosphorus", 1098: "copper", 1101: "manganese", 1103: "selenium", 1057: "caffeine", 1018: "alcohol", 1051: "water", 1106: "vitA", 1162: "vitC", 1114: "vitD", 1109: "vitE", 1185: "vitK", 1165: "b1", 1166: "b2", 1167: "b3", 1170: "b5", 1175: "b6", 1177: "folate", 1178: "b12" };
 // Open Food Facts nutriments `<field>_100g` → our key. Note: OFF often gives `salt` not `sodium`; derive sodium = salt g ÷ 2.5 in the mapper (Task 3), not here.
-const OFF_MAP = { "energy-kcal": "kcal", proteins: "protein", carbohydrates: "carbs", fat: "fat", fiber: "fiber", sugars: "sugar", "saturated-fat": "satFat", cholesterol: "cholesterol", sodium: "sodium", potassium: "potassium", calcium: "calcium", iron: "iron", magnesium: "magnesium", zinc: "zinc", phosphorus: "phosphorus", copper: "copper", manganese: "manganese", selenium: "selenium", caffeine: "caffeine", "vitamin-a": "vitA", "vitamin-c": "vitC", "vitamin-d": "vitD", "vitamin-e": "vitE", "vitamin-k": "vitK", "vitamin-b1": "b1", "vitamin-b2": "b2", "vitamin-pp": "b3", "pantothenic-acid": "b5", "vitamin-b6": "b6", "vitamin-b9": "folate", "vitamin-b12": "b12" };
+const OFF_MAP = { "energy-kcal": "kcal", proteins: "protein", carbohydrates: "carbs", fat: "fat", fiber: "fiber", sugars: "sugar", "saturated-fat": "satFat", cholesterol: "cholesterol", sodium: "sodium", potassium: "potassium", calcium: "calcium", iron: "iron", magnesium: "magnesium", zinc: "zinc", phosphorus: "phosphorus", copper: "copper", manganese: "manganese", selenium: "selenium", caffeine: "caffeine", water: "water", "vitamin-a": "vitA", "vitamin-c": "vitC", "vitamin-d": "vitD", "vitamin-e": "vitE", "vitamin-k": "vitK", "vitamin-b1": "b1", "vitamin-b2": "b2", "vitamin-pp": "b3", "pantothenic-acid": "b5", "vitamin-b6": "b6", "vitamin-b9": "folate", "vitamin-b12": "b12" };
+// water content of a food, real value wins (never overwritten); else estimate from non-macro mass: per 100 g/ml,
+// water ≈ 100 − protein − carbs − fat − 1 (the "−1" reserves a sliver for ash/other trace mass). Scales to any
+// per-basis amount: water ≈ 0.99·basisG − (protein + carbs + fat) at that same basis. Skips legacy multiplier
+// foods (basisGrams null) — there's no gram basis to estimate against.
+const ensureWater = (food) => {
+  const n = food.nutr || {};
+  if (n.water != null) return food;
+  const basisG = food.basis === "per100" ? 100 : (food.basisGrams > 0 ? food.basisGrams : null);
+  if (basisG == null) return food;
+  const macros = (+n.protein || 0) + (+n.carbs || 0) + (+n.fat || 0);
+  const water = Math.max(0, 0.99 * basisG - macros);
+  return { ...food, nutr: { ...n, water: Math.round(water) } };
+};
 // scale a food's nutr to `grams`. per100 → *grams/100; serving/item with numeric basisGrams>0 → *grams/basisGrams; legacy multiplier (basisGrams null) → *(grams||1). Returns a new object; never mutates food.nutr.
 const entryNutr = (food, grams) => {
   const n = food.nutr || {};
@@ -408,7 +424,7 @@ const upgradeFood = (f) => {
   const { id, label, kcal, protein, carbs, fat } = f;
   const staple = DEFAULT_FOODS.find((s) => s.id === id);
   if (staple) return { ...staple, fav: !!f.fav, lastGrams: f.lastGrams != null ? f.lastGrams : staple.basisGrams };
-  return { id, label, basis: "item", basisGrams: null, nutr: { kcal, protein, carbs, fat }, source: "legacy" };
+  return ensureWater({ id, label, basis: "item", basisGrams: null, nutr: { kcal, protein, carbs, fat }, source: "legacy" });
 };
 // legacy entry {id,label,kcal,protein,carbs,fat,t} → {id,label,t,nutr:{...}} (no grams). Idempotent.
 const upgradeEntry = (e) => {
@@ -436,8 +452,14 @@ const usdaFoodToFood = (fdc) => {
       if (v != null) { nutr.kcal = +v; break; }
     }
   }
-  return { id: "usda:" + fdc.fdcId, label: fdc.description, basis: "per100", basisGrams: 100, nutr, source: "usda", dataType: fdc.dataType };
+  return ensureWater({ id: "usda:" + fdc.fdcId, label: fdc.description, basis: "per100", basisGrams: 100, nutr, source: "usda", dataType: fdc.dataType });
 };
+// "40 g" / "400ml" / "1 portion (40 g)" → grams (ml≈g). First number immediately followed by g/ml wins.
+const parseServingG = (str) => { if (!str || typeof str !== "string") return null;
+  const m = str.match(/([\d.,]+)\s*(g|ml)\b/i); if (!m) return null;
+  const v = parseFloat(m[1].replace(",", ".")); return v > 0 && v < 5000 ? Math.round(v) : null; };
+// one REAL portion: labeled serving beats package weight; a big multi-portion package (>750g) is not "a portion".
+const resolvePortionG = ({ servingG, packageG }) => servingG || (packageG > 0 && packageG <= 750 ? Math.round(packageG) : null);
 // OFF: nutriments carry <field>_100g values (may be strings). Derive sodium from salt/2.5 when only salt present.
 const offProductToFood = (prod) => {
   const nm = prod.nutriments || {};
@@ -450,8 +472,19 @@ const offProductToFood = (prod) => {
   if (nutr.kcal == null && nm.energy_100g != null && nm.energy_100g !== "") nutr.kcal = Math.round(+nm.energy_100g / 4.184);   // kJ-only labels → kcal
   if (nutr.sodium == null && nm.salt_100g != null && nm.salt_100g !== "") nutr.sodium = +nm.salt_100g / 2.5;
   const brand = (prod.brands || "").split(",")[0].trim() || undefined;
-  return { id: "off:" + prod.code, label: prod.product_name, brand, basis: "per100", basisGrams: 100, nutr, source: "off", barcode: prod.code };
+  // real-portion default: labeled serving_size beats product_quantity/quantity (package net weight); big multi-portion packages (>750g) don't count.
+  const servingG = parseServingG(prod.serving_size);
+  const packageG = +prod.product_quantity || parseServingG(prod.quantity);
+  const portionG = resolvePortionG({ servingG, packageG });
+  return ensureWater({ id: "off:" + prod.code, label: prod.product_name, brand, basis: "per100", basisGrams: 100, nutr, source: "off", barcode: prod.code, ...(portionG ? { portionG } : {}) });
 };
+// query cleanup: qualifier words users type that USDA descriptions never contain, + common aliases.
+const QUERY_SYNONYMS = { "cow milk": "milk", "cows milk": "milk", "cow's milk": "milk", "soy milk": "soymilk", "chicken meat": "chicken", "beef meat": "beef", "white rice": "rice, white", "brown rice": "rice, brown" };
+const QUERY_DROP = /\b(cow|cows|cow's|fresh|plain|regular|normal|natural)\b/gi;
+const normalizeQuery = (raw) => { let q = (raw || "").trim().toLowerCase();
+  if (QUERY_SYNONYMS[q]) q = QUERY_SYNONYMS[q];
+  else q = q.replace(QUERY_DROP, " ").replace(/\s+/g, " ").trim() || q;
+  const words = q.split(/\s+/); return { q, head: words[words.length - 1] }; };
 const USDA_DEMO_KEY = "kCTIiIhqTLRn17USePlgomjCnPEyZIAUbjxkJLZF";  // baked-in free FDC key (1000 req/hr, read-only public data); nutrition.usdaKey overrides
 // Returns { items, error } where error is null | 'ratelimit' | 'network'. DEMO_KEY is globally rate-limited (429);
 // a user-supplied free USDA FDC key (nutrition.usdaKey) lifts that. On 429/OVER_RATE_LIMIT we flag 'ratelimit' so
@@ -464,14 +497,21 @@ function scoreUsdaFood(f, query) {
   const desc = (f.label || "");
   const d = desc.toLowerCase();
   const q = (query || "").trim().toLowerCase();
-  const core = q.split(/\s+/)[0] || "";   // core noun, e.g. "chicken"
+  const qWords = q.split(/\s+/);
+  const cores = [...new Set([qWords[0] || "", qWords[qWords.length - 1] || ""])];   // core noun candidates, e.g. "chicken" / "breast"
+  let coreScore = 0;
+  for (const core of cores) {
+    let cs = 0;
+    if (core && (d === core || d.startsWith(core + ",") || d.startsWith(core + " "))) cs = 30;  // "Chicken, …"
+    else if (core && d.includes(core)) cs = 8;
+    if (cs > coreScore) coreScore = cs;
+  }
   const prep = USDA_PREP_RE.test(d);
   let s = 0;
   if (f.dataType === "Foundation") s += 60;      // cleanest generic foods
   else if (f.dataType === "SR Legacy") s += 20;
   if (!prep && USDA_COOK_RE.test(d)) s += 25;    // raw/cooked/roasted… = a generic state (not for processed items)
-  if (core && (d === core || d.startsWith(core + ",") || d.startsWith(core + " "))) s += 30;  // "Chicken, …"
-  else if (core && d.includes(core)) s += 8;
+  s += coreScore;
   s -= Math.min(30, Math.floor(desc.length / 12));  // prefer short comma-structured descriptions
   if (prep) s -= 45;                             // processed/prepared/branded markers
   if (/^[A-Z0-9 ,'&.-]{6,}$/.test(desc) && desc === desc.toUpperCase()) s -= 25;  // ALLCAPS brand-ish
@@ -480,7 +520,10 @@ function scoreUsdaFood(f, query) {
 async function searchUSDA(query, key) {
   const apiKey = (key && key.trim()) || USDA_DEMO_KEY;
   try {
-    const url = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&dataType=Foundation,SR%20Legacy&pageSize=25&api_key=${encodeURIComponent(apiKey)}`;
+    // pageSize=200 (FDC's hard max): USDA's own relevance ranking buries plain generics (e.g. "Milk, whole…",
+    // "Chicken, breast, …raw") past rank 25 for common single-word queries — our local scoreUsdaFood re-rank
+    // can only promote what's in the fetched pool, so a small pageSize silently hides the generic entirely.
+    const url = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&dataType=Foundation,SR%20Legacy&pageSize=200&api_key=${encodeURIComponent(apiKey)}`;
     const r = await fetch(url);
     if (r.status === 429) return { items: [], error: "ratelimit" };
     if (!r.ok) return { items: [], error: r.status >= 500 ? "network" : null };
@@ -498,7 +541,7 @@ async function searchUSDA(query, key) {
 // OFF: the v2 /api/v2/search endpoint currently returns an HTML "temporarily unavailable" page and weak relevance.
 // The legacy CGI endpoint works and is relevant. Guard against non-JSON (HTML) responses — never feed HTML to json().
 async function searchOFF(query) {
-  const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=8&lc=en&fields=product_name,brands,nutriments,code`;
+  const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=8&lc=en&fields=product_name,brands,nutriments,code,serving_size,product_quantity`;
   // OFF's public endpoint intermittently throws a transient "Failed to fetch" on the first hit; one retry makes it reliable.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -520,7 +563,7 @@ async function searchOFF(query) {
 const findByBarcode = (nut, code) => (nut.foods || []).find((f) => f.barcode === code) || null;
 async function lookupBarcode(code) {
   try {
-    const url = `https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=code,product_name,product_name_ja,nutriments,serving_size`;
+    const url = `https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=code,product_name,product_name_ja,nutriments,serving_size,product_quantity,quantity`;
     const r = await fetch(url);
     if (!r.ok) return null;
     const j = await r.json();
@@ -537,11 +580,13 @@ async function lookupBarcode(code) {
   } catch (e) { return null; }
 }
 const DEFAULT_FOODS = [
-  { id: "chicken300", label: "Chicken breast", basis: "serving", basisGrams: 300, nutr: { kcal: 330, protein: 50, carbs: 0, fat: 7 }, source: "staple" },
-  { id: "rice200", label: "Rice, cooked", basis: "serving", basisGrams: 200, nutr: { kcal: 260, protein: 4, carbs: 57, fat: 1 }, source: "staple" },
-  { id: "eggs3", label: "Eggs", basis: "serving", basisGrams: 150, nutr: { kcal: 210, protein: 18, carbs: 1, fat: 15 }, source: "staple" },
-  { id: "whites200", label: "Egg whites", basis: "serving", basisGrams: 200, nutr: { kcal: 100, protein: 22, carbs: 1, fat: 0 }, source: "staple" },
-  { id: "whey1", label: "Whey", basis: "serving", basisGrams: 30, nutr: { kcal: 120, protein: 24, carbs: 3, fat: 2 }, source: "staple" },
+  // water: g water at this basis, from the ensureWater estimate (0.99·basisG − protein − carbs − fat), hand-computed
+  // so real staples never depend on the estimator running at load time.
+  { id: "chicken300", label: "Chicken breast", basis: "serving", basisGrams: 300, nutr: { kcal: 330, protein: 50, carbs: 0, fat: 7, water: 240 }, source: "staple" },
+  { id: "rice200", label: "Rice, cooked", basis: "serving", basisGrams: 200, nutr: { kcal: 260, protein: 4, carbs: 57, fat: 1, water: 136 }, source: "staple" },
+  { id: "eggs3", label: "Eggs", basis: "serving", basisGrams: 150, nutr: { kcal: 210, protein: 18, carbs: 1, fat: 15, water: 115 }, source: "staple" },
+  { id: "whites200", label: "Egg whites", basis: "serving", basisGrams: 200, nutr: { kcal: 100, protein: 22, carbs: 1, fat: 0, water: 175 }, source: "staple" },
+  { id: "whey1", label: "Whey", basis: "serving", basisGrams: 30, nutr: { kcal: 120, protein: 24, carbs: 3, fat: 2, water: 1 }, source: "staple" },
 ];
 const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb", dietUnit: "kg", dbMode: {}, rebasedTargets: false, seededStalls: false,
   nutrition: { goals: { kcal: 2100, protein: 175, carbs: 215, fat: 60, steps: 15000, water: 3000, goalBwLb: 154.32, fiber: 30, sodium: 2300, calcium: 1000, iron: 8, potassium: 3400, caffeine: 400 }, days: {}, foods: DEFAULT_FOODS, meals: [], proxyUrl: "", geminiKey: "", usdaKey: "" },
@@ -804,10 +849,16 @@ const migrateMem = (raw) => {
   // Idempotent (re-running is stable) and lossless for real day-entries + custom/non-staple foods.
   const reseedStaple = (f) => { if (!f || typeof f !== "object") return f; if (f.corr) return upgradeFood(f);   // user-corrected staples keep his numbers — never re-seed over a correction
     const staple = DEFAULT_FOODS.find((s) => s.id === f.id); if (!staple) return upgradeFood(f); return { ...staple, fav: !!f.fav, lastGrams: f.lastGrams != null ? f.lastGrams : staple.basisGrams }; };
-  const foods = (Array.isArray(rn.foods) && rn.foods.length ? rn.foods : DEFAULT_FOODS).map(reseedStaple);
+  const foods = (Array.isArray(rn.foods) && rn.foods.length ? rn.foods : DEFAULT_FOODS).map(reseedStaple).map(ensureWater);
+  // fill missing entry-level water from that entry's own macros + grams (same estimate, at entry scale); never overwrite a real value.
+  const fillEntryWater = (e) => { if (!e || typeof e !== "object" || !e.nutr || e.nutr.water != null || !(e.grams > 0)) return e;
+    const n = e.nutr, macros = (+n.protein || 0) + (+n.carbs || 0) + (+n.fat || 0);
+    const water = Math.max(0, e.grams - macros - e.grams / 100);
+    return { ...e, nutr: { ...n, water: Math.round(water) } };
+  };
   const rnDays = rn.days && typeof rn.days === "object" ? rn.days : {};
   const days = {};
-  for (const k in rnDays) { const d = rnDays[k] || {}; days[k] = { ...d, entries: Array.isArray(d.entries) ? d.entries.map(upgradeEntry) : [] }; }
+  for (const k in rnDays) { const d = rnDays[k] || {}; days[k] = { ...d, entries: Array.isArray(d.entries) ? d.entries.map(upgradeEntry).map(fillEntryWater) : [] }; }
   m.nutrition = { goals: { ...DEFAULT.nutrition.goals, ...(rn.goals || {}) }, days, foods, meals: Array.isArray(rn.meals) ? rn.meals : [], proxyUrl: typeof rn.proxyUrl === "string" ? rn.proxyUrl : DEFAULT.nutrition.proxyUrl, geminiKey: typeof rn.geminiKey === "string" ? rn.geminiKey : "", usdaKey: typeof rn.usdaKey === "string" ? rn.usdaKey : DEFAULT.nutrition.usdaKey };
   const rs = raw.sleep && typeof raw.sleep === "object" ? raw.sleep : {};
   m.sleep = { def: { ...DEFAULT.sleep.def, ...(rs.def || {}) }, days: rs.days && typeof rs.days === "object" ? rs.days : {} };
@@ -861,6 +912,33 @@ function buildDayPlan(dayId, mem) {
   });
   return items;
 }
+// ── focus-pager sequencing (pure) ──
+// unitize: one pager card per unit; an ACTIVE superset pair (A at i, B at i+1) merges into one unit.
+function unitize(plan, isPaired) {
+  const out = [];
+  for (let i = 0; i < plan.length; i++) {
+    const it = plan[i];
+    if (isPaired(it) && it.pair.role === "A" && it.pair.partnerIdx === i + 1) { out.push({ idxs: [i, i + 1], pair: true }); i++; }
+    else out.push({ idxs: [i], pair: false });
+  }
+  return out;
+}
+// seqKeys: true execution order. Pairs interleave WORK sets round-by-round (A1,B1,A2,B2…);
+// warmups run first (A's then B's); uneven work counts append the longer tail consecutively.
+function seqKeys(plan, isPaired) {
+  const keys = [];
+  unitize(plan, isPaired).forEach((u) => {
+    if (!u.pair) { plan[u.idxs[0]].sets.forEach((_, si) => keys.push(`${u.idxs[0]}-${si}`)); return; }
+    const [a, b] = u.idxs;
+    const wu = (ei) => plan[ei].sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "warmup").map((x) => `${ei}-${x.si}`);
+    const wk = (ei) => plan[ei].sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "work").map((x) => `${ei}-${x.si}`);
+    keys.push(...wu(a), ...wu(b));
+    const wa = wk(a), wb = wk(b);
+    for (let r = 0; r < Math.max(wa.length, wb.length); r++) { if (wa[r]) keys.push(wa[r]); if (wb[r]) keys.push(wb[r]); }
+  });
+  return keys;
+}
+const nextKeyOf = (seq, done, active) => seq.find((k) => !done.has(k) && k !== active) || null;
 const dayMeta = (dayId) => PROGRAM.find((d) => d.id === dayId) || PROGRAM[0];
 const nextDayId = (dayId) => { const ids = PROGRAM.map((d) => d.id); const i = ids.indexOf(dayId); return ids[(i + 1) % ids.length]; };
 
@@ -946,7 +1024,7 @@ function planForward(range, target, freq, weeks = 26) {
   }
   return out;
 }
-if (typeof window !== "undefined" && window.__wk) { window.__wk.nextPrescription = nextPrescription; window.__wk.assess = assess; window.__wk.planForward = planForward; window.__wk.buildDayPlan = buildDayPlan; }
+if (typeof window !== "undefined" && window.__wk) { window.__wk.nextPrescription = nextPrescription; window.__wk.assess = assess; window.__wk.planForward = planForward; window.__wk.buildDayPlan = buildDayPlan; window.__wk.unitize = unitize; window.__wk.seqKeys = seqKeys; }
 
 const SET_EXEC = 40, TRANSITION = 90;
 const fmtClock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -966,9 +1044,88 @@ function Stepper({ value, onStep, minW = 30, disabled, label = "value", fmt }) {
   useEffect(() => () => stop(), []);
   return (
     <div className="inline-flex select-none items-center rounded-lg border" style={{ borderColor: C.edge, background: "#100E09", opacity: disabled ? 0.45 : 1 }}>
-      <button aria-label={`decrease ${label}`} onPointerDown={() => start(-1)} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop} className="flex h-9 w-9 touch-none items-center justify-center active:scale-90" style={{ color: C.bone }}><Minus size={16} /></button>
-      <span className="px-1 text-center font-mono text-[15px] font-bold" style={{ color: C.bone, minWidth: minW }}>{fmt ? fmt(value) : value}</span>
-      <button aria-label={`increase ${label}`} onPointerDown={() => start(1)} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop} className="flex h-9 w-9 touch-none items-center justify-center active:scale-90" style={{ color: C.bone }}><Plus size={16} /></button>
+      <button aria-label={`decrease ${label}`} onPointerDown={() => start(-1)} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop} className="flex h-11 w-11 touch-none items-center justify-center active:scale-90" style={{ color: C.bone }}><Minus size={20} /></button>
+      <span className="px-1 text-center font-mono text-[18px] font-bold" style={{ color: C.bone, minWidth: minW }}>{fmt ? fmt(value) : value}</span>
+      <button aria-label={`increase ${label}`} onPointerDown={() => start(1)} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop} className="flex h-11 w-11 touch-none items-center justify-center active:scale-90" style={{ color: C.bone }}><Plus size={20} /></button>
+    </div>
+  );
+}
+
+/* ───────────────────────── value wheel ───────────────────────── */
+// Vertical swipe wheel: drag up = +, 24px per step; flick adds momentum steps; tap (no movement) = type
+// exact. Touch handlers are attached imperatively (ref + useEffect, { passive: false }) because React's
+// synthetic onTouchMove can't preventDefault reliably — without that the page scrolls mid-swipe. The
+// gesture mirrors FocusPager's own direction lock (8px, whichever axis leads wins) and only claims the
+// touch (preventDefault + stopPropagation) once it's decided vertical; a mostly-horizontal drag is left
+// untouched so it still reaches the pager and pages normally.
+function ValueWheel({ value, onStep, onSetExact, fmt, label, suffix, peekUp, peekDn, disabled, resetKey }) {
+  const [editing, setEditing] = useState(false);
+  const [txt, setTxt] = useState("");
+  const g = useRef(null);
+  const elRef = useRef(null);
+  const onStepRef = useRef(onStep); onStepRef.current = onStep;
+  const valueRef = useRef(value); valueRef.current = value;
+  const disabledRef = useRef(disabled); disabledRef.current = disabled;
+  const cancelled = useRef(false);
+  const suppressClick = useRef(false);   // a claimed vertical swipe can emit a trailing synthetic click — swallow it
+  const F = fmt || ((v) => v);
+  const fmtRef = useRef(F); fmtRef.current = F;
+  const editingRef = useRef(editing); editingRef.current = editing;
+  // single entry point for tap-to-type (touch tap AND desktop mouse click) — seeds with the DISPLAY
+  // value (same thing the wheel renders) so the commit path converts display→stored exactly once.
+  const openEditor = () => { if (disabledRef.current || editingRef.current) return; setTxt(String(fmtRef.current(valueRef.current))); setEditing(true); };
+
+  useEffect(() => { setEditing(false); }, [resetKey]);   // switching to a different set row cancels any in-progress edit
+
+  useEffect(() => {
+    if (editing) return;   // wheel div is unmounted while editing — re-run on close so listeners bind to the FRESH node
+    const el = elRef.current;
+    if (!el) return;
+    const onTS = (e) => { if (disabledRef.current) return; const t = e.touches[0]; g.current = { x: t.clientX, y: t.clientY, t: Date.now(), acc: 0, moved: false, lock: null }; };
+    const onTM = (e) => {
+      const s = g.current; if (!s) return;
+      const t = e.touches[0];
+      const dx = t.clientX - s.x, dy = s.y - t.clientY;   // dy: up = positive
+      if (s.lock == null && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) s.lock = Math.abs(dy) > Math.abs(dx) ? "y" : "x";
+      s.moved = s.moved || Math.abs(dx) > 6 || Math.abs(dy) > 6;
+      if (s.lock !== "y") return;   // horizontal or still undecided — let it fall through to the pager untouched
+      e.preventDefault(); e.stopPropagation();
+      const steps = Math.trunc(dy / 24) - s.acc;
+      if (steps !== 0) { s.acc += steps; for (let i = 0; i < Math.abs(steps); i++) onStepRef.current(steps > 0 ? 1 : -1); }
+    };
+    const onTE = (e) => {
+      const s = g.current; g.current = null; if (!s) return;
+      if (s.lock === "y") { e.stopPropagation(); suppressClick.current = true; }   // gesture claimed — swallow the trailing synthetic click
+      if (!s.moved) { openEditor(); return; }
+      const dt = Date.now() - s.t, v = s.acc / Math.max(1, dt);           // steps per ms
+      const extra = Math.min(8, Math.round(Math.abs(v) * 220));           // flick momentum
+      for (let i = 0; i < extra; i++) onStepRef.current(s.acc > 0 ? 1 : -1);
+    };
+    el.addEventListener("touchstart", onTS, { passive: false });
+    el.addEventListener("touchmove", onTM, { passive: false });
+    el.addEventListener("touchend", onTE, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onTS);
+      el.removeEventListener("touchmove", onTM);
+      el.removeEventListener("touchend", onTE);
+    };
+  }, [editing]);   // re-attach after each edit closes; onStep/value/disabled/fmt are read via refs so the listeners never go stale
+
+  if (editing) return (
+    <input autoFocus type="number" inputMode="decimal" value={txt} aria-label={label}
+      onChange={(e) => setTxt(e.target.value)}
+      onBlur={() => { if (cancelled.current) { cancelled.current = false; setEditing(false); return; } const n = parseFloat(txt); if (!isNaN(n)) onSetExact(n); setEditing(false); }}
+      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); else if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); } }}
+      className="w-[72px] rounded-lg border px-1 py-2 text-center font-mono text-[18px] font-bold outline-none"
+      style={{ background: "#100E09", borderColor: C.goldDim, color: C.bone }} />
+  );
+  return (
+    <div ref={elRef} className="select-none touch-none rounded-lg border px-2 py-0.5 text-center" style={{ borderColor: C.edge, background: "#100E09", minWidth: 72, opacity: disabled ? 0.45 : 1 }}
+      onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } openEditor(); }}   // desktop mouse path — touch taps land here too but openEditor no-ops once editing
+      role="spinbutton" aria-label={label} aria-valuenow={F(value)}>
+      <div className="font-mono text-[11px] leading-tight" style={{ color: C.ashDim, opacity: 0.55 }}>{peekUp}</div>
+      <div className="font-mono text-[19px] font-bold leading-tight" style={{ color: C.bone }}>{F(value)}{suffix ? <span className="text-[10px]" style={{ color: C.ashDim }}> {suffix}</span> : null}</div>
+      <div className="font-mono text-[11px] leading-tight" style={{ color: C.ashDim, opacity: 0.55 }}>{peekDn}</div>
     </div>
   );
 }
@@ -990,7 +1147,7 @@ function NumberField({ value, onChange, step = 1, label, width = 58, placeholder
         onChange={(e) => type(e.target.value)}
         onBlur={() => { focused.current = false; commit(txt); }}
         onKeyDown={(e) => { if (e.key === "Enter") { commit(txt); e.currentTarget.blur(); } }}
-        className="bg-transparent text-center font-mono text-[15px] font-bold outline-none placeholder:opacity-40" style={{ color: C.bone, width }} />
+        className="bg-transparent text-center font-mono text-[16px] font-bold outline-none placeholder:opacity-40" style={{ color: C.bone, width }} />
       <button aria-label={`increase ${label}`} onClick={() => nudge(step)} className="flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.bone }}><Plus size={15} /></button>
     </div>
   );
@@ -1017,6 +1174,111 @@ function ExerciseAnim({ kind }) {
   );
 }
 
+/* ───────────────────────── sticky top player bar — morphing start/done/rest control ───────────────────────── */
+// rest (precedence) > live set > idle. Weight text always honors hand-edits via logs[key] overrides.
+function PlayerBar({ plan, active, rest, restLeft, logs, mem, unit, busy, nextKey, startSet, finishSet, cancelSet, skipRest, addRest, pauseRest, resumeRest, setConfirm }) {
+  const info = (key) => {
+    if (!key) return null;
+    const [ei, si] = key.split("-").map(Number);
+    const item = plan[ei]; const set = item && item.sets[si];
+    if (!item || !set) return null;
+    const log = logs[key] ?? { weight: set.load, reps: set.repsNum };
+    const cnt = dbCount(mem, item.ex);
+    const rp = item.ex.repProgress;
+    const w = rp ? "bodyweight" : `${dispW(log.weight, unit)} ${uw(unit)}${cnt === 1 ? "" : "/hand"}`;
+    return { item, set, log, w, isWarm: set.kind === "warmup" };
+  };
+
+  if (rest) {
+    const nx = info(nextKey);
+    return (
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <span className="font-mono text-3xl font-bold" style={{ color: C.gold }}>{fmtClock(restLeft)}</span>
+          {nx && (
+            <p className="mt-0.5 truncate font-mono text-[11px]" style={{ color: C.ashDim }}>
+              next · {nx.item.ex.name} · {nx.w} · goal {nx.log.reps}
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button onClick={addRest} aria-label="add 30 seconds rest" className="flex h-11 items-center rounded-full border px-4 font-mono text-[13px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>+30s</button>
+          {rest.pausedAt ? (
+            <button onClick={resumeRest} aria-label="resume rest" className="flex h-11 w-11 items-center justify-center rounded-full border active:scale-90" style={{ borderColor: C.edge, color: C.ash }}><Play size={18} /></button>
+          ) : (
+            <button onClick={pauseRest} aria-label="pause rest" className="flex h-11 w-11 items-center justify-center rounded-full border active:scale-90" style={{ borderColor: C.edge, color: C.ash }}><Pause size={18} /></button>
+          )}
+          <button onClick={skipRest} aria-label="skip rest" className="flex h-11 items-center rounded-full border px-4 font-mono text-[13px] font-bold uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>Skip</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (active) {
+    const [ei, si] = active.split("-").map(Number);
+    const it = plan[ei]; const st = it && it.sets[si];
+    if (!it || !st) return null;
+    const inf = info(active);
+    return (
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-mono text-[11px] uppercase tracking-wider" style={{ color: C.goldDim }}>set {st.label} · live — {it.ex.name}</p>
+          <p className="truncate font-mono text-[12px]" style={{ color: C.ash }}>{inf.w} · goal {inf.log.reps}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button onClick={cancelSet} aria-label="cancel set" className="flex h-11 w-11 items-center justify-center rounded-full border active:scale-90" style={{ borderColor: C.edge, color: C.ash }}><X size={18} /></button>
+          <button onClick={() => finishSet(st, ei)} className="flex h-11 items-center gap-1.5 rounded-full px-5 font-mono text-sm font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}><Check size={16} /> Done</button>
+        </div>
+      </div>
+    );
+  }
+
+  const nx = info(nextKey);
+  if (nx) {
+    return (
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-mono text-[11px] uppercase tracking-wider" style={{ color: C.ashDim }}>next · set {nx.set.label}{nx.isWarm ? " · warm-up" : ""} — {nx.item.ex.name}</p>
+          <p className="truncate font-mono text-[12px]" style={{ color: C.ash }}>{nx.w} · goal {nx.log.reps}</p>
+        </div>
+        <button onClick={() => startSet(nextKey)} disabled={busy} className="flex h-11 shrink-0 items-center gap-1.5 rounded-full px-5 font-mono text-sm font-bold uppercase tracking-wider active:scale-95" style={{ background: busy ? C.card : C.gold, color: busy ? C.ashDim : C.bg, opacity: busy ? 0.5 : 1 }}><Play size={16} /> Start</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <p className="min-w-0 flex-1 truncate font-mono text-[13px] font-semibold" style={{ color: C.sage }}>All sets done — strong work.</p>
+      <button onClick={() => { setConfirm("finish"); setTimeout(() => document.getElementById("finishzone")?.scrollIntoView({ behavior: "smooth", block: "center" }), 50); }} className="flex h-11 shrink-0 items-center gap-1.5 rounded-full px-5 font-mono text-sm font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}><Save size={16} /> Finish day</button>
+    </div>
+  );
+}
+
+// horizontal focus pager: translateX slides, touch-swipe to peek, height follows the current page.
+function FocusPager({ count, page, onPage, children }) {
+  const wrapRef = useRef(null); const pageRefs = useRef([]);
+  const touch = useRef(null);
+  const [drag, setDrag] = useState(0);
+  useLayoutEffect(() => { const el = pageRefs.current[page]; if (el && wrapRef.current) wrapRef.current.style.height = el.offsetHeight + "px"; }, [page, children]);
+  const onTS = (e) => { touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, lock: null }; };
+  const onTM = (e) => { const t = touch.current; if (!t) return;
+    const dx = e.touches[0].clientX - t.x, dy = e.touches[0].clientY - t.y;
+    if (t.lock == null && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) t.lock = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+    if (t.lock === "x") setDrag(dx); };
+  const onTE = () => { const t = touch.current; touch.current = null;
+    if (t && t.lock === "x" && Math.abs(drag) > 48) onPage(Math.max(0, Math.min(count - 1, page + (drag < 0 ? 1 : -1))));
+    setDrag(0); };
+  return (
+    <div ref={wrapRef} className="overflow-hidden" style={{ transition: "height .25s ease" }} onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE}>
+      <div className="flex items-start" style={{ transform: `translateX(calc(${-page * 100}% + ${drag}px))`, transition: drag ? "none" : "transform .28s ease" }}>
+        {Array.from({ length: count }, (_, i) => (
+          <div key={i} ref={(el) => (pageRefs.current[i] = el)} className="w-full shrink-0 px-0.5">{children(i)}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ───────────────────────── progress + projection chart ───────────────────────── */
 const ALL_EX = Object.values(EXERCISES);      // chips derive from the library → swaps/additions appear automatically
 const SHORT = {
@@ -1026,6 +1288,9 @@ const SHORT = {
   "Single-Leg Calf Raises": "SL Calf", "Standing Calf Raise": "Calf Raise", "Bench-Supported DB Pullover": "Pullover", "Bulgarian Split Squat": "Bulgarian",
   "DB Goblet Squat": "Goblet", "Reverse Lunge": "Reverse Lunge", "DB Hip Thrust": "Hip Thrust", "Weighted DB Crunch": "Weighted Crunch",
 };
+// the name a set row is titled by inside the merged superset card — the exercise's own short name,
+// never an abbreviation of it ("Lateral Raise", not "LATERA").
+const rowName = (name) => SHORT[name] || name.replace(/^DB\s+/, "");
 const ProgressChart = React.memo(function ProgressChart({ mem }) {
   const [sel, setSel] = useState(ALL_EX[0].name);
   const ex = ALL_EX.find((e) => e.name === sel);
@@ -1228,21 +1493,38 @@ function NutrientSummary({ nutr, goals }) {
 }
 // Cronometer-style confirm view — set amount/unit/time, preview energy + day-impact bars, add to diary.
 // Edit mode (editMode+onSave): primary button reads "Save" and saves in place instead of appending.
-function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFav, onFav, onAdd, onSave, editMode, onClose }) {
+function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFav, onFav, onAdd, onSave, editMode, onClose, factsPending, factsError, onRetryFacts, frontError, onRename }) {
+  // true only for FoodDetail instances opened from the parallel-capture draft (factsPending is an explicit bool
+  // there, vs. undefined for every other entry point) — gates the reseed-on-resolve effect below so a normal
+  // add/edit flow (factsPending never passed) never has its seeded amount/unit clobbered on mount.
+  const isDraftFlow = useRef(typeof factsPending === "boolean").current;
+  const touched = useRef(false);   // true once the user edits amount/unit — the resolve reseed then leaves it alone
   const legacy = food.basisGrams == null && food.basis !== "per100";   // legacy 'item' → multiplier, no grams
-  const per100 = food.basis === "per100";
-  const hasBasis = food.basisGrams != null && food.basisGrams > 0;   // staple/serving with a real gram size → g⇄serving toggle
+  // one REAL portion, for display/defaults only: a labeled portionG beats the generic per100 scaling basis (basisGrams
+  // is always 100 for per100 foods — not a portion); a genuine serving/item basisGrams (bun, staple) has no portionG override.
+  const servG = food.portionG > 0 ? food.portionG : (food.basisGrams != null && food.basisGrams > 0 ? food.basisGrams : null);
+  const hasServ = servG != null;   // a real portion/gram size → g⇄serving toggle
   // seed grams: prefill from the edited/last portion, else a sensible default per basis
-  const seedGrams = legacy ? 1 : (initialGrams || food.lastGrams || (per100 ? 100 : food.basisGrams || 100));
-  // unit: 'g' | 'serving'. hasBasis foods can toggle; per100 stays 'g' (no serving size); legacy is a multiplier (no unit).
-  const [unit, setUnit] = useState(hasBasis && !editMode ? "serving" : "g");
-  // amount lives in the CURRENT unit. Default: if serving-unit + hasBasis → seedGrams/basisGrams, else seedGrams.
-  const [amount, setAmount] = useState(hasBasis && !editMode ? Math.round((seedGrams / food.basisGrams) * 100) / 100 : seedGrams);
+  const seedGrams = legacy ? 1 : (initialGrams || food.lastGrams || servG || 100);
+  // unit: 'g' | 'serving'. hasServ foods can toggle; no real portion size stays 'g'; legacy is a multiplier (no unit).
+  const [unit, setUnit] = useState(hasServ && !editMode ? "serving" : "g");
+  // amount lives in the CURRENT unit. Default: if serving-unit + hasServ → seedGrams/servG, else seedGrams.
+  const [amount, setAmount] = useState(hasServ && !editMode ? Math.round((seedGrams / servG) * 100) / 100 : seedGrams);
   const [t, setT] = useState(() => { const d = initialT ? new Date(initialT) : new Date(); return d; });
-  // grams: legacy → amount is a raw multiplier; serving → amount×basisGrams; else amount is grams.
-  const grams = legacy ? amount : (unit === "serving" && hasBasis ? amount * food.basisGrams : amount);
+  // grams: legacy → amount is a raw multiplier; serving → amount×servG; else amount is grams.
+  const grams = legacy ? amount : (unit === "serving" && hasServ ? amount * servG : amount);
   // switch unit while preserving the food quantity (grams stay fixed) — converts the displayed amount.
-  const switchUnit = (u) => { if (u === unit || !hasBasis) return; setAmount(u === "serving" ? Math.round((grams / food.basisGrams) * 100) / 100 : Math.round(grams * 100) / 100); setUnit(u); };
+  const switchUnit = (u) => { if (u === unit || !hasServ) return; touched.current = true; setAmount(u === "serving" ? Math.round((grams / servG) * 100) / 100 : Math.round(grams * 100) / 100); setUnit(u); };
+  // draft flow only: once the facts read resolves (and the user hasn't touched amount/unit), reseed from the now-
+  // real food — same chain as the initial mount seed above (lastGrams → servG, incl. Task-1 portionG → 100), just
+  // recomputed against whatever servG/hasServ/seedGrams now are for the resolved food. User edits always win.
+  useEffect(() => {
+    if (isDraftFlow && !factsPending && !touched.current) {
+      if (hasServ) { setUnit("serving"); setAmount(Math.round((seedGrams / servG) * 100) / 100); }
+      else { setUnit("g"); setAmount(seedGrams); }
+    }
+  }, [factsPending]);
+  const [manualEntry, setManualEntry] = useState(false);   // "enter manually" — un-gates ADD past a facts-read error
   const auto = entryNutr(food, grams);   // computed (library) nutr for this portion
   // editable macro override: when active, the logged entry uses ov (macros) merged over auto (micros pass through).
   const [ovOn, setOvOn] = useState(false);
@@ -1267,7 +1549,10 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" style={{ background: "rgba(0,0,0,0.72)" }} onClick={onClose}>
       <div className="max-h-[92vh] w-full max-w-md overflow-y-auto rounded-t-2xl border p-5 sm:rounded-2xl" style={{ background: C.card, borderColor: C.edge }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
-          <h3 className="text-[15px] font-bold leading-tight" style={{ color: C.bone }}>{food.label}{food.corr && <span className="ml-2 rounded-full border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider align-middle" style={{ borderColor: C.goldDim, color: C.gold }}>yours</span>}</h3>
+          <div className="min-w-0">
+            <h3 className="text-[15px] font-bold leading-tight" style={{ color: C.bone }}>{food.label}{food.corr && <span className="ml-2 rounded-full border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider align-middle" style={{ borderColor: C.goldDim, color: C.gold }}>yours</span>}</h3>
+            {frontError && <p className="mt-0.5 font-mono text-[9px]" style={{ color: C.ashDim }}>front photo failed — name saves as-is</p>}
+          </div>
           <div className="flex shrink-0 items-center gap-3">
             {onFav && <button onClick={onFav} aria-label="favorite" className="-my-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: isFav ? C.gold : C.ashDim }}><Star size={17} fill={isFav ? C.gold : "none"} /></button>}
             <button onClick={onClose} aria-label="close" className="-my-2 -mr-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.ash }}><X size={18} /></button>
@@ -1276,8 +1561,11 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
 
         {/* amount + unit + time */}
         <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <NumberField value={amount} step={legacy ? 1 : (unit === "serving" ? 0.25 : (per100 ? 10 : 10))} label="amount" width={64} onChange={setAmount} live />
-          {hasBasis ? (
+          {/* gram-unit step = the KNOWN real portion only: portionG (bun 40, juice 400) or a serving/item basisGrams (staples);
+              a bare per100 food has no known portion → fine 10 g steps (USDA generics, 1 kg packages — servG=100 there is the
+              scaling basis, not a portion). Serving unit steps 1 whole portion; legacy steps 1×. */}
+          <NumberField value={amount} step={legacy ? 1 : (unit === "serving" ? 1 : (food.portionG > 0 ? food.portionG : ((food.basis === "serving" || food.basis === "item") && food.basisGrams > 0 ? food.basisGrams : 10)))} label="amount" width={64} onChange={(v) => { touched.current = true; setAmount(v); }} live />
+          {hasServ ? (
             <div className="inline-flex overflow-hidden rounded-lg border" style={{ borderColor: C.edge }}>
               {[["g", "g"], ["serving", "serving"]].map(([u, lab]) => (
                 <button key={u} onClick={() => switchUnit(u)} className="px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ background: unit === u ? C.gold : "transparent", color: unit === u ? C.bg : C.ash }}>{lab}</button>
@@ -1286,24 +1574,25 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
           ) : (
             <span className="font-mono text-[11px] uppercase tracking-wider" style={{ color: C.ash }}>{legacy ? "× serving" : "g"}</span>
           )}
-          {hasBasis && unit === "serving" && <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>= {Math.round(grams)}g</span>}
+          {hasServ && unit === "serving" && <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>= {Math.round(grams)}g</span>}
           <label className="ml-auto flex items-center gap-1 rounded-lg border px-2 py-1" style={{ borderColor: C.edge }}>
             <Clock size={12} style={{ color: C.ashDim }} />
-            <input type="time" value={timeVal} onChange={(e) => setTime(e.target.value)} className="bg-transparent font-mono text-[11px] outline-none" style={{ color: C.ash, colorScheme: "dark" }} />
+            <input type="time" value={timeVal} onChange={(e) => setTime(e.target.value)} className="bg-transparent font-mono text-[16px] outline-none" style={{ color: C.ash, colorScheme: "dark" }} />
           </label>
         </div>
 
-        {/* energy summary */}
+        {/* energy summary — while the facts photo is still resolving, the number/macro cells shimmer instead of
+            showing (misleadingly precise) zeros; the label above still updates live as front/facts resolve. */}
         <div className="mt-4 rounded-xl border p-4" style={{ borderColor: C.edge, background: "#100E09" }}>
           <div className="flex items-baseline justify-between">
             <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>Energy</span>
-            <span className="font-mono text-2xl font-bold" style={{ color: C.gold }}>{Math.round(kcal)}<span className="text-[11px]" style={{ color: C.ash }}> kcal</span></span>
+            {factsPending ? <span className="inline-block h-6 w-12 animate-pulse rounded" style={{ background: "#2A2418" }} /> : <span className="font-mono text-2xl font-bold" style={{ color: C.gold }}>{Math.round(kcal)}<span className="text-[11px]" style={{ color: C.ash }}> kcal</span></span>}
           </div>
           <div className="mt-3 grid grid-cols-3 gap-2 text-center">
             {[["Protein", p, pct(p * 4)], ["Net Carbs", nc, pct(nc * 4)], ["Fat", f, pct(f * 9)]].map(([lab, val, pc]) => (
               <div key={lab}>
-                <p className="font-mono text-[13px] font-bold" style={{ color: C.bone }}>{fmtNut(val)}g</p>
-                <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>{lab} · {pc}%</p>
+                {factsPending ? <div className="mx-auto h-6 w-12 animate-pulse rounded" style={{ background: "#2A2418" }} /> : <p className="font-mono text-[13px] font-bold" style={{ color: C.bone }}>{fmtNut(val)}g</p>}
+                <p className="mt-1 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>{lab}{!factsPending && ` · ${pc}%`}</p>
               </div>
             ))}
           </div>
@@ -1357,7 +1646,28 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
           {full && <div className="mt-3"><NutrientSummary nutr={en} goals={goals} /></div>}
         </div>
 
-        <button onClick={() => { const payload = { food, grams, t: t.toISOString(), nutr: en, saveCorr: ovOn && saveCorr }; if (editMode && onSave) onSave(payload); else onAdd(payload); onClose(); }} className="mt-5 flex min-h-[44px] w-full items-center justify-center rounded-xl px-4 py-3 font-mono text-[12px] font-bold uppercase tracking-[0.2em] active:scale-95" style={{ background: C.gold, color: C.bg }}>{editMode ? "Save" : "Add to Diary"}</button>
+        {/* both-photos-failed rescue: the facts read failed and/or the food never got a real name (label still the
+            capture placeholder) — give the user a direct name field so nothing can ever save as "Reading…". Typed
+            names flow to the host draft via onRename, which locks them (nameLocked) against a late front resolve. */}
+        {onRename && !factsPending && (factsError || food.label === "Reading…") && (
+          <div className="mt-4">
+            <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>food name</p>
+            <input type="text" value={food.label === "Reading…" ? "" : food.label} placeholder="name this food" onChange={(e) => onRename(e.target.value)} autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-3 py-2 text-[16px] outline-none" style={inp} aria-label="food name" />
+          </div>
+        )}
+        {/* facts-read failed and the user hasn't opted past it yet: swap ADD for a retake/manual-entry recovery row,
+            unless the facts read is (re)pending — that always wins and shows the plain "reading…" gate below. */}
+        {factsError && !manualEntry && !factsPending ? (
+          <div className="mt-5">
+            <p className="font-mono text-[11px] leading-snug" style={{ color: C.rust }}>{factsError}</p>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <CamButton primary label="retake facts photo" busyLabel="reading…" busy={factsPending} onFile={onRetryFacts} />
+              <button onClick={() => { setManualEntry(true); if (!ovOn) openOv(); }} className="font-mono text-[10px] uppercase tracking-wider underline" style={{ color: C.goldDim }}>enter manually</button>
+            </div>
+          </div>
+        ) : (
+          <button disabled={factsPending} onClick={() => { const payload = { food, grams, t: t.toISOString(), nutr: en, saveCorr: ovOn && saveCorr }; if (editMode && onSave) onSave(payload); else onAdd(payload); onClose(); }} className="mt-5 flex min-h-[44px] w-full items-center justify-center rounded-xl px-4 py-3 font-mono text-[12px] font-bold uppercase tracking-[0.2em] active:scale-95" style={{ background: C.gold, color: C.bg, opacity: factsPending ? 0.6 : 1 }}>{factsPending ? "reading…" : (editMode ? "Save" : "Add to Diary")}</button>
+        )}
       </div>
     </div>
   );
@@ -1365,7 +1675,7 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
 // full-screen camera scanner: streams the rear camera, decodes EAN/UPC via zxing-wasm; first hit → onDetect(code).
 // Manual-entry field is a real fallback (and the deterministic test hook — the sandbox has no camera).
 const BARCODE_FORMATS = ["EAN-13", "EAN-8", "UPC-A", "UPC-E"];
-function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, onLabelFood }) {
+function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, goals, dayTotalsBefore, nutFoods, onAddFood, onFavFood }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
@@ -1374,6 +1684,9 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, onLabelFoo
   const [errMsg, setErrMsg] = useState("");
   const [manual, setManual] = useState("");
   const [wizard, setWizard] = useState(false);   // "no barcode? photo the product" path (not-found embeds its own wizard)
+  // the parallel-capture draft: null until the facts photo is taken, then this IS the FoodDetail food, live-patched
+  // as the front/facts reads settle (see CaptureWizard + resolveFactsIntoDraft). Non-null takes over the whole render.
+  const [draft, setDraft] = useState(null);
   // a not-found result keeps the scanner open (the sheet shows the card) — re-arm so another code can be tried
   useEffect(() => { if (scanState && scanState.notFound) { doneRef.current = false; } }, [scanState]);
 
@@ -1438,7 +1751,27 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, onLabelFoo
   const startWizard = () => { doneRef.current = true; stopTracks(); setWizard(true); };
   const inp = { background: "#100E09", border: `1px solid ${C.edge}`, color: C.bone };
   const ghost = "flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95";
-  const emit = (food) => { onLabelFood && onLabelFood(food); };
+  // "retake facts photo" — re-fires the facts read into the SAME draft (front's already-resolved label, if any,
+  // still wins on merge via resolveFactsIntoDraft reading d.frontLabel fresh each time).
+  const retryFacts = (file) => {
+    const bc = draft && draft.food && draft.food.barcode;
+    setDraft((d) => (d == null ? d : { ...d, pending: { ...d.pending, facts: true }, errors: { ...d.errors, facts: null } }));
+    resolveFactsIntoDraft(setDraft, file, ai, bc);
+  };
+  // once the facts photo is taken, the draft exists and takes over the entire sheet: camera/wizard UI is gone (the
+  // camera was already stopped on the way into either capture entry point below), FoodDetail opens right away with
+  // shimmering macros. Reuses the same onAdd/fav/goals plumbing the old (post-resolve-only) wizard handoff used.
+  if (draft) {
+    return (
+      <FoodDetail food={draft.food} factsPending={draft.pending.facts} factsError={draft.errors.facts} frontError={draft.errors.front} onRetryFacts={retryFacts}
+        onRename={(label) => setDraft((d) => (d == null ? d : { ...d, nameLocked: true, food: { ...d.food, label } }))}
+        goals={goals} dayTotalsBefore={dayTotalsBefore}
+        isFav={!!draft.food.id && !!(nutFoods || []).find((f) => f.id === draft.food.id && f.fav)}
+        onFav={draft.pending.facts ? undefined : () => onFavFood(draft.food)}
+        onAdd={onAddFood}
+        onClose={onClose} />
+    );
+  }
   const mode = wizard ? "wizard" : scanState && scanState.looking ? "looking" : scanState && scanState.notFound ? "notFound" : status;
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "rgba(0,0,0,0.92)" }}>
@@ -1470,7 +1803,7 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, onLabelFoo
               <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>{scanState.code}</p>
             </div>
             <div className="mt-2">
-              <CaptureWizard key={scanState.code} ai={ai} barcode={scanState.code} onFood={emit} />
+              <CaptureWizard key={scanState.code} ai={ai} barcode={scanState.code} setDraft={setDraft} />
             </div>
             <div className="mt-4 flex items-center gap-2 border-t pt-3" style={{ borderColor: C.edge }}>
               <button onClick={() => onManual(scanState.code)} className={ghost} style={{ borderColor: C.edge, color: C.ash }}>Enter manually</button>
@@ -1482,7 +1815,7 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, onLabelFoo
         {mode === "wizard" && (
           <div>
             <p className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>no barcode</p>
-            <div className="mt-2"><CaptureWizard ai={ai} onFood={emit} /></div>
+            <div className="mt-2"><CaptureWizard ai={ai} setDraft={setDraft} /></div>
           </div>
         )}
         {(mode === "scanning" || mode === "starting" || mode === "error") && (
@@ -1531,8 +1864,17 @@ function AddFlow({ onPick, ai, usdaKey, onParsed, onManual }) {
     setLoading(true);
     const my = ++seq.current;
     const timer = setTimeout(async () => {
-      const [u, o] = await Promise.all([searchUSDA(query, usdaKey), searchOFF(query)]);
+      const { q: nq, head } = normalizeQuery(query);
+      const [u, o] = await Promise.all([searchUSDA(nq, usdaKey), searchOFF(query)]);
       if (my !== seq.current) return;   // stale response, a newer query fired
+      // Broadened retry: the normalized query found nothing (and USDA didn't error) — retry once with just the
+      // head (last) word, e.g. a query too specific/oddly-phrased for USDA's index collapses to its head noun.
+      if (!u.items.length && !u.error && head !== nq) {
+        const retry = await searchUSDA(head, usdaKey);
+        if (my !== seq.current) return;
+        if (retry.items.length) { u.items = retry.items; u.error = retry.error; }
+        else if (retry.error) u.error = retry.error;   // failing retry (ratelimit/network) must surface, not read as "no matches"
+      }
       // Ingredient-first ordering: USDA generic ingredients on top (already client-ranked in searchUSDA),
       // then OFF packaged products below. Cap generics so packaged products stay reachable. Dedupe by code/label.
       const usda = (u.items || []).slice(0, 6);
@@ -1630,18 +1972,35 @@ const readLabelPhoto = async (file, ai, barcode) => {
     const image = await downscaleImage(file);
     const r = await callGemini({ task: "label", image }, ai);
     const per100 = (r && r.per100) || {};
-    return { food: { id: uid(), label: (r && r.label) || "food", basis: "per100", basisGrams: 100, nutr: per100, source: "ai", barcode: barcode || undefined }, rough: false };
+    const portionG = resolvePortionG({ servingG: (r && +r.servingGrams) || null, packageG: (r && +r.packageGrams) || null });
+    return { food: ensureWater({ id: uid(), label: (r && r.label) || "food", basis: "per100", basisGrams: 100, nutr: per100, source: "ai", barcode: barcode || undefined, ...(portionG ? { portionG } : {}) }), rough: false };
   }
   const text = await ocrLabel(file);
   const d = parseNutritionText(text);
-  const draft = { id: uid(), label: d.label || "food", basis: d.basis, basisGrams: d.basisGrams, nutr: d.nutr || {}, source: "ocr", barcode: barcode || undefined };
-  return { food: draft, rough: !(draft.nutr && Object.keys(draft.nutr).length > 0) };
+  const rough = !(d.nutr && Object.keys(d.nutr).length > 0);   // rough = OCR extracted nothing — check BEFORE ensureWater backfills a water estimate, else it'd always look non-empty
+  const draft = ensureWater({ id: uid(), label: d.label || "food", basis: d.basis, basisGrams: d.basisGrams, nutr: d.nutr || {}, source: "ocr", barcode: barcode || undefined, ...(d.portionG ? { portionG: d.portionG } : {}) });
+  return { food: draft, rough };
 };
 // readFrontPhoto(file, ai) → { label, brand } — English product name read off the front of the pack. AI only.
 const readFrontPhoto = async (file, ai) => {
   const image = await downscaleImage(file);
   const r = await callGemini({ task: "front", image }, ai);
   return { label: (r && r.label) || null, brand: (r && r.brand) || undefined };
+};
+// Fires readLabelPhoto and merges the result into whatever draft is live WHEN IT SETTLES (not whatever it was when
+// called) — shared by the initial facts capture and the "retake facts photo" retry, so both race identically against
+// a front read that may resolve before or after. setDraft's functional-update null-guard drops the result entirely
+// if the draft is gone by then (already added to the diary, or the capture was abandoned).
+// Label precedence at merge time, strongest first: a user-typed name (d.nameLocked → d.food.label), then the
+// resolved front label (d.frontLabel — set by the front-photo resolve, not a `food` field, never persisted), then
+// the facts read's own label — all read from the live draft `d`, regardless of which promise settles first.
+const resolveFactsIntoDraft = (setDraft, file, ai, barcode) => {
+  readLabelPhoto(file, ai, barcode).then(({ food }) => {
+    setDraft((d) => d == null ? d : ({ ...d, pending: { ...d.pending, facts: false }, errors: { ...d.errors, facts: null }, food: { ...food, label: d.nameLocked ? d.food.label : (d.frontLabel || food.label), brand: d.frontLabel ? (d.food.brand || food.brand) : food.brand, barcode } }));
+  }).catch((e) => {
+    const msg = (e && e.message) || "Couldn't read the label — try again or enter it manually.";
+    setDraft((d) => d == null ? d : ({ ...d, pending: { ...d.pending, facts: false }, errors: { ...d.errors, facts: msg } }));
+  });
 };
 // Hidden camera/gallery input + app-styled pill button with the lucide Camera glyph.
 function CamButton({ label, busyLabel, onFile, busy, primary }) {
@@ -1659,27 +2018,44 @@ function CamButton({ label, busyLabel, onFile, busy, primary }) {
   );
 }
 // Two-step product capture: (1) optional front-of-pack photo → English name via AI; (2) nutrition-facts photo →
-// macros. Merged into one prefilled food (barcode tied when it came from a scan). Without AI the front step is
-// skipped (naming needs vision) and the facts photo falls back to on-device OCR.
-function CaptureWizard({ ai, barcode, onFood }) {
+// macros. Both steps fire WITHOUT waiting on their own result: the front read races in the background the moment
+// it's taken, and taking the facts photo hands a placeholder draft to the host (setDraft) immediately — the host
+// opens FoodDetail right then, showing shimmering macros while readLabelPhoto resolves. Barcode tied when it came
+// from a scan. Without AI the front step is skipped (naming needs vision) and facts falls back to on-device OCR.
+function CaptureWizard({ ai, barcode, setDraft }) {
   const withAI = hasAI(ai);
   const [step, setStep] = useState(withAI ? "front" : "facts");
-  const [front, setFront] = useState(null);   // {label, brand} once step 1 reads
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const takeFront = async (file) => {
-    setBusy(true); setErr("");
-    try { const r = await readFrontPhoto(file, ai); if (r.label) setFront(r); setStep("facts"); }
-    catch (e) { setErr((e && e.message) || "Couldn't read the front — you can skip this step."); }
-    finally { setBusy(false); }
+  const [front, setFront] = useState(null);   // {label, brand} once the front read resolves — used to seed the draft if facts hasn't been taken yet
+  const [frontBusy, setFrontBusy] = useState(false);
+  const [frontErr, setFrontErr] = useState("");   // non-blocking — surfaced (here, then in FoodDetail) without gating progress
+  const patchDraft = (fn) => setDraft((d) => (d == null ? d : fn(d)));
+  // Fire-and-forget: advances to the facts step in the same tick regardless of outcome. If a draft already exists
+  // by the time this resolves (facts photo taken first), patches its label live — this is what makes the title
+  // swap in place when front resolves after facts.
+  const takeFront = (file) => {
+    setFrontBusy(true); setFrontErr("");
+    readFrontPhoto(file, ai).then((r) => {
+      setFront(r);
+      // a user-typed name (nameLocked) always beats a late front resolve — record frontLabel for bookkeeping but leave the label alone
+      if (r.label) patchDraft((d) => d.nameLocked ? ({ ...d, frontLabel: r.label, pending: { ...d.pending, front: false } }) : ({ ...d, frontLabel: r.label, pending: { ...d.pending, front: false }, food: { ...d.food, label: r.label, brand: r.brand || d.food.brand } }));
+      else patchDraft((d) => ({ ...d, pending: { ...d.pending, front: false } }));
+    }).catch((e) => {
+      const msg = (e && e.message) || "Couldn't read the front — you can skip this step.";
+      setFrontErr(msg);
+      patchDraft((d) => ({ ...d, pending: { ...d.pending, front: false }, errors: { ...d.errors, front: msg } }));
+    }).finally(() => setFrontBusy(false));
+    setStep("facts");
   };
-  const takeFacts = async (file) => {
-    setBusy(true); setErr("");
-    try {
-      const { food } = await readLabelPhoto(file, ai, barcode);
-      onFood(front && front.label ? { ...food, label: front.label, brand: front.brand || food.brand } : food);
-    } catch (e) { setErr((e && e.message) || "Couldn't read the label — try again or enter it manually."); }
-    finally { setBusy(false); }
+  // Builds the draft NOW — placeholder label + empty macros — so the host opens FoodDetail immediately, then
+  // fires the real read via resolveFactsIntoDraft (shared with the host's retry path).
+  const takeFacts = (file) => {
+    setDraft({
+      food: { label: (front && front.label) || "Reading…", brand: front && front.brand, nutr: {}, basis: "per100", basisGrams: 100, barcode },
+      pending: { front: frontBusy, facts: true },
+      errors: { front: frontErr || null, facts: null },
+      frontLabel: (front && front.label) || null,
+    });
+    resolveFactsIntoDraft(setDraft, file, ai, barcode);
   };
   return (
     <div>
@@ -1687,22 +2063,26 @@ function CaptureWizard({ ai, barcode, onFood }) {
         <>
           <p className="mt-1 text-[13px] leading-snug" style={{ color: C.bone }}>The front of the pack first <span style={{ color: C.ashDim }}>— optional, names the food in English.</span></p>
           <div className="mt-3 flex items-center gap-2">
-            <CamButton primary label="Photo the front" busyLabel="reading front…" busy={busy} onFile={takeFront} />
-            <button onClick={() => { setErr(""); setStep("facts"); }} disabled={busy} className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Skip</button>
+            <CamButton primary label="Photo the front" busyLabel="reading front…" busy={frontBusy} onFile={takeFront} />
+            <button onClick={() => { setStep("facts"); }} disabled={frontBusy} className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Skip</button>
           </div>
         </>
       ) : (
         <>
           <p className="mt-1 text-[13px] leading-snug" style={{ color: C.bone }}>
-            {front && front.label ? <>Got it — <span style={{ color: C.gold }}>{front.label}</span>. Now the nutrition facts panel.</> : <>Now the nutrition facts panel{withAI ? "" : <span style={{ color: C.ashDim }}> — read on-device, check the numbers after</span>}.</>}
+            {front && front.label
+              ? <>Got it — <span style={{ color: C.gold }}>{front.label}</span>. Now the nutrition facts panel.</>
+              : frontBusy
+                ? <span className="inline-flex items-center gap-1.5 animate-pulse"><Sparkles size={12} style={{ color: C.gold }} />reading front…</span>
+                : <>Now the nutrition facts panel{withAI ? "" : <span style={{ color: C.ashDim }}> — read on-device, check the numbers after</span>}.</>}
           </p>
           <div className="mt-3 flex items-center gap-2">
-            <CamButton primary label="Photo the facts" busyLabel="reading label…" busy={busy} onFile={takeFacts} />
-            {withAI && !front && <button onClick={() => { setErr(""); setStep("front"); }} disabled={busy} className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Back</button>}
+            <CamButton primary label="Photo the facts" busyLabel="reading label…" onFile={takeFacts} />
+            {withAI && !front && !frontBusy && <button onClick={() => { setFrontErr(""); setStep("front"); }} className="flex min-h-[44px] items-center justify-center rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>Back</button>}
           </div>
+          {frontErr && <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>front photo failed — the facts label will name it instead.</p>}
         </>
       )}
-      {err && <p className="mt-2 font-mono text-[10px]" style={{ color: C.rust }}>{err}</p>}
     </div>
   );
 }
@@ -1754,7 +2134,7 @@ function PlateDraft({ items, onAddAll, onCancel }) {
             <span className="flex shrink-0 items-center gap-1.5">
               <NumberField value={r.grams} step={10} label={`${r.label} grams`} width={54} onChange={(n) => setRows((xs) => xs.map((x, j) => (j === i ? { ...x, grams: n } : x)))} />
               <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>g</span>
-              <button onClick={() => setRows((xs) => xs.filter((_, j) => j !== i))} aria-label={`remove ${r.label}`} style={{ color: C.ashDim }}><X size={12} /></button>
+              <button onClick={() => setRows((xs) => xs.filter((_, j) => j !== i))} aria-label={`remove ${r.label}`} className="flex h-11 w-11 shrink-0 items-center justify-center" style={{ color: C.ashDim }}><X size={16} /></button>
             </span>
           </div>
         ))}
@@ -1794,7 +2174,10 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
   const hdr = "font-mono text-[11px] uppercase tracking-[0.2em]";
   const last7 = [...Array(7)].map((_, i) => { const dt = new Date(); dt.setDate(dt.getDate() - (6 - i)); return { key: dt.toLocaleDateString("en-CA"), lbl: dt.toLocaleDateString("en-US", { weekday: "short" }) }; });
   const dayMacros = ["kcal", "protein", "carbs", "fat", "fiber", "sugar", "sodium", "potassium", "calcium", "iron", "caffeine", "netCarbs"];   // derived from entries, never stored on the day
-  const dayVal = (key, sel) => dayMacros.includes(sel) ? (dayTotals(nut.days[key] || {})[sel] || 0) : ((nut.days[key] || {})[sel] || 0);   // macros via dayTotals; steps/water read stored fields
+  const dayVal = (key, sel) => { const day = nut.days[key] || {};
+    if (sel === "water") return (day.water || 0) + Math.round(dayTotals(day).water || 0);   // combined: drunk (stored) + food (derived)
+    return dayMacros.includes(sel) ? (dayTotals(day)[sel] || 0) : (day[sel] || 0);   // other macros via dayTotals; steps stored
+  };
   const avg = (sel) => { const v = last7.map((x) => dayVal(x.key, sel)).filter((n) => n > 0); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0; };
   const avgKcal = avg("kcal"), avgSteps = avg("steps"), avgWater = avg("water");
   const slAvg = (() => { const v = last7.map((x) => { const s = sl.days[x.key]; return s ? sleepHours(s.bed, s.wake) : null; }).filter((n) => n != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; })();
@@ -1804,11 +2187,15 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
   const bwDelta7 = (() => { const r = bwHist.filter((h) => Date.now() - new Date(h.t).getTime() < 8 * 864e5); return r.length >= 2 ? r[r.length - 1].w - r[0].w : null; })();
   const bwDelta30 = recent.length >= 2 ? recent[recent.length - 1].w - recent[0].w : null;
   const dW = (lb) => dispW(lb, unit);
-  const toLb = (disp, div = 1) => (unit === "kg" ? Math.round((disp / (div === 1 ? KG : 2.54)) * 100) / 100 : Math.round(disp * 100) / 100);
+  // weight (div=1, KG const) keeps 3dp lb so a 0.1kg display step round-trips lb→kg exactly;
+  // height/waist (div=2, 2.54 in/cm factor) are untouched — their step size didn't change.
+  const toLb = (disp, div = 1) => (unit === "kg" ? (div === 1 ? Math.round((disp / KG) * 1000) / 1000 : Math.round((disp / 2.54) * 100) / 100) : Math.round(disp * 100) / 100);
   const fromLb = (lb, mul = 1) => (unit === "kg" ? Math.round(lb * (mul === 1 ? KG : 2.54) * 10) / 10 : lb || 0);
   const tHM = (iso) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; } };
 
   const dt = dayTotals(d);   // computed totals for the viewed day (kcal + macros + micros), never stored
+  const waterFoodG = Math.round(dt.water || 0);            // water from logged food (grams ≈ ml), rounded
+  const waterCombined = (d.water || 0) + waterFoodG;        // drunk (stored) + food (derived) — the number the goal is measured against
   const favs = favorites(nut);                                   // starred foods
   const recs = recents(nut, 12);                                 // recently used, non-fav
   const staples = (nut.foods || []).filter((f) => DEFAULT_FOOD_IDS.includes(f.id));   // original defaults, always reachable
@@ -1866,7 +2253,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
       <div className="mt-4 flex justify-end">
         <div className="inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
           {["kg", "lb"].map((u) => (
-            <button key={u} onClick={() => setDietUnit(u)} aria-label={`show body weights in ${u === "kg" ? "kilograms" : "pounds"}`} className="rounded-full px-3 py-1.5 font-mono text-xs active:scale-95"
+            <button key={u} onClick={() => setDietUnit(u)} aria-label={`show body weights in ${u === "kg" ? "kilograms" : "pounds"}`} className="rounded-full px-4 py-2 font-mono text-sm active:scale-95"
               style={{ background: unit === u ? C.gold : "transparent", color: unit === u ? C.bg : C.ash, fontWeight: unit === u ? 700 : 400 }}>{u}</button>
           ))}
         </div>
@@ -1878,7 +2265,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
           <span className="font-mono text-[12px] font-bold" style={{ color: isToday ? C.gold : C.bone }}>{relDay(viewDate)}</span>
           <label className="flex items-center gap-1 rounded-lg border px-2 py-1" style={{ borderColor: C.edge }}>
             <CalendarDays size={12} style={{ color: C.ashDim }} />
-            <input type="date" value={viewDate} onChange={(e) => e.target.value && setViewDate(e.target.value)} className="bg-transparent font-mono text-[11px] outline-none" style={{ color: C.ash, colorScheme: "dark" }} />
+            <input type="date" value={viewDate} onChange={(e) => e.target.value && setViewDate(e.target.value)} className="bg-transparent font-mono text-[16px] outline-none" style={{ color: C.ash, colorScheme: "dark" }}/>
           </label>
           {!isToday && <button onClick={() => setViewDate(todayKey())} className="rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider" style={{ borderColor: C.goldDim, color: C.gold }}>today</button>}
         </div>
@@ -1890,9 +2277,9 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
         <span className={hdr} style={{ color: C.ash }}><Moon size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Sleep</span>
         <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-3">
           <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>bed</p>
-            <input type="time" value={st.bed} onChange={(e) => setSleepToday(e.target.value, st.wake, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} /></div>
+            <input type="time" value={st.bed} onChange={(e) => setSleepToday(e.target.value, st.wake, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[16px] outline-none" style={inp} /></div>
           <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>wake</p>
-            <input type="time" value={st.wake} onChange={(e) => setSleepToday(st.bed, e.target.value, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[13px] outline-none" style={inp} /></div>
+            <input type="time" value={st.wake} onChange={(e) => setSleepToday(st.bed, e.target.value, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[16px] outline-none" style={inp} /></div>
           <div className="ml-auto text-right"><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>last night</p>
             <p className="font-mono text-xl font-bold" style={{ color: slH >= 7 && slH <= 9.5 ? C.sage : C.gold }}>{fmtHM(slH)}</p></div>
         </div>
@@ -1906,7 +2293,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
       <div className={card} style={{ background: C.card, borderColor: C.edge }}>
         <span className={hdr} style={{ color: C.ash }}>Body</span>
         <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <NumberField value={fromLb(bw || 0, 1)} step={unit === "kg" ? 0.5 : 1} label="bodyweight" placeholder={uw(unit)} onChange={(disp) => setBody({ bw: toLb(disp, 1) })} />
+          <NumberField value={fromLb(bw || 0, 1)} step={unit === "kg" ? 0.1 : 0.2} label="bodyweight" placeholder={uw(unit)} onChange={(disp) => setBody({ bw: toLb(disp, 1) })} />
           <span className="font-mono text-[11px]" style={{ color: C.ash }}>{uw(unit)}</span>
           <button onClick={logBW} disabled={!bw} className="ml-auto rounded-full border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: bw ? C.gold : C.ashDim, opacity: bw ? 1 : 0.5 }}>log today</button>
         </div>
@@ -1988,7 +2375,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
             {meals.map((m) => (
               <span key={m.id} className="flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 active:scale-95" style={{ borderColor: C.goldDim, color: C.bone }}>
                 <button onClick={() => { logMeal(m.id, viewDate); flash(`Logged ${m.label} · ${(m.items || []).length} items`); }} className="font-mono text-[11px]">{m.label}<span style={{ color: C.ashDim }}> · {(m.items || []).length}</span></button>
-                <button onClick={() => removeMeal(m.id)} aria-label="remove meal" style={{ color: C.ashDim }}><X size={12} /></button>
+                <button onClick={() => removeMeal(m.id)} aria-label="remove meal" className="flex h-11 w-11 shrink-0 items-center justify-center" style={{ color: C.ashDim }}><X size={16} /></button>
               </span>
             ))}
           </div>
@@ -2004,7 +2391,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
                     <span className="flex shrink-0 items-center gap-1.5">
                       <NumberField value={it.grams} step={it.food.basis === "per100" ? 10 : 1} label="grams" width={54} onChange={(n) => setMealItems((xs) => xs.map((x, j) => (j === i ? { ...x, grams: n } : x)))} />
                       <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{it.food.basis === "per100" ? "g" : "×"}</span>
-                      <button onClick={() => setMealItems((xs) => xs.filter((_, j) => j !== i))} aria-label="remove item" style={{ color: C.ashDim }}><X size={12} /></button>
+                      <button onClick={() => setMealItems((xs) => xs.filter((_, j) => j !== i))} aria-label="remove item" className="flex h-11 w-11 shrink-0 items-center justify-center" style={{ color: C.ashDim }}><X size={16} /></button>
                     </span>
                   </div>
                 ))}
@@ -2100,7 +2487,8 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
       {/* Water */}
       <div className={card} style={{ background: C.card, borderColor: C.edge }}>
         <span className={hdr} style={{ color: C.ash }}><Droplet size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Water</span>
-        <div className="mt-3"><NutBar label={`${(d.water / 250).toFixed(0)} glasses`} cur={d.water} goal={g.water} suffix=" ml" /></div>
+        <div className="mt-3"><NutBar label={`${(d.water / 250).toFixed(0)} glasses`} cur={waterCombined} goal={g.water} suffix=" ml" /></div>
+        <p className="mt-0.5 font-mono text-[10px]" style={{ color: C.ash }}>{(waterCombined / 1000).toFixed(1)}L — drunk {(d.water / 1000).toFixed(1)}L · food {(waterFoodG / 1000).toFixed(1)}L</p>
         <div className="mt-3 flex items-center gap-2">
           <button onClick={() => addWater(250, viewDate)} className="rounded-full border px-4 py-2 font-mono text-[11px] active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>+250 ml</button>
           <NumberField value={cw} step={50} label="custom ml" width={64} onChange={(n) => setCw(n)} />
@@ -2109,7 +2497,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
         {d.waterEntries.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {d.waterEntries.slice().reverse().map((w) => (
-              <span key={w.id} className="flex items-center gap-1 rounded-full border px-2 py-1 font-mono text-[10px]" style={{ borderColor: C.edge, color: C.ash }}>{tHM(w.t)} · {w.ml}<button onClick={() => removeWaterEntry(w.id, viewDate)} aria-label="remove" style={{ color: C.ashDim }}><X size={10} /></button></span>
+              <span key={w.id} className="flex items-center gap-1 rounded-full border px-2 py-1 font-mono text-[12px]" style={{ borderColor: C.edge, color: C.ash }}>{tHM(w.t)} · {w.ml}<button onClick={() => removeWaterEntry(w.id, viewDate)} aria-label="remove" className="flex h-10 w-8 items-center justify-center" style={{ color: C.ashDim }}><X size={14} /></button></span>
             ))}
           </div>
         )}
@@ -2124,7 +2512,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
             <p className="font-mono text-lg font-bold" style={{ color: C.bone }}>{curLb != null ? fromLb(curLb, 1) : "—"} → {fromLb(goalLb, 1)} {uw(unit)}</p>
           </div>
           <div className="flex items-center gap-1.5"><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>goal</span>
-            <NumberField value={fromLb(goalLb, 1)} step={unit === "kg" ? 0.5 : 1} label="goal weight" width={56} onChange={(disp) => setNutGoals({ goalBwLb: toLb(disp, 1) })} /></div>
+            <NumberField value={fromLb(goalLb, 1)} step={unit === "kg" ? 0.1 : 0.2} label="goal weight" width={56} onChange={(disp) => setNutGoals({ goalBwLb: toLb(disp, 1) })} /></div>
         </div>
         {curLb == null ? (
           <p className="mt-3 text-[12.5px]" style={{ color: C.ash }}>Log your bodyweight in the Body card to start the forecast.</p>
@@ -2190,10 +2578,84 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
         setScanState({ notFound: true, code });   // clear not-found UI; "Enter manually" pre-seeds the custom form with this barcode. (the overlay offers photo-the-label / manual entry)
       }} onClose={() => { setScanOpen(false); setScanState(null); }} scanState={scanState}
         onManual={(code) => { setScanOpen(false); setScanState(null); setCf((c) => ({ ...c, barcode: code })); }}
-        ai={ai} onLabelFood={(food) => { setScanOpen(false); setScanState(null); setDetail({ food }); }} />}
+        ai={ai} goals={g} dayTotalsBefore={dt} nutFoods={nut.foods} onFavFood={favFood} onAddFood={(payload) => logFood({ ...payload, dk: viewDate })} />}
       {detail && <FoodDetail food={detail.food} initialGrams={detail.initialGrams} initialT={detail.initialT} goals={g} dayTotalsBefore={detail.edit ? subNutr(dt, (d.entries.find((x) => x.id === detail.edit.id) || {}).nutr) : dt} isFav={!!(nut.foods || []).find((f) => f.id === detail.food.id && f.fav)} onFav={() => favFood(detail.food)} editMode={!!detail.edit} onAdd={(payload) => logFood({ ...payload, dk: viewDate })} onSave={(payload) => { editEntry(detail.edit.id, viewDate, { grams: payload.grams, nutr: payload.nutr, t: payload.t, label: payload.food.label }); if (payload.saveCorr) corrFood(payload.food, payload.nutr, payload.grams); }} onClose={() => setDetail(null)} />}
     </>
   );
+}
+
+// ReviewDay: an equipment-prep glance at the whole day's plan — one row per plan item (not per unit),
+// work prescription only (no cues/descriptions). Tap a row to jump the pager to its unit and close.
+function ReviewDay({ plan, units, mem, unit, done, onClose, onJump }) {
+  const row = (exIdx, isPairB) => {
+    const item = plan[exIdx];
+    const workIdxs = item.sets.map((s, si) => ({ s, si })).filter((x) => x.s.kind === "work");
+    const nSets = workIdxs.length;
+    const first = workIdxs[0]?.s;
+    const [bot, top] = first?.range || [null, null];
+    const dbs = dbCount(mem, item.ex);
+    const allDone = nSets > 0 && workIdxs.every((x) => done.has(`${exIdx}-${x.si}`));
+    const unitIdx = units.findIndex((u) => u.idxs.includes(exIdx));
+    const rx = !first ? "" : item.ex.repProgress
+      ? `${nSets} × (${bot}–${top})`
+      : `${nSets} × ${dispW(first.load, unit)}${uw(unit)}${dbs === 2 ? "/hand" : ""} (${bot}–${top})${dbs === 1 ? " · 1 DB" : ""}`;
+    return (
+      <button key={exIdx} onClick={() => onJump(unitIdx)} className="flex min-h-[44px] w-full items-center gap-2 py-2 text-left active:opacity-70">
+        <span className="flex w-4 shrink-0 items-center justify-center">{allDone && <Check size={13} style={{ color: C.sage }} />}</span>
+        <span className="font-mono text-xs shrink-0" style={{ color: C.gold }}>{String(exIdx + 1).padStart(2, "0")}</span>
+        <span className="min-w-0 flex-1 truncate text-[13px]" style={{ color: C.bone }}>
+          {isPairB && <span style={{ color: C.gold }}>× </span>}{item.ex.name}
+        </span>
+        <span className="shrink-0 font-mono text-[11px]" style={{ color: C.ash }}>{rx}</span>
+      </button>
+    );
+  };
+  const rows = [];
+  for (let i = 0; i < plan.length; i++) {
+    const item = plan[i];
+    if (item.pair && item.pair.role === "B") continue;   // rendered together with its A partner
+    if (item.pair && item.pair.role === "A" && item.pair.partnerIdx === i + 1) {
+      rows.push(
+        <div key={`pair-${i}`} style={{ borderLeft: `2px solid ${C.goldDim}`, paddingLeft: 8, marginLeft: -2 }}>
+          {row(i, false)}
+          {row(item.pair.partnerIdx, true)}
+        </div>
+      );
+    } else rows.push(row(i, false));
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" style={{ background: "rgba(0,0,0,0.72)" }} onClick={onClose}>
+      <div className="max-h-[92vh] w-full max-w-md overflow-y-auto rounded-t-2xl border p-5 sm:rounded-2xl" style={{ background: C.card, borderColor: C.edge }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-[15px] font-bold leading-tight" style={{ color: C.bone }}>Review day</h3>
+            <p className="mt-0.5 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>{plan.length} exercises · equipment prep</p>
+          </div>
+          <button onClick={onClose} aria-label="close" className="-my-2 -mr-2 flex h-11 w-11 shrink-0 items-center justify-center active:scale-90" style={{ color: C.ash }}><X size={18} /></button>
+        </div>
+        <div className="mt-3 space-y-1">
+          {rows}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// per-exercise dumbbell-count toggle (Task 7): two 44px icon buttons — one Dumbbell glyph = 1 DB,
+// two overlapped glyphs = 2 DB. Active state gold, inactive ash; shared by renderSetRow and
+// renderPairStripCol so both render paths stay pixel-identical. `disabled` preserves the existing
+// mid-session lock (weight-per-hand math can't shift once a session is underway).
+function DbToggle({ count, onSet, disabled }) {
+  const seg = (n, active) => (
+    <button key={n} onClick={() => onSet(n)} aria-label={n === 1 ? "use one dumbbell" : "use two dumbbells"}
+      disabled={disabled} title={disabled ? "finish or reset the session to switch" : undefined}
+      className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full border px-2.5 active:scale-95"
+      style={{ borderColor: active ? C.gold : C.edge, color: active ? C.gold : C.ash, opacity: disabled ? 0.45 : 1 }}>
+      <Dumbbell size={16} />
+      {n === 2 && <span style={{ marginLeft: -8, opacity: 0.9 }}><Dumbbell size={16} /></span>}
+    </button>
+  );
+  return <div className="flex items-center gap-1.5">{seg(1, count === 1)}{seg(2, count === 2)}</div>;
 }
 
 function App() {
@@ -2421,6 +2883,9 @@ function App() {
   const [confirm, setConfirm] = useState(null);   // null | "finish" | "reset"
   const [pending, setPending] = useState(null);    // saved in-progress session offered for resume
   const [brokenPairs, setBrokenPairs] = useState(() => new Set());   // per-session only: "straight sets today"
+  const [page, setPage] = useState(0);   // focus pager: index into `units`
+  const [reopenedRounds, setReopenedRounds] = useState(() => new Set());   // merged-card rounds manually expanded after auto-collapse, keyed "aIdx-r{n}"
+  const [reviewOpen, setReviewOpen] = useState(false);   // "review day" overlay — whole day's work loads at a glance
   const pairActive = (item) => !!(item.pair && !brokenPairs.has(`${day}-${item.pair.id}`));
   const breakPair = (pairId) => setBrokenPairs((b) => { const n = new Set(b); const k = `${day}-${pairId}`; n.has(k) ? n.delete(k) : n.add(k); return n; });
   const cursors = useRef({});
@@ -2441,7 +2906,7 @@ function App() {
     if (skipNextReset.current) { skipNextReset.current = false; return; }
     const init = {};
     plan.forEach((it, ei) => it.sets.forEach((s, si) => { init[`${ei}-${si}`] = { weight: s.load, reps: s.repsNum }; }));
-    setLogs(init); setActive(null); setCue(""); setRest(null); setDone(new Set()); cursors.current = {}; setOpenInfo(null);
+    setLogs(init); setActive(null); setCue(""); setRest(null); setDone(new Set()); cursors.current = {}; setOpenInfo(null); setReopenedRounds(new Set());
   }, [plan]);
 
   const busy = active !== null || rest !== null;
@@ -2467,6 +2932,7 @@ function App() {
     if (!rest) return;
     let stopped = false;
     const check = () => {
+      if (rest.pausedAt) return;
       if (stopped) return;
       const left = Math.round((rest.endAt - Date.now()) / 1000);
       if (left <= 0) { fireAlert(); const k = rest.key, now = Date.now();
@@ -2500,6 +2966,22 @@ function App() {
   const workKeys = useMemo(() => { const ks = []; plan.forEach((it, ei) => { if (it.ex.optional) return; it.sets.forEach((s, si) => { if (s.kind === "work") ks.push(`${ei}-${si}`); }); }); return ks; }, [plan]);
   const workTotal = workKeys.length;
   const workDone = useMemo(() => workKeys.filter((k) => done.has(k)).length, [workKeys, done]);
+  // true execution order (interleaves superset rounds) — reorders live when a pair is broken/restored
+  const seq = useMemo(() => seqKeys(plan, pairActive), [plan, brokenPairs]);
+  const nextKey = nextKeyOf(seq, done, active ?? (rest && rest.key));   // resting set isn't in done yet — exclude it so the rest-state "next up" shows the true upcoming set
+
+  // focus pager: one card per unit (a superset pair merges into one unit) — `currentUnit` is the
+  // first unit with any un-done set, clamped to the last unit once everything is logged.
+  const units = useMemo(() => unitize(plan, pairActive), [plan, brokenPairs]);
+  const currentUnit = (() => {
+    const i = units.findIndex((u) => u.idxs.some((ei) => plan[ei].sets.some((s, si) => !done.has(`${ei}-${si}`))));
+    return i === -1 ? units.length - 1 : i;
+  })();
+  // any logging action or timer end moves done/active/rest, which recomputes currentUnit and snaps the page
+  useEffect(() => { if (sessionStarted) setPage(Math.max(0, Math.min(currentUnit, units.length - 1))); }, [currentUnit, sessionStarted, rest == null, active]);
+  // clamp for render: restoring a broken pair (or any action that shrinks `units`) can leave `page`
+  // pointing past the new last index until the effect above catches up — never render a blank page.
+  const pageClamped = Math.min(page, Math.max(0, units.length - 1));
 
   const stepW = (key, d, set) => setLogs((L) => {
     const cur = L[key]?.weight ?? set.load;
@@ -2520,6 +3002,10 @@ function App() {
     return next;
   });
   const stepR = (key, d, set) => setLogs((L) => { const cur = L[key]?.reps ?? set.repsNum; return { ...L, [key]: { ...(L[key] || {}), weight: L[key]?.weight ?? set.load, reps: Math.max(0, cur + d) } }; });
+  // exact-entry counterparts to stepW/stepR (tap-to-type on the ValueWheel) — same log-shape, but a
+  // hand-typed value is a deliberate override, so it never triggers the RPT cascade that stepW does.
+  const setWExact = (key, v, set) => setLogs((L) => { const nv = Math.max(0, unit === "kg" ? v / KG : v); return { ...L, [key]: { weight: nv, reps: L[key]?.reps ?? set.repsNum } }; });
+  const setRExact = (key, v, set) => setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), weight: L[key]?.weight ?? set.load, reps: Math.max(0, Math.round(v)) } }));
   const setEffort = (key, e) => setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), e: L[key]?.e === e ? undefined : e } }));
   const startSet = (key) => { if (!busy) { primeAudio();
     const now = Date.now();
@@ -2553,6 +3039,8 @@ function App() {
     setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), restEndedVia: "skip", restAppElapsed: L[key]?.finishedAt ? Math.round((now - L[key].finishedAt) / 1000) : null } }));
     setDone((d) => new Set(d).add(rest.key)); setRest(null); setOpenInfo(null); };
   const addRest = () => setRest((r) => (r ? { ...r, endAt: r.endAt + 30000, total: r.total + 30 } : null));
+  const pauseRest = () => setRest((r) => (r && !r.pausedAt ? { ...r, pausedAt: Date.now() } : r));
+  const resumeRest = () => setRest((r) => (r && r.pausedAt ? { ...r, endAt: r.endAt + (Date.now() - r.pausedAt), pausedAt: undefined } : r));
   const cancelSet = () => { setActive(null); setCue(""); setOpenInfo(null); };
   const undoSet = (key) => setDone((dn) => { const n = new Set(dn); n.delete(key); return n; });
 
@@ -2689,7 +3177,7 @@ function App() {
     const corrOn = saveCorr && grams > 0;
     const keepCorr = !corrOn && idx >= 0 && foods[idx].corr;   // uncorrected re-log of a corrected food (e.g. via fresh search): his saved numbers win
     const corrNutr = corrOn ? scaleToBasis(food, eNutr, grams) : (keepCorr ? foods[idx].nutr : food.nutr);
-    const base = { id: fid, label: food.label || "food", basis: keepCorr ? foods[idx].basis : food.basis, basisGrams: keepCorr ? (foods[idx].basisGrams != null ? foods[idx].basisGrams : null) : (food.basisGrams != null ? food.basisGrams : null), nutr: corrNutr, source: food.source, barcode: food.barcode || (idx >= 0 ? foods[idx].barcode : undefined), corr: corrOn || (idx >= 0 ? foods[idx].corr : undefined) || undefined };
+    const base = { id: fid, label: food.label || "food", basis: keepCorr ? foods[idx].basis : food.basis, basisGrams: keepCorr ? (foods[idx].basisGrams != null ? foods[idx].basisGrams : null) : (food.basisGrams != null ? food.basisGrams : null), nutr: corrNutr, source: food.source, barcode: food.barcode || (idx >= 0 ? foods[idx].barcode : undefined), corr: corrOn || (idx >= 0 ? foods[idx].corr : undefined) || undefined, ...(food.portionG ? { portionG: food.portionG } : {}) };
     const uf = { ...(idx >= 0 ? foods[idx] : {}), ...base, lastGrams: grams, lastUsedT: ts, fav: (idx >= 0 ? foods[idx].fav : false) };
     const nf = idx >= 0 ? foods.map((f, i) => (i === idx ? uf : f)) : [...foods, uf];
     const nd = { ...d, entries: [...d.entries, e] };
@@ -2707,7 +3195,7 @@ function App() {
   // favorite from FoodDetail: ensure the food is in the library (upsert an unsaved DB/custom food), then flip fav
   const favFood = async (food) => updateMem((prev, ret) => { const nut = nutFrom(prev); const foods = nut.foods || []; const idx = findFoodIdx(foods, food, food.id); const fid = food.id || (idx >= 0 ? foods[idx].id : uid()); ret(fid);
     if (idx >= 0) { const nf = foods.map((f, i) => (i === idx ? { ...f, fav: !f.fav } : f)); return withNut(prev, { ...nut, foods: nf }); }
-    const uf = { id: fid, label: food.label || "food", basis: food.basis, basisGrams: food.basisGrams != null ? food.basisGrams : null, nutr: food.nutr, source: food.source, barcode: food.barcode, lastGrams: food.lastGrams, fav: true };
+    const uf = { id: fid, label: food.label || "food", basis: food.basis, basisGrams: food.basisGrams != null ? food.basisGrams : null, nutr: food.nutr, source: food.source, barcode: food.barcode, lastGrams: food.lastGrams, fav: true, ...(food.portionG ? { portionG: food.portionG } : {}) };
     return withNut(prev, { ...nut, foods: pruneFoods([...foods, uf]) }); });
   // ── saved meals (bundles) ── items carry a FULL food snapshot so meals survive food-library pruning
   const addMeal = async ({ label, items }) => updateMem((prev, ret) => { const nut = nutFrom(prev); const m = { id: uid(), label: label || "meal", items: (items || []).map((it) => ({ food: it.food, grams: it.grams })) }; ret(m.id);
@@ -2787,6 +3275,376 @@ function App() {
   const waistPct = body.waist && body.height ? body.waist / body.height : 0;
   let waistTier = -1; WAIST_STD.forEach((r, i) => { if (waistPct > 0 && waistPct <= r) waistTier = i; });
 
+  // one exercise-unit card — shared by the pre-session flat list and the in-session focus pager.
+  // Reads active/rest/done/logs/openInfo LIVE (it's a plain closure recreated every render, not memoized),
+  // so it never goes stale across either render path.
+  // one set row's full core — shared by renderExerciseCard (single-exercise card) and renderPairCard
+  // (merged superset card). `opts.name` titles the row with its exercise, which the merged card needs
+  // because it interleaves two lifts; that title also carries the load/goal readout, so the controls
+  // keep a single uncrowded line. Single cards pass no name and render exactly as before.
+  const renderSetRow = (exIdx, setIdx, opts = {}) => {
+    const item = plan[exIdx];
+    const set = item.sets[setIdx];
+    const cnt = dbCount(mem, item.ex);
+    const key = `${exIdx}-${setIdx}`;
+    const log = logs[key] ?? { weight: set.load, reps: set.repsNum };
+    const isActive = active === key, isResting = rest?.key === key, isDone = done.has(key), isWarm = set.kind === "warmup";
+    const edited = log.weight !== set.load || log.reps !== set.repsNum;
+    const rp = item.ex.repProgress;
+    const recs = mem.setHistory?.[item.ex.name]?.[set.label] || [];
+    const showPct = set.kind === "work" && recs.length > 0;
+    const totW = (w, dbs, fb) => w * (dbs || fb);   // per-DB weight → TOTAL load; fallback handles unstamped history
+    const curE = e1rm(totW(log.weight, log.dbs, cnt), log.reps);
+    const overallPct = !showPct ? 0 : rp ? (log.reps / recs[0].r - 1) * 100 : (curE / e1rm(totW(recs[0].w, recs[0].dbs, item.ex.single ? 1 : 2), recs[0].r) - 1) * 100;
+    const lastPct = !showPct ? 0 : rp ? (log.reps / recs[recs.length - 1].r - 1) * 100 : (curE / e1rm(totW(recs[recs.length - 1].w, recs[recs.length - 1].dbs, item.ex.single ? 1 : 2), recs[recs.length - 1].r) - 1) * 100;
+    const loadRead = rp ? "bodyweight" : cnt === 1 ? `${dispW(log.weight, unit)} ${uw(unit)}` : `${dispW(log.weight * 2, unit)} ${uw(unit)} total`;
+    const goalRead = isWarm ? "warm-up" : `${set.repsLabel}${set.aim ? ` · aim ${set.aim}` : ""}`;
+    return (
+      <div key={key} className="rounded-xl border" style={{ borderColor: isActive ? C.activeEdge : "transparent", background: isActive ? "#1F1A0E" : "transparent" }}>
+        {opts.name && (
+          <div className="flex items-baseline justify-between gap-2 px-2 pt-2">
+            <span className="min-w-0 truncate font-mono text-[11px] uppercase tracking-[0.12em]" style={{ color: isActive ? C.gold : C.ash }}>{opts.name}</span>
+            <span className="shrink-0 font-mono text-[11px]" style={{ color: C.ashDim }}>{goalRead}</span>
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2 px-2 py-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-2">
+            <span className="w-5 shrink-0 text-center font-mono text-[13px]" style={{ color: isWarm ? C.ashDim : C.gold }}>{set.label}</span>
+            {rp ? (
+              <span className="font-mono text-[10px] uppercase tracking-wide" style={{ color: C.ashDim }}>bodyweight</span>
+            ) : (
+              <>
+                <ValueWheel value={log.weight} onStep={(d) => stepW(key, d, set)} onSetExact={(v) => setWExact(key, v, set)} disabled={isDone} label="weight"
+                  fmt={(v) => dispW(v, unit)} peekUp={String(dispW(stepPlate(log.weight, 1), unit))} peekDn={String(dispW(stepPlate(log.weight, -1), unit))} resetKey={key} />
+                {/* one/two-dumbbell is a per-EXERCISE setting, so it lives once per exercise (card header
+                    / pair strip), not on every set row — that 96px control is what pushed weight and reps
+                    onto separate lines. */}
+                <span className="font-mono text-xs" style={{ color: C.ash }}>×</span>
+              </>
+            )}
+            <ValueWheel value={log.reps} onStep={(d) => stepR(key, d, set)} onSetExact={(v) => setRExact(key, v, set)} disabled={isDone} label="reps"
+              peekUp={String(log.reps + 1)} peekDn={String(Math.max(0, log.reps - 1))} resetKey={key} />
+            {!opts.name && <span className="font-mono text-[12px]" style={{ color: C.ashDim }}>reps</span>}
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
+            {opts.name && !isDone && <span className="font-mono text-[11px]" style={{ color: C.ashDim }}>{loadRead}</span>}
+            {isDone && (
+              <button onClick={() => undoSet(key)} aria-label="undo this set" title="tap to undo" className="flex min-h-[44px] items-center gap-1 rounded-full px-3 py-2.5 active:scale-90" style={{ background: "#20301C" }}>
+                <Check size={17} style={{ color: C.sage }} /><Undo2 size={13} style={{ color: C.ashDim }} />
+              </button>
+            )}
+          </div>
+        </div>
+        {opts.name ? (
+          edited && !rp && (
+            <div className="px-2 pb-1.5 pl-7 font-mono text-[11px]" style={{ color: C.ashDim }}>proj {dispW(set.load, unit)} × {set.repsNum}</div>
+          )
+        ) : (
+          <div className="px-2 pb-1.5 pl-7 font-mono text-[12px]" style={{ color: C.ash }}>
+            {loadRead}{isWarm ? " · warm-up" : `  ·  ${goalRead}`}
+            <span style={{ color: C.ashDim }}>{edited && !rp ? `  ·  proj ${dispW(set.load, unit)} × ${set.repsNum}` : ""}</span>
+          </div>
+        )}
+        {isDone && !isWarm && (
+          <div className="flex items-center gap-1.5 px-2 pb-2 pl-7">
+            <span className="mr-1 font-mono text-[11px] uppercase tracking-wider" style={{ color: C.ashDim }}>effort</span>
+            {[["easy", "Easy", C.sage], ["good", "Good", C.gold], ["hard", "Hard", C.rust], ["fail", "Failed", C.rust]].map(([v, lab, col]) => {
+              const on = log.e === v;
+              return <button key={v} onClick={() => setEffort(key, v)} aria-label={`effort ${lab}`} className="flex-1 rounded-full border px-1 py-2 text-center font-mono text-[12px] active:scale-95"
+                style={{ borderColor: on ? col : C.edge, background: on ? col : "transparent", color: on ? C.bg : C.ash, fontWeight: on ? 700 : 400 }}>{lab}</button>;
+            })}
+          </div>
+        )}
+        {showPct && (
+          <div className="flex gap-4 px-2 pb-1.5 pl-7 font-mono text-[12px]">
+            <span style={{ color: C.ashDim }}>overall <span style={{ color: pctColor(overallPct) }}>{fmtPct(overallPct)}</span></span>
+            <span style={{ color: C.ashDim }}>vs last <span style={{ color: pctColor(lastPct) }}>{fmtPct(lastPct)}</span></span>
+          </div>
+        )}
+
+        {isActive && (
+          <button onClick={advance} className="mb-2 ml-2 mr-2 block w-[calc(100%-1rem)] rounded-lg p-3 text-left" style={{ background: "#15120A" }}>
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.goldDim }}>coaching · live</span>
+              <span className="flex items-center gap-1 font-mono text-[9px]" style={{ color: C.ashDim }}>next <ChevronRight size={10} /></span>
+            </div>
+            <p key={cue} className="mt-1.5 text-[14px] leading-snug" style={{ color: C.bone, animation: "fade .35s ease-out", fontFamily: "Georgia, serif" }}>{cue}</p>
+          </button>
+        )}
+        {isResting && (
+          <div className="mb-2 ml-2 mr-2 rounded-lg p-3" style={{ background: "#15120A" }}>
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.goldDim }}>rest</span>
+              <span className="font-mono text-3xl font-bold" style={{ color: C.gold }}>{fmtClock(restLeft)}</span>
+            </div>
+            <div className="mt-2 h-1 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
+              <div className="h-full rounded-full" style={{ width: `${rest.total ? (restLeft / rest.total) * 100 : 0}%`, background: C.gold, transition: "width .5s linear" }} />
+            </div>
+            <p className="mt-2 font-mono text-[12px]" style={{ color: C.ash }}>logged {rp ? "bodyweight" : `${dispW(log.weight, unit)} ${uw(unit)}${cnt === 1 ? "" : "/hand"}`} × {log.reps} reps — adjust above if that's off</p>
+            <div className="mt-2 flex gap-2">
+              <button onClick={addRest} aria-label="add 30 seconds rest" className="rounded-full border px-4 py-2.5 font-mono text-[13px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>+30s</button>
+              <button onClick={skipRest} aria-label="skip rest" className="flex items-center gap-1 rounded-full border px-4 py-2.5 font-mono text-[13px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}><SkipForward size={15} /> Skip</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderExerciseCard = (exIdx, opts = {}) => {
+    const item = plan[exIdx];
+    const chg = mem.lastChanges?.[item.ex.name];
+    const cnt = dbCount(mem, item.ex);
+    const px = `${exIdx}-`;
+    const exLocked = (active && active.startsWith(px)) || (rest && rest.key.startsWith(px)) || [...done].some((k) => k.startsWith(px));
+    const joined = pairActive(item);
+    const cardCls = "rounded-2xl border p-5"
+      + (joined && item.pair.role === "A" ? " rounded-b-none border-b-0" : "")
+      + (joined && item.pair.role === "B" ? " rounded-t-none border-t-0 -mt-4" : "");
+    return (
+    <div key={item.ex.name} className={cardCls} style={{ background: C.card, borderColor: C.edge }}>
+      {/* pre-session flat list only — in session mode a broken pair gets the Link2 icon in the header
+          instead, and an active pair never reaches this card at all (it renders via renderPairCard). */}
+      {!opts.compact && item.pair && item.pair.role === "B" && joined && (
+        <div className="-mx-5 -mt-5 mb-3 flex items-center justify-between border-b px-5 py-1.5" style={{ borderColor: C.goldDim, background: "#1A1609" }}>
+          <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>superset · no rest between</span>
+          <button onClick={() => breakPair(item.pair.id)} className="flex min-h-[44px] items-center font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ color: C.ashDim }}>straight sets today</button>
+        </div>
+      )}
+      {!opts.compact && item.pair && item.pair.role === "B" && !joined && (
+        <div className="-mx-5 -mt-5 mb-3 flex items-center justify-between border-b px-5 py-1.5" style={{ borderColor: C.edge, background: "#15120A" }}>
+          <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>superset off — tap to restore</span>
+          <button onClick={() => breakPair(item.pair.id)} className="flex min-h-[44px] items-center font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ color: C.gold }}>restore</button>
+        </div>
+      )}
+      <div className="flex items-baseline gap-3">
+        <span className="font-mono text-xs" style={{ color: C.gold }}>{String(exIdx + 1).padStart(2, "0")}</span>
+        <div className="flex-1">
+          <h3 className="text-[17px] font-semibold leading-tight" style={{ color: C.bone, fontFamily: "Georgia, serif" }}>{item.ex.name}</h3>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            {item.ex.replaces && (
+              <span className="flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[9px]" style={{ borderColor: C.edge, color: C.ash }}>
+                <ArrowLeftRight size={9} style={{ color: C.goldDim }} /> replaces {item.ex.replaces} · {item.ex.gap}
+              </span>
+            )}
+            {item.ex.optional && <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>optional</span>}
+            {(mem.stalls?.[item.ex.name] || 0) >= 2 && <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.rust }}>stalling — deload soon</span>}
+            {chg && chg.toLoad !== chg.fromLoad && (
+              <span className="flex items-center gap-1 font-mono text-[10px]" style={{ color: chg.toLoad > chg.fromLoad ? C.sage : C.rust }}>
+                {chg.toLoad > chg.fromLoad ? <TrendingUp size={10} /> : <TrendingDown size={10} />} {dispW(chg.toLoad, unit)}{chg.single ? ` ${uw(unit)}` : `${uw(unit)}/hand`} (was {dispW(chg.fromLoad, unit)})
+              </span>
+            )}
+          </div>
+        </div>
+        {opts.compact && item.pair && !joined && (
+          <button onClick={() => breakPair(item.pair.id)} aria-label="restore superset pairing" title="restore superset pairing" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border active:scale-90"
+            style={{ borderColor: C.edge, color: C.gold }}>
+            <Link2 size={18} />
+          </button>
+        )}
+        <button onClick={() => setOpenInfo(openInfo === exIdx ? null : exIdx)} aria-label={`${openInfo === exIdx ? "hide" : "show"} form animation`} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border active:scale-90"
+          style={{ borderColor: openInfo === exIdx ? C.goldDim : C.edge, color: openInfo === exIdx ? C.gold : C.ash }}>
+          <Info size={18} />
+        </button>
+      </div>
+
+      {openInfo === exIdx && (
+        <div className="mt-3 rounded-xl border px-3 py-2" style={{ borderColor: C.activeEdge, background: "#15120A", animation: "fade .25s ease-out" }}>
+          <ExerciseAnim kind={ANIM[item.ex.name] || "press"} />
+          <p className="mt-1 text-center font-mono text-[10px] uppercase tracking-[0.15em]" style={{ color: C.ashDim }}>{item.ex.name}</p>
+          <p className="mt-2 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>{item.ex.basic}</p>
+        </div>
+      )}
+
+      {item.ex.variantSlot && (
+        <div className="mt-3">
+          <div className="grid grid-cols-2 gap-1.5">
+            {item.ex.variants.map((v, vi) => {
+              const onv = item.ex.slotIndex === vi;
+              return (
+                <button key={v.name} aria-label={`select ${v.name}`} onClick={() => !exLocked && setVariant(item.ex.slotKey, vi)} disabled={exLocked && !onv}
+                  className="rounded-lg border px-2 py-2.5 font-mono text-[12px]"
+                  style={{ borderColor: onv ? C.goldDim : C.edge, background: onv ? "#241F12" : "transparent", color: onv ? C.gold : C.ash, opacity: exLocked && !onv ? 0.35 : 1 }}>
+                  {SHORT[v.name] || v.name}
+                </button>
+              );
+            })}
+          </div>
+          {exLocked && <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>locked — this exercise has started</p>}
+        </div>
+      )}
+
+      {!item.ex.repProgress && (
+        <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border px-3 py-1.5" style={{ borderColor: C.edge }}>
+          <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>dumbbells{sessionStarted ? " · locked" : ""}</span>
+          <DbToggle count={cnt} onSet={(n) => setDbMode(item.ex.name, n)} disabled={sessionStarted} />
+        </div>
+      )}
+
+      <div className="mt-3 space-y-2">
+        {item.sets.map((set, setIdx) => renderSetRow(exIdx, setIdx))}
+      </div>
+
+      <p className="mt-3 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>
+        {joined && item.pair.role === "A" ? (
+          <>superset with {plan[item.pair.partnerIdx]?.ex.name} · no rest → partner</>
+        ) : joined && item.pair.role === "B" ? (
+          <>superset · rest {fmtRest(item.pair.postRest)} after each round</>
+        ) : (
+          <>
+            {item.ex.type === "rpt" ? "reverse pyramid · −10% per set · rest " : "straight sets · rest "}{fmtRest(item.ex.rest)}
+            {exIdx === 0 && item.ex.type === "rpt" ? " · warm-up ramp first" : exIdx === 1 && item.ex.type === "rpt" ? " · one ramp set" : ""}
+          </>
+        )}
+      </p>
+    </div>
+    );
+  };
+  // compact per-exercise strip column for the merged card: name/badges, variant picker, dbMode toggle,
+  // and the type/rest "prescription" line — the same pieces renderExerciseCard shows, condensed to fit
+  // side-by-side (A left, B right).
+  const renderPairStripCol = (exIdx) => {
+    const it = plan[exIdx];
+    const px = `${exIdx}-`;
+    const exLocked = (active && active.startsWith(px)) || (rest && rest.key.startsWith(px)) || [...done].some((k) => k.startsWith(px));
+    const chg = mem.lastChanges?.[it.ex.name];
+    const cnt = dbCount(mem, it.ex);
+    const workSets = it.sets.filter((s) => s.kind === "work");
+    const first = workSets[0];
+    const [rxBot, rxTop] = first?.range || [null, null];
+    const rx = !first ? "" : it.ex.repProgress
+      ? `${workSets.length} × (${rxBot}–${rxTop})`
+      : `${workSets.length} × ${dispW(first.load, unit)}${uw(unit)}${cnt === 2 ? "/hand" : ""} (${rxBot}–${rxTop})${cnt === 1 ? " · 1 DB" : ""}`;
+    return (
+      <div key={exIdx} className="min-w-0 flex-1">
+        <p className="truncate text-[13px] font-semibold leading-tight" style={{ color: C.bone, fontFamily: "Georgia, serif" }}>{it.ex.name}</p>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          {it.ex.optional && <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>optional</span>}
+          {(mem.stalls?.[it.ex.name] || 0) >= 2 && <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.rust }}>stalling</span>}
+          {chg && chg.toLoad !== chg.fromLoad && (
+            <span className="flex items-center gap-1 font-mono text-[9px]" style={{ color: chg.toLoad > chg.fromLoad ? C.sage : C.rust }}>
+              {chg.toLoad > chg.fromLoad ? <TrendingUp size={9} /> : <TrendingDown size={9} />} {dispW(chg.toLoad, unit)}
+            </span>
+          )}
+        </div>
+        {it.ex.variantSlot && (
+          <div className="mt-1.5 grid grid-cols-2 gap-1">
+            {it.ex.variants.map((v, vi) => {
+              const onv = it.ex.slotIndex === vi;
+              return (
+                <button key={v.name} aria-label={`select ${v.name}`} onClick={() => !exLocked && setVariant(it.ex.slotKey, vi)} disabled={exLocked && !onv}
+                  className="rounded-lg border px-2 py-2 font-mono text-[11px]"
+                  style={{ borderColor: onv ? C.goldDim : C.edge, background: onv ? "#241F12" : "transparent", color: onv ? C.gold : C.ash, opacity: exLocked && !onv ? 0.35 : 1 }}>
+                  {SHORT[v.name] || v.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {!it.ex.repProgress && (
+          <div className="mt-1.5">
+            <DbToggle count={cnt} onSet={(n) => setDbMode(it.ex.name, n)} disabled={sessionStarted} />
+          </div>
+        )}
+        <p className="mt-1.5 font-mono text-[10px]" style={{ color: C.ashDim }}>{rx}</p>
+      </div>
+    );
+  };
+
+  // merged superset card (Task 4): one card for an ACTIVE pair, rows sequenced in the true execution
+  // order (Task 1's seqKeys rule reproduced here from `plan` alone: A/B warmups first, then A/B work
+  // interleaved round-by-round). Completed rounds collapse to one line; tapping re-expands them.
+  const renderPairCard = (u) => {
+    const [a, b] = u.idxs;
+    const A = plan[a], B = plan[b];
+    const warmOf = (ei) => plan[ei].sets.map((s, si) => si).filter((si) => plan[ei].sets[si].kind === "warmup");
+    const workOf = (ei) => plan[ei].sets.map((s, si) => si).filter((si) => plan[ei].sets[si].kind === "work");
+    const warmA = warmOf(a), warmB = warmOf(b);
+    const wa = workOf(a), wb = workOf(b);
+    const rounds = Array.from({ length: Math.max(wa.length, wb.length) }, (_, r) => ({ r, aSi: wa[r] ?? null, bSi: wb[r] ?? null }));
+    const curKeyNow = active || (rest && rest.key) || nextKey;
+    const fmtSide = (ei, lg) => {
+      const it = plan[ei], c = dbCount(mem, it.ex);
+      return it.ex.repProgress ? `${lg.reps} reps` : `${c === 1 ? dispW(lg.weight, unit) : dispW(lg.weight * 2, unit)}${uw(unit)}${c === 1 ? "" : " total"} × ${lg.reps}`;
+    };
+    return (
+      <div key={`${A.ex.name}×${B.ex.name}`} className="rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
+        <div className="flex items-start gap-3">
+          <span className="font-mono text-xs" style={{ color: C.gold }}>{String(a + 1).padStart(2, "0")}</span>
+          <div className="flex-1">
+            <h3 className="text-[17px] font-semibold leading-tight" style={{ color: C.bone, fontFamily: "Georgia, serif" }}>{A.ex.name} × {B.ex.name}</h3>
+            <p className="mt-1 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.gold }}>superset · no rest inside the round</p>
+          </div>
+          <button onClick={() => setOpenInfo(openInfo === a ? null : a)} aria-label={`${openInfo === a ? "hide" : "show"} form animations`} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border active:scale-90"
+            style={{ borderColor: openInfo === a ? C.goldDim : C.edge, color: openInfo === a ? C.gold : C.ash }}>
+            <Info size={18} />
+          </button>
+          <button onClick={() => breakPair(A.pair.id)} aria-label="break superset pairing" title="split into two straight-set cards" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border active:scale-90"
+            style={{ borderColor: C.edge, color: C.ash }}>
+            <Unlink size={18} />
+          </button>
+        </div>
+
+        {openInfo === a && (
+          <div className="mt-3 space-y-2" style={{ animation: "fade .25s ease-out" }}>
+            {[a, b].map((idx) => (
+              <div key={idx} className="rounded-xl border px-3 py-2" style={{ borderColor: C.activeEdge, background: "#15120A" }}>
+                <ExerciseAnim kind={ANIM[plan[idx].ex.name] || "press"} />
+                <p className="mt-1 text-center font-mono text-[10px] uppercase tracking-[0.15em]" style={{ color: C.ashDim }}>{plan[idx].ex.name}</p>
+                <p className="mt-2 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>{plan[idx].ex.basic}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-3 flex gap-3">
+          {renderPairStripCol(a)}
+          {renderPairStripCol(b)}
+        </div>
+
+        <div className="mt-4 space-y-2">
+          {warmA.map((si) => renderSetRow(a, si, { name: rowName(A.ex.name) }))}
+          {warmB.map((si) => renderSetRow(b, si, { name: rowName(B.ex.name) }))}
+          {rounds.map((rd) => {
+            const keyA = rd.aSi != null ? `${a}-${rd.aSi}` : null;
+            const keyB = rd.bSi != null ? `${b}-${rd.bSi}` : null;
+            const doneA = keyA ? done.has(keyA) : true;
+            const doneB = keyB ? done.has(keyB) : true;
+            const complete = doneA && doneB;
+            const isCurrent = (keyA && keyA === curKeyNow) || (keyB && keyB === curKeyNow);
+            const rk = `${a}-r${rd.r}`;
+            if (complete && !reopenedRounds.has(rk)) {
+              return (
+                <button key={rk} onClick={() => setReopenedRounds((s) => new Set(s).add(rk))} aria-label={`expand round ${rd.r + 1}`}
+                  className="flex min-h-[44px] w-full items-center justify-between gap-2 rounded-xl border px-3 py-2 active:scale-95" style={{ borderColor: C.edge }}>
+                  <span className="flex shrink-0 items-center gap-1.5 font-mono text-[12px]" style={{ color: C.sage }}><Check size={13} /> R{rd.r + 1}</span>
+                  <span className="truncate font-mono text-[12px]" style={{ color: C.ash }}>
+                    {keyA ? fmtSide(a, logs[keyA] ?? {}) : ""}{keyA && keyB ? " · " : ""}{keyB ? fmtSide(b, logs[keyB] ?? {}) : ""}
+                  </span>
+                </button>
+              );
+            }
+            return (
+              <div key={rk} style={{ opacity: !complete && !isCurrent ? 0.5 : 1 }}>
+                <p className="mb-1 mt-2 font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.goldDim }}>Round {rd.r + 1}</p>
+                {keyA && renderSetRow(a, rd.aSi, { name: rowName(A.ex.name) })}
+                {keyB && renderSetRow(b, rd.bSi, { name: rowName(B.ex.name) })}
+              </div>
+            );
+          })}
+        </div>
+        <p className="mt-3 font-mono text-[10px]" style={{ color: C.ashDim }}>rest {fmtRest(A.pair.postRest)} after each round</p>
+      </div>
+    );
+  };
+
+  // renderUnit: a unit is either a single exercise or an ACTIVE superset pair — pairs get the merged
+  // card (Task 4); a broken pair unitizes into two singles, each rendered "compact" (session look,
+  // with a Link2 restore icon instead of the pre-session banner).
+  const renderUnit = (u) => u.pair
+    ? renderPairCard(u)
+    : renderExerciseCard(u.idxs[0], { compact: true });
+
   if (!loaded) return (
     <div className="flex min-h-screen w-full items-center justify-center" style={{ background: C.bg }}>
       <span className="font-mono text-xs uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>loading your program…</span>
@@ -2844,16 +3702,29 @@ function App() {
         .vup .ggbody{animation-name:situpUp}
         .vup .gglegs{animation:legsUp 2s ease-in-out infinite alternate}
         .recline .ggbody{transform:rotate(-24deg)}`}</style>
-      <div className="mx-auto max-w-md px-5 pb-24 pt-8">
-        {sessionStarted && tab === "workout" && (
-          <div className="sticky top-0 z-20 -mx-5 mb-4 px-5 py-2" style={{ background: "rgba(14,13,11,0.93)", backdropFilter: "blur(6px)", borderBottom: `1px solid ${C.edge}` }}>
-            <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider">
-              <span style={{ color: C.gold }}>Day {day} · in progress</span>
-              <span style={{ color: C.ash }}>{workDone} / {workTotal} sets</span>
-            </div>
-            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
-              <div className="h-full rounded-full" style={{ width: `${workTotal ? (workDone / workTotal) * 100 : 0}%`, background: C.gold, transition: "width .4s ease" }} />
-            </div>
+      <div className="mx-auto max-w-md px-5 pb-24 pt-8" style={{ paddingBottom: "calc(6rem + env(safe-area-inset-bottom))", paddingLeft: "max(1.25rem, env(safe-area-inset-left))", paddingRight: "max(1.25rem, env(safe-area-inset-right))" }}>
+        {tab === "workout" && !summary && !pending && (
+          <div className="sticky top-0 z-20 -mx-5 mb-4 px-5 py-2" style={{ background: "rgba(14,13,11,0.93)", backdropFilter: "blur(6px)", borderBottom: `1px solid ${C.edge}`, paddingTop: "calc(0.5rem + env(safe-area-inset-top))" }}>
+            <PlayerBar plan={plan} active={active} rest={rest} restLeft={restLeft} logs={logs} mem={mem} unit={unit} busy={busy} nextKey={nextKey}
+              startSet={startSet} finishSet={finishSet} cancelSet={cancelSet} skipRest={skipRest} addRest={addRest} pauseRest={pauseRest} resumeRest={resumeRest} setConfirm={setConfirm} />
+            {sessionStarted && (
+              <>
+                <div className="mt-1.5 flex items-center justify-between font-mono text-xs uppercase tracking-wider">
+                  <span style={{ color: C.gold }}>Day {day} · in progress</span>
+                  <span style={{ color: C.ash }}>{workDone} / {workTotal} sets</span>
+                </div>
+                <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
+                  <div className="h-full rounded-full" style={{ width: `${workTotal ? (workDone / workTotal) * 100 : 0}%`, background: C.gold, transition: "width .4s ease" }} />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {tab === "workout" && !summary && !pending && sessionStarted && (
+          <div className="-mt-1 mb-4 flex justify-end">
+            <button onClick={() => setReviewOpen(true)} className="flex h-11 items-center gap-1.5 rounded-full border px-4 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.ash, background: C.card }}>
+              <List size={14} /> review day
+            </button>
           </div>
         )}
         <div className="flex items-center justify-between">
@@ -2866,9 +3737,9 @@ function App() {
 
         <div className="mt-5 inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
           {[["workout", "Workout", Dumbbell], ["diet", "Diet", Apple]].map(([t, lab, Icon]) => (
-            <button key={t} onClick={() => { setTab(t); setOpenInfo(null); }} className="flex items-center gap-1.5 rounded-full px-5 py-1.5 font-mono text-xs active:scale-95"
+            <button key={t} onClick={() => { setTab(t); setOpenInfo(null); }} className="flex items-center gap-1.5 rounded-full px-5 py-2.5 font-mono text-sm active:scale-95"
               style={{ background: tab === t ? C.gold : "transparent", color: tab === t ? C.bg : C.ash, fontWeight: tab === t ? 700 : 400 }}>
-              <Icon size={12} />{lab}{t === "workout" && sessionStarted && <span style={{ width: 6, height: 6, borderRadius: 9, background: tab === t ? C.bg : C.gold, display: "inline-block" }} />}
+              <Icon size={16} />{lab}{t === "workout" && sessionStarted && <span style={{ width: 6, height: 6, borderRadius: 9, background: tab === t ? C.bg : C.gold, display: "inline-block" }} />}
             </button>
           ))}
         </div>
@@ -2879,8 +3750,8 @@ function App() {
             <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>In-progress session found</p>
             <p className="mt-2 text-[13px]" style={{ color: C.bone }}>You have an unfinished Day {pending.day} — {pending.done.length > 0 ? `${pending.done.length} set${pending.done.length === 1 ? "" : "s"} logged` : "a set in progress"}. Pick up where you left off?</p>
             <div className="mt-3 flex gap-2">
-              <button onClick={resumeSession} className="flex-1 rounded-xl py-2.5 font-mono text-xs font-bold uppercase tracking-wider" style={{ background: C.gold, color: C.bg }}>Resume</button>
-              <button onClick={discardSession} className="flex-1 rounded-xl border py-2.5 font-mono text-xs uppercase tracking-wider" style={{ borderColor: C.edge, color: C.ash }}>Discard</button>
+              <button onClick={resumeSession} className="flex-1 rounded-xl py-3 font-mono text-sm font-bold uppercase tracking-wider" style={{ background: C.gold, color: C.bg }}>Resume</button>
+              <button onClick={discardSession} className="flex-1 rounded-xl border py-3 font-mono text-sm uppercase tracking-wider" style={{ borderColor: C.edge, color: C.ash }}>Discard</button>
             </div>
           </div>
         )}
@@ -2931,7 +3802,7 @@ function App() {
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
             {PROGRAM.map((d) => (
-              <button key={d.id} onClick={() => { setDay(d.id); setOpenInfo(null); setConfirm(null); if (hasStore) clearLive(); liveRef.current = null; liveClearedRef.current = true; }} className="flex items-center gap-1 rounded-full px-3 py-1.5 font-mono text-xs"
+              <button key={d.id} onClick={() => { setDay(d.id); setOpenInfo(null); setConfirm(null); if (hasStore) clearLive(); liveRef.current = null; liveClearedRef.current = true; }} className="flex min-w-[42px] items-center justify-center gap-1 rounded-full px-3 py-2 font-mono text-sm"
                 style={{ background: day === d.id ? C.gold : "transparent", color: day === d.id ? C.bg : C.ash, fontWeight: day === d.id ? 700 : 400 }}>
                 {d.id}
               </button>
@@ -2939,7 +3810,7 @@ function App() {
           </div>
           <div className="inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
             {["lb", "kg"].map((u) => (
-              <button key={u} onClick={() => setUnit(u)} aria-label={`show weights in ${u === "lb" ? "pounds" : "kilograms"}`} className="rounded-full px-3 py-1.5 font-mono text-xs"
+              <button key={u} onClick={() => setUnit(u)} aria-label={`show weights in ${u === "lb" ? "pounds" : "kilograms"}`} className="rounded-full px-4 py-2 font-mono text-sm"
                 style={{ background: unit === u ? C.gold : "transparent", color: unit === u ? C.bg : C.ash, fontWeight: unit === u ? 700 : 400 }}>{u}</button>
             ))}
           </div>
@@ -2947,199 +3818,29 @@ function App() {
         {mem.lastDay > 0 && day === nextDayId(mem.lastDay) && <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>auto-picked — you trained Day {mem.lastDay} last</p>}
 
         <div className="mt-6 space-y-4">
-          {plan.map((item, exIdx) => {
-            const chg = mem.lastChanges?.[item.ex.name];
-            const cnt = dbCount(mem, item.ex);
-            const px = `${exIdx}-`;
-            const exLocked = (active && active.startsWith(px)) || (rest && rest.key.startsWith(px)) || [...done].some((k) => k.startsWith(px));
-            const joined = pairActive(item);
-            const cardCls = "rounded-2xl border p-5"
-              + (joined && item.pair.role === "A" ? " rounded-b-none border-b-0" : "")
-              + (joined && item.pair.role === "B" ? " rounded-t-none border-t-0 -mt-4" : "");
-            return (
-            <div key={item.ex.name} className={cardCls} style={{ background: C.card, borderColor: C.edge }}>
-              {item.pair && item.pair.role === "B" && joined && (
-                <div className="-mx-5 -mt-5 mb-3 flex items-center justify-between border-b px-5 py-1.5" style={{ borderColor: C.goldDim, background: "#1A1609" }}>
-                  <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>superset · no rest between</span>
-                  <button onClick={() => breakPair(item.pair.id)} className="flex min-h-[32px] items-center font-mono text-[9px] uppercase tracking-wider active:scale-95" style={{ color: C.ashDim }}>straight sets today</button>
-                </div>
-              )}
-              {item.pair && item.pair.role === "B" && !joined && (
-                <div className="-mx-5 -mt-5 mb-3 flex items-center justify-between border-b px-5 py-1.5" style={{ borderColor: C.edge, background: "#15120A" }}>
-                  <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>superset off — tap to restore</span>
-                  <button onClick={() => breakPair(item.pair.id)} className="flex min-h-[32px] items-center font-mono text-[9px] uppercase tracking-wider active:scale-95" style={{ color: C.gold }}>restore</button>
-                </div>
-              )}
-              <div className="flex items-baseline gap-3">
-                <span className="font-mono text-xs" style={{ color: C.gold }}>{String(exIdx + 1).padStart(2, "0")}</span>
-                <div className="flex-1">
-                  <h3 className="text-[17px] font-semibold leading-tight" style={{ color: C.bone, fontFamily: "Georgia, serif" }}>{item.ex.name}</h3>
-                  <div className="mt-1 flex flex-wrap items-center gap-2">
-                    {item.ex.replaces && (
-                      <span className="flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[9px]" style={{ borderColor: C.edge, color: C.ash }}>
-                        <ArrowLeftRight size={9} style={{ color: C.goldDim }} /> replaces {item.ex.replaces} · {item.ex.gap}
-                      </span>
-                    )}
-                    {item.ex.optional && <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>optional</span>}
-                    {(mem.stalls?.[item.ex.name] || 0) >= 2 && <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.rust }}>stalling — deload soon</span>}
-                    {chg && chg.toLoad !== chg.fromLoad && (
-                      <span className="flex items-center gap-1 font-mono text-[10px]" style={{ color: chg.toLoad > chg.fromLoad ? C.sage : C.rust }}>
-                        {chg.toLoad > chg.fromLoad ? <TrendingUp size={10} /> : <TrendingDown size={10} />} {dispW(chg.toLoad, unit)}{chg.single ? ` ${uw(unit)}` : `${uw(unit)}/hand`} (was {dispW(chg.fromLoad, unit)})
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <button onClick={() => setOpenInfo(openInfo === exIdx ? null : exIdx)} aria-label={`${openInfo === exIdx ? "hide" : "show"} form animation`} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border active:scale-90"
-                  style={{ borderColor: openInfo === exIdx ? C.goldDim : C.edge, color: openInfo === exIdx ? C.gold : C.ash }}>
-                  <Info size={14} />
-                </button>
-              </div>
-
-              {openInfo === exIdx && (
-                <div className="mt-3 rounded-xl border py-2" style={{ borderColor: C.activeEdge, background: "#15120A", animation: "fade .25s ease-out" }}>
-                  <ExerciseAnim kind={ANIM[item.ex.name] || "press"} />
-                  <p className="mt-1 text-center font-mono text-[10px] uppercase tracking-[0.15em]" style={{ color: C.ashDim }}>{item.ex.name}</p>
-                </div>
-              )}
-
-              <p className="mt-3 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>{item.ex.basic}</p>
-
-              {item.ex.variantSlot && (
-                <div className="mt-3">
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {item.ex.variants.map((v, vi) => {
-                      const onv = item.ex.slotIndex === vi;
-                      return (
-                        <button key={v.name} aria-label={`select ${v.name}`} onClick={() => !exLocked && setVariant(item.ex.slotKey, vi)} disabled={exLocked && !onv}
-                          className="rounded-lg border px-2 py-1.5 font-mono text-[10px]"
-                          style={{ borderColor: onv ? C.goldDim : C.edge, background: onv ? "#241F12" : "transparent", color: onv ? C.gold : C.ash, opacity: exLocked && !onv ? 0.35 : 1 }}>
-                          {SHORT[v.name] || v.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {exLocked && <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>locked — this exercise has started</p>}
-                </div>
-              )}
-
-              <div className="mt-4 space-y-2">
-                {item.sets.map((set, setIdx) => {
-                  const key = `${exIdx}-${setIdx}`;
-                  const log = logs[key] ?? { weight: set.load, reps: set.repsNum };
-                  const isActive = active === key, isResting = rest?.key === key, isDone = done.has(key), isWarm = set.kind === "warmup";
-                  const edited = log.weight !== set.load || log.reps !== set.repsNum;
-                  const rp = item.ex.repProgress;
-                  const recs = mem.setHistory?.[item.ex.name]?.[set.label] || [];
-                  const showPct = set.kind === "work" && recs.length > 0;
-                  const totW = (w, dbs, fb) => w * (dbs || fb);   // per-DB weight → TOTAL load; fallback handles unstamped history
-                  const curE = e1rm(totW(log.weight, log.dbs, cnt), log.reps);
-                  const overallPct = !showPct ? 0 : rp ? (log.reps / recs[0].r - 1) * 100 : (curE / e1rm(totW(recs[0].w, recs[0].dbs, item.ex.single ? 1 : 2), recs[0].r) - 1) * 100;
-                  const lastPct = !showPct ? 0 : rp ? (log.reps / recs[recs.length - 1].r - 1) * 100 : (curE / e1rm(totW(recs[recs.length - 1].w, recs[recs.length - 1].dbs, item.ex.single ? 1 : 2), recs[recs.length - 1].r) - 1) * 100;
+          {sessionStarted ? (
+            <>
+              <FocusPager count={units.length} page={pageClamped} onPage={setPage}>
+                {(i) => renderUnit(units[i])}
+              </FocusPager>
+              <div className="flex items-center justify-center gap-1.5" style={{ minHeight: 44 }}>
+                {units.map((u, i) => {
+                  const complete = u.idxs.every((ei) => plan[ei].sets.every((s, si) => done.has(`${ei}-${si}`)));
                   return (
-                    <div key={key} className="rounded-xl border" style={{ borderColor: isActive ? C.activeEdge : "transparent", background: isActive ? "#1F1A0E" : "transparent" }}>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-2 px-2 py-2">
-                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-2">
-                          <span className="w-5 shrink-0 text-center font-mono text-[11px]" style={{ color: isWarm ? C.ashDim : C.gold }}>{set.label}</span>
-                          {rp ? (
-                            <span className="font-mono text-[10px] uppercase tracking-wide" style={{ color: C.ashDim }}>bodyweight</span>
-                          ) : (
-                            <>
-                              <Stepper value={log.weight} onStep={(d) => stepW(key, d, set)} minW={34} disabled={isDone} label="weight" fmt={(v) => dispW(v, unit)} />
-                              <button onClick={() => setDbMode(item.ex.name, cnt === 1 ? 2 : 1)} aria-label="switch between one and two dumbbells"
-                                disabled={sessionStarted} title={sessionStarted ? "finish or reset the session to switch" : undefined}
-                                className="flex min-h-[32px] items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] active:scale-95" style={{ borderColor: C.edge, color: C.ash, opacity: sessionStarted ? 0.45 : 1 }}>
-                                {cnt === 1 ? `${uw(unit)} · 1 DB` : `${uw(unit)}/hand · 2 DB`}<ArrowLeftRight size={10} />
-                              </button>
-                              <span className="font-mono text-xs" style={{ color: C.ash }}>×</span>
-                            </>
-                          )}
-                          <Stepper value={log.reps} onStep={(d) => stepR(key, d, set)} minW={20} disabled={isDone} label="reps" />
-                          <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>reps</span>
-                        </div>
-                        <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
-                          {isDone ? (
-                            <button onClick={() => undoSet(key)} aria-label="undo this set" title="tap to undo" className="flex items-center gap-1 rounded-full px-2.5 py-1.5 active:scale-90" style={{ background: "#20301C" }}>
-                              <Check size={15} style={{ color: C.sage }} /><Undo2 size={11} style={{ color: C.ashDim }} />
-                            </button>
-                          ) : isActive ? (
-                            <>
-                              <button onClick={cancelSet} aria-label="cancel set" className="flex h-9 w-9 items-center justify-center rounded-full border active:scale-90" style={{ borderColor: C.edge, color: C.ash }}><X size={14} /></button>
-                              <button onClick={() => finishSet(set, exIdx)} className="flex items-center gap-1.5 rounded-full px-4 py-1.5 font-mono text-xs font-bold active:scale-95" style={{ background: C.gold, color: C.bg }}><Check size={13} /> Finish</button>
-                            </>
-                          ) : isResting ? null : (
-                            <button onClick={() => startSet(key)} disabled={busy} aria-label="start set" className="flex items-center gap-1.5 rounded-full border px-4 py-1.5 font-mono text-xs active:scale-95"
-                              style={{ borderColor: busy ? C.edge : C.goldDim, color: busy ? C.ashDim : C.gold, opacity: busy ? 0.5 : 1 }}><Play size={12} /> Start</button>
-                          )}
-                        </div>
-                      </div>
-                      <div className="px-2 pb-1.5 pl-7 font-mono text-[10px]" style={{ color: C.ash }}>
-                        {rp ? "bodyweight" : cnt === 1 ? `${dispW(log.weight, unit)} ${uw(unit)}` : `${dispW(log.weight * 2, unit)} ${uw(unit)} total`}{isWarm ? " · warm-up" : `  ·  ${set.repsLabel}${set.aim ? ` · aim ${set.aim}` : ""}`}
-                        <span style={{ color: C.ashDim }}>{edited && !rp ? `  ·  proj ${dispW(set.load, unit)} × ${set.repsNum}` : ""}</span>
-                      </div>
-                      {isDone && !isWarm && (
-                        <div className="flex items-center gap-1 px-2 pb-2 pl-7">
-                          <span className="mr-1 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>effort</span>
-                          {[["easy", "Easy", C.sage], ["good", "Good", C.gold], ["hard", "Hard", C.rust], ["fail", "Failed", C.rust]].map(([v, lab, col]) => {
-                            const on = log.e === v;
-                            return <button key={v} onClick={() => setEffort(key, v)} aria-label={`effort ${lab}`} className="rounded-full border px-2 py-0.5 font-mono text-[9px] active:scale-95"
-                              style={{ borderColor: on ? col : C.edge, background: on ? col : "transparent", color: on ? C.bg : C.ash, fontWeight: on ? 700 : 400 }}>{lab}</button>;
-                          })}
-                        </div>
-                      )}
-                      {showPct && (
-                        <div className="flex gap-4 px-2 pb-1.5 pl-7 font-mono text-[10px]">
-                          <span style={{ color: C.ashDim }}>overall <span style={{ color: pctColor(overallPct) }}>{fmtPct(overallPct)}</span></span>
-                          <span style={{ color: C.ashDim }}>vs last <span style={{ color: pctColor(lastPct) }}>{fmtPct(lastPct)}</span></span>
-                        </div>
-                      )}
-
-                      {isActive && (
-                        <button onClick={advance} className="mb-2 ml-2 mr-2 block w-[calc(100%-1rem)] rounded-lg p-3 text-left" style={{ background: "#15120A" }}>
-                          <div className="flex items-center justify-between">
-                            <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.goldDim }}>coaching · live</span>
-                            <span className="flex items-center gap-1 font-mono text-[9px]" style={{ color: C.ashDim }}>next <ChevronRight size={10} /></span>
-                          </div>
-                          <p key={cue} className="mt-1.5 text-[14px] leading-snug" style={{ color: C.bone, animation: "fade .35s ease-out", fontFamily: "Georgia, serif" }}>{cue}</p>
-                        </button>
-                      )}
-                      {isResting && (
-                        <div className="mb-2 ml-2 mr-2 rounded-lg p-3" style={{ background: "#15120A" }}>
-                          <div className="flex items-center justify-between">
-                            <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.goldDim }}>rest</span>
-                            <span className="font-mono text-lg font-bold" style={{ color: C.gold }}>{fmtClock(restLeft)}</span>
-                          </div>
-                          <div className="mt-2 h-1 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
-                            <div className="h-full rounded-full" style={{ width: `${rest.total ? (restLeft / rest.total) * 100 : 0}%`, background: C.gold, transition: "width .5s linear" }} />
-                          </div>
-                          <p className="mt-2 font-mono text-[10px]" style={{ color: C.ash }}>logged {rp ? "bodyweight" : `${dispW(log.weight, unit)} ${uw(unit)}${cnt === 1 ? "" : "/hand"}`} × {log.reps} reps — adjust above if that's off</p>
-                          <div className="mt-2 flex gap-2">
-                            <button onClick={addRest} aria-label="add 30 seconds rest" className="rounded-full border px-3 py-1 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}>+30s</button>
-                            <button onClick={skipRest} aria-label="skip rest" className="flex items-center gap-1 rounded-full border px-3 py-1 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.ash }}><SkipForward size={11} /> Skip</button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <button key={i} onClick={() => setPage(i)} aria-label={`go to exercise ${i + 1}`} className="flex h-11 w-6 shrink-0 items-center justify-center active:scale-90">
+                      <span style={{ width: 8, height: 8, borderRadius: 9, background: i === pageClamped ? C.gold : complete ? C.sage : C.ashDim, opacity: i === pageClamped ? 1 : complete ? 0.9 : 0.4 }} />
+                    </button>
                   );
                 })}
               </div>
-
-              <p className="mt-3 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>
-                {joined && item.pair.role === "A" ? (
-                  <>superset with {plan[item.pair.partnerIdx]?.ex.name} · no rest → partner</>
-                ) : joined && item.pair.role === "B" ? (
-                  <>superset · rest {fmtRest(item.pair.postRest)} after each round</>
-                ) : (
-                  <>
-                    {item.ex.type === "rpt" ? "reverse pyramid · −10% per set · rest " : "straight sets · rest "}{fmtRest(item.ex.rest)}
-                    {exIdx === 0 && item.ex.type === "rpt" ? " · warm-up ramp first" : exIdx === 1 && item.ex.type === "rpt" ? " · one ramp set" : ""}
-                  </>
-                )}
-              </p>
-            </div>
-          );})}
+            </>
+          ) : (
+            plan.map((_, exIdx) => renderExerciseCard(exIdx))
+          )}
         </div>
 
         {/* finish + progress */}
+        <div id="finishzone" />
         {confirm === "finish" ? (
           <div className="mt-6 rounded-2xl border p-4" style={{ borderColor: C.activeEdge, background: "#1A1609", animation: "fade .3s ease-out" }}>
             <p className="text-[13px] leading-relaxed" style={{ color: C.bone }}>Finish Day {day}? This saves your {workDone} logged set{workDone === 1 ? "" : "s"}, applies progression, and advances to the next day.</p>
@@ -3237,6 +3938,10 @@ function App() {
           )}
         </div>
       </div>
+      {reviewOpen && (
+        <ReviewDay plan={plan} units={units} mem={mem} unit={unit} done={done} onClose={() => setReviewOpen(false)}
+          onJump={(unitIdx) => { if (unitIdx >= 0) setPage(unitIdx); setReviewOpen(false); }} />
+      )}
     </div>
   );
 }
