@@ -197,7 +197,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0824-2221";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0825-2345";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -1153,7 +1153,7 @@ function Stepper({ value, onStep, minW = 30, disabled, label = "value", fmt }) {
 // gesture mirrors FocusPager's own direction lock (8px, whichever axis leads wins) and only claims the
 // touch (preventDefault + stopPropagation) once it's decided vertical; a mostly-horizontal drag is left
 // untouched so it still reaches the pager and pages normally.
-function ValueWheel({ value, onStep, onSetExact, fmt, label, suffix, peekUp, peekDn, disabled, resetKey }) {
+function ValueWheel({ value, onStep, onSetExact, fmt, label, suffix, peekUp, peekDn, disabled, resetKey, noFlick }) {
   const [editing, setEditing] = useState(false);
   const [txt, setTxt] = useState("");
   const g = useRef(null);
@@ -1193,7 +1193,9 @@ function ValueWheel({ value, onStep, onSetExact, fmt, label, suffix, peekUp, pee
       if (s.lock === "y") { e.stopPropagation(); suppressClick.current = true; }   // gesture claimed — swallow the trailing synthetic click
       if (!s.moved) { openEditor(); return; }
       const dt = Date.now() - s.t, v = s.acc / Math.max(1, dt);           // steps per ms
-      const extra = Math.min(8, Math.round(Math.abs(v) * 220));           // flick momentum
+      // flick momentum — disabled for short-range wheels (band bars: 0–10) where an 8-step overshoot
+      // turns "set 2" into "set 8"; those step exactly what the finger dragged.
+      const extra = noFlick ? 0 : Math.min(8, Math.round(Math.abs(v) * 220));
       for (let i = 0; i < extra; i++) onStepRef.current(s.acc > 0 ? 1 : -1);
     };
     el.addEventListener("touchstart", onTS, { passive: false });
@@ -3005,12 +3007,29 @@ function App() {
     } catch (e) {}
   }, []);
 
+  const prevPlanRef = useRef(null);
   useEffect(() => {
+    const prev = prevPlanRef.current; prevPlanRef.current = plan;
     if (skipNextReset.current) { skipNextReset.current = false; return; }
-    const init = {};
-    plan.forEach((it, ei) => it.sets.forEach((s, si) => { init[`${ei}-${si}`] = { weight: s.load, reps: s.repsNum }; }));
-    setLogs(init); setActive(null); setCue(""); setRest(null); setDone(new Set()); cursors.current = {}; setOpenInfo(null); setReopenedRounds(new Set());
-    setSessionBars(null);   // fresh day → fresh band suggestion; skipped by skipNextReset so resumeSession's pending.bars restore sticks
+    // `plan` derives from mem, so ANY mem write re-creates it — but only a SHAPE change (new day,
+    // variant swap) is a genuinely different workout. A same-shape rebuild (mid-session DB flip
+    // converting loads, a diet log, a sync merge) must never wipe a live session: those merge —
+    // untouched, un-done sets pick up the new defaults, everything logged or hand-edited stays.
+    const shape = (p) => p.map((it) => it.ex.name + "/" + it.sets.length).join("|");
+    if (!prev || shape(prev) !== shape(plan)) {
+      const init = {};
+      plan.forEach((it, ei) => it.sets.forEach((s, si) => { init[`${ei}-${si}`] = { weight: s.load, reps: s.repsNum }; }));
+      setLogs(init); setActive(null); setCue(""); setRest(null); setDone(new Set()); cursors.current = {}; setOpenInfo(null); setReopenedRounds(new Set());
+      setSessionBars(null);   // fresh day → fresh band suggestion; skipped by skipNextReset so resumeSession's pending.bars restore sticks
+      setSkippedEx(new Set());   // skips are per-session
+      return;
+    }
+    setLogs((L) => { const n = { ...L };
+      plan.forEach((it, ei) => it.sets.forEach((s, si) => { const k = `${ei}-${si}`;
+        const old = prev[ei].sets[si], cur = n[k];
+        if (!cur || (cur.weight === old.load && cur.reps === old.repsNum && !cur.finishedAt)) n[k] = { ...(cur || {}), weight: s.load, reps: s.repsNum };
+      }));
+      return n; });
   }, [plan]);
 
   const busy = active !== null || rest !== null;
@@ -3019,6 +3038,7 @@ function App() {
   const suggest = bandSuggest(mem.bandByDay?.[day] ?? null, mem.bandMiss?.[day] || 0);
   const [sessionBars, setSessionBars] = useState(null);          // null = untouched → suggestion applies
   const bars = sessionBars ?? suggest.bars;
+  const [skippedEx, setSkippedEx] = useState(() => new Set());   // exercises benched for THIS session (exIdx) — player + pager route around them; finish already ignores unlogged lifts
   const setVariant = async (key, idx) => { const nm = { ...mem, [key + "Choice"]: idx }; if (hasStore) await saveState(nm); setMem(nm); };
   const workDoneCount = useMemo(() => [...done].length, [done]);
 
@@ -3060,7 +3080,7 @@ function App() {
   useEffect(() => {
     if (!loaded) return;
     const started = done.size > 0 || active !== null;
-    const liveObj = started ? { day, logs, done: [...done], active, ts: Date.now(), sig: daySig(day), bars: sessionBars } : (pending || null);
+    const liveObj = started ? { day, logs, done: [...done], active, ts: Date.now(), sig: daySig(day), bars: sessionBars, skipped: [...skippedEx] } : (pending || null);
     liveRef.current = liveObj;
     if (hasStore && started) saveLive(liveObj);
     // Only mark the device "dirty" (bump the change clock + push) when the session GENUINELY changed —
@@ -3069,20 +3089,21 @@ function App() {
     const sig = liveSig(liveObj);
     if (sig !== syncedLiveSig.current) { bumpChange().then(schedulePush); }
     else { schedulePush(); }
-  }, [done, active, loaded, pending]);
+  }, [done, active, loaded, pending, skippedEx]);
 
   const workKeys = useMemo(() => { const ks = []; plan.forEach((it, ei) => { if (it.ex.optional) return; it.sets.forEach((s, si) => { if (s.kind === "work") ks.push(`${ei}-${si}`); }); }); return ks; }, [plan]);
   const workTotal = workKeys.length;
   const workDone = useMemo(() => workKeys.filter((k) => done.has(k)).length, [workKeys, done]);
-  // true execution order (interleaves superset rounds) — reorders live when a pair is broken/restored
-  const seq = useMemo(() => seqKeys(plan, pairActive), [plan, brokenPairs]);
+  // true execution order (interleaves superset rounds) — reorders live when a pair is broken/restored;
+  // skipped exercises drop out of the sequence so the player routes straight past them
+  const seq = useMemo(() => seqKeys(plan, pairActive).filter((k) => !skippedEx.has(+k.split("-")[0])), [plan, brokenPairs, skippedEx]);
   const nextKey = nextKeyOf(seq, done, active ?? (rest && rest.key));   // resting set isn't in done yet — exclude it so the rest-state "next up" shows the true upcoming set
 
   // focus pager: one card per unit (a superset pair merges into one unit) — `currentUnit` is the
   // first unit with any un-done set, clamped to the last unit once everything is logged.
   const units = useMemo(() => unitize(plan, pairActive), [plan, brokenPairs]);
   const currentUnit = (() => {
-    const i = units.findIndex((u) => u.idxs.some((ei) => plan[ei].sets.some((s, si) => !done.has(`${ei}-${si}`))));
+    const i = units.findIndex((u) => u.idxs.some((ei) => !skippedEx.has(ei) && plan[ei].sets.some((s, si) => !done.has(`${ei}-${si}`))));
     return i === -1 ? units.length - 1 : i;
   })();
   // any logging action or timer end moves done/active/rest, which recomputes currentUnit and snaps the page
@@ -3137,7 +3158,11 @@ function App() {
         else effRest = item.pair.postRest;
       } else effRest = item.pair.postRest;
     }
-    setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), finishedAt: now, restPrescribed: effRest, dbs: dbCount(mem, plan[exIdx].ex), ...(effRest === 0 ? { restEndedVia: "superset" } : {}) } }));
+    // band bars are stamped PER SET at the moment it finishes (like dbs) — the wheel stays editable all
+    // session, and each set records what was actually on the wrists when it was done. b:0 is stamped
+    // explicitly on band-eligible lifts so a later wheel change can't rewrite an earlier bare set.
+    const bfNow = bandFactor(plan[exIdx].ex, dbCount(mem, plan[exIdx].ex));
+    setLogs((L) => ({ ...L, [key]: { ...(L[key] || {}), finishedAt: now, restPrescribed: effRest, dbs: dbCount(mem, plan[exIdx].ex), ...(bfNow > 0 ? { b: bars, bf: bfNow } : {}), ...(effRest === 0 ? { restEndedVia: "superset" } : {}) } }));
     lastFinishRef.current = { key, at: now };
     setActive(null); setCue("");
     if (effRest > 0) { setRestLeft(effRest); setRest({ key, endAt: now + effRest * 1000, total: effRest }); }
@@ -3167,7 +3192,13 @@ function App() {
     const snap = { date: stamp, lifts: {} };
     // one band stamp for the whole function: {b,bf} only when bars are actually attached AND this
     // exercise/dbs combo actually takes a band load — never for a repProgress lift (factor 0) or bars===0.
-    const bandStamp = (ex, dbs) => { const f = bandFactor(ex, dbs); return bars > 0 && f > 0 ? { b: bars, bf: f } : {}; };
+    // per-set truth first (stamped at set-finish); the session-level fallback only covers sets logged
+    // by a pre-per-set-stamping build inside a still-live session. b:0 stamps resolve to no band keys.
+    const bandStamp = (ex, lg, dbs) => {
+      if (lg && lg.b != null) return lg.b > 0 ? { b: lg.b, bf: lg.bf ?? bandFactor(ex, dbs) } : {};
+      const f = bandFactor(ex, dbs);
+      return bars > 0 && f > 0 ? { b: bars, bf: f } : {};
+    };
 
     plan.forEach((item, exIdx) => {
       const name = item.ex.name;
@@ -3175,7 +3206,7 @@ function App() {
       const range = work[0]?.s.range || item.ex.range;
       const loggedKeys = work.map((x) => `${exIdx}-${x.si}`).filter((k) => done.has(k));
       const cnt = dbCount(mem, item.ex);
-      const logged = loggedKeys.map((k) => ({ w: logs[k].weight, r: logs[k].reps, e: logs[k].e, dbs: logs[k].dbs, ...bandStamp(item.ex, logs[k].dbs || cnt) }));
+      const logged = loggedKeys.map((k) => ({ w: logs[k].weight, r: logs[k].reps, e: logs[k].e, dbs: logs[k].dbs, ...bandStamp(item.ex, logs[k], logs[k].dbs || cnt) }));
       const c = cursors.current[exIdx] ?? 0; recentCues[name] = item.order.slice(0, c);   // cue rotation memory
       if (!logged.length) return;                                                          // skip lifts you didn't log
       const target = newTargets[name] || { load: item.target.load, reps: range[0] };
@@ -3190,7 +3221,7 @@ function App() {
       let setPBs = 0;
       work.forEach((x) => { const k = `${exIdx}-${x.si}`; if (!done.has(k)) return;
         const prevPB = slotPB(prevSh[x.s.label] || [], item.ex);
-        const tot = setTotal({ w: logs[k].weight, dbs: logs[k].dbs || cnt, ...bandStamp(item.ex, logs[k].dbs || cnt) }, item.ex);
+        const tot = setTotal({ w: logs[k].weight, dbs: logs[k].dbs || cnt, ...bandStamp(item.ex, logs[k], logs[k].dbs || cnt) }, item.ex);
         if (prevPB && e1rm(tot, logs[k].reps) > prevPB.e1 + 1e-9) setPBs++; });
       changes.push({ name, decision: res.decision, fromLoad: target.load, toLoad: res.load, fromReps: target.reps, toReps: res.reps, single: cnt === 1, rebased: res.rebased, setPBs });
       const tonnage = logged.reduce((a, s) => a + setTotal(s, item.ex) * s.r, 0);
@@ -3198,7 +3229,7 @@ function App() {
       snap.lifts[name] = { sets: logged, top: { ...topS, dbs: topS.dbs || cnt }, tonnage };
       newHistory[name] = [...(newHistory[name] || []), { t: stamp, w: topS.w, r: topS.r, dbs: topS.dbs || cnt, ...(topS.b ? { b: topS.b, bf: topS.bf } : {}) }].slice(-40);
       const sh = { ...(newSetHistory[name] || {}) };
-      work.forEach((x) => { const k = `${exIdx}-${x.si}`; if (done.has(k)) sh[x.s.label] = [...(sh[x.s.label] || []), { t: stamp, w: logs[k].weight, r: logs[k].reps, e: logs[k].e, dbs: logs[k].dbs, ...bandStamp(item.ex, logs[k].dbs || cnt) }].slice(-30); });
+      work.forEach((x) => { const k = `${exIdx}-${x.si}`; if (done.has(k)) sh[x.s.label] = [...(sh[x.s.label] || []), { t: stamp, w: logs[k].weight, r: logs[k].reps, e: logs[k].e, dbs: logs[k].dbs, ...bandStamp(item.ex, logs[k], logs[k].dbs || cnt) }].slice(-30); });
       newSetHistory[name] = sh;
     });
 
@@ -3216,10 +3247,11 @@ function App() {
           startedAt: isoOrNull(lg.startedAt), finishedAt: isoOrNull(lg.finishedAt),
           restPrescribed: lg.restPrescribed ?? null, restEndedVia: lg.restEndedVia ?? null,
           restAppElapsed: lg.restAppElapsed ?? null, restActual: lg.restActual ?? null,
-          ...bandStamp(item.ex, lg.dbs || cnt) }); } });
+          ...bandStamp(item.ex, lg, lg.dbs || cnt) }); } });
     });
     const firstStart = auditSets.map((s) => s.startedAt).filter(Boolean).sort()[0] || stamp;
-    const auditRec = { day, date: stamp, startedAt: firstStart, finishedAt: stamp, durationS: Math.round((Date.parse(stamp) - Date.parse(firstStart)) / 1000), sets: auditSets };
+    const skippedNames = plan.filter((it, i) => skippedEx.has(i)).map((it) => it.ex.name);   // ground truth: what was deliberately benched today
+    const auditRec = { day, date: stamp, startedAt: firstStart, finishedAt: stamp, durationS: Math.round((Date.parse(stamp) - Date.parse(firstStart)) / 1000), sets: auditSets, ...(skippedNames.length ? { skipped: skippedNames } : {}) };
     const newAudit = [...(mem.audit || []), auditRec].slice(-20);
     let newBandByDay = mem.bandByDay || {}, newBandMiss = mem.bandMiss || {};
     // only track once he's actually opted into bands (bars set or > 0) — a plain unbanded workout
@@ -3252,7 +3284,14 @@ function App() {
     setLogs(pending.logs || {});
     setDone(new Set(pending.done || []));
     if (pending.bars != null) setSessionBars(pending.bars);
+    setSkippedEx(new Set(pending.skipped || []));
     setPending(null);
+  };
+  // bench an exercise for THIS session (or bring it back) — the player/pager route around it; a lift
+  // with no logged sets already never counts against the finish, so nothing else needs to know.
+  const toggleSkip = (exIdx) => {
+    if (active && active.startsWith(`${exIdx}-`)) cancelSet();   // skipping the lift you're mid-set on cancels that set
+    setSkippedEx((s) => { const n = new Set(s); if (n.has(exIdx)) n.delete(exIdx); else n.add(exIdx); return n; });
   };
   const discardSession = async () => { if (hasStore) await clearLive(); liveRef.current = null; liveClearedRef.current = true; setPending(null); };
   // Auto-restore an in-progress session (saved locally, or just pulled from another device) into the
@@ -3543,6 +3582,18 @@ function App() {
     const cardCls = "rounded-2xl border p-5"
       + (joined && item.pair.role === "A" ? " rounded-b-none border-b-0" : "")
       + (joined && item.pair.role === "B" ? " rounded-t-none border-t-0 -mt-4" : "");
+    if (skippedEx.has(exIdx)) return (
+      <div key={item.ex.name} className="flex items-center justify-between gap-3 rounded-2xl border p-4" style={{ background: C.card, borderColor: C.edge, opacity: 0.65 }}>
+        <div className="min-w-0 flex items-baseline gap-3">
+          <span className="font-mono text-xs" style={{ color: C.ashDim }}>{String(exIdx + 1).padStart(2, "0")}</span>
+          <div className="min-w-0">
+            <h3 className="truncate text-[15px] font-semibold leading-tight" style={{ color: C.ash, fontFamily: "Georgia, serif" }}>{item.ex.name}</h3>
+            <p className="mt-0.5 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>skipped today{[...done].some((k) => k.startsWith(px)) ? " · logged sets still count" : ""}</p>
+          </div>
+        </div>
+        <button onClick={() => toggleSkip(exIdx)} className="shrink-0 rounded-full border px-4 py-2.5 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>restore</button>
+      </div>
+    );
     return (
     <div key={item.ex.name} className={cardCls} style={{ background: C.card, borderColor: C.edge }}>
       {/* pre-session flat list only — in session mode a broken pair gets the Link2 icon in the header
@@ -3588,6 +3639,10 @@ function App() {
           style={{ borderColor: openInfo === exIdx ? C.goldDim : C.edge, color: openInfo === exIdx ? C.gold : C.ash }}>
           <Info size={18} />
         </button>
+        <button onClick={() => toggleSkip(exIdx)} aria-label={`skip ${item.ex.name} today`} title="skip this exercise today" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border active:scale-90"
+          style={{ borderColor: C.edge, color: C.ash }}>
+          <SkipForward size={18} />
+        </button>
       </div>
 
       {openInfo === exIdx && (
@@ -3618,8 +3673,8 @@ function App() {
 
       {!item.ex.repProgress && (
         <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border px-3 py-1.5" style={{ borderColor: C.edge }}>
-          <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>dumbbells{sessionStarted ? " · locked" : ""}</span>
-          <DbToggle count={cnt} onSet={(n) => setDbMode(item.ex.name, n)} disabled={sessionStarted} />
+          <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>dumbbells</span>
+          <DbToggle count={cnt} onSet={(n) => setDbMode(item.ex.name, n)} />
         </div>
       )}
       {bars > 0 && bandFactor(item.ex, cnt) > 0 && (
@@ -3661,7 +3716,7 @@ function App() {
       ? `${workSets.length} × (${rxBot}–${rxTop})`
       : `${workSets.length} × ${dispW(first.load, unit)}${uw(unit)}${cnt === 2 ? "/hand" : ""} (${rxBot}–${rxTop})${cnt === 1 ? " · 1 DB" : ""}`;
     return (
-      <div key={exIdx} className="min-w-0 flex-1">
+      <div key={exIdx} className="min-w-0 flex-1" style={{ opacity: skippedEx.has(exIdx) ? 0.5 : 1 }}>
         <p className="truncate text-[13px] font-semibold leading-tight" style={{ color: C.bone, fontFamily: "Georgia, serif" }}>{it.ex.name}</p>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {it.ex.optional && <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>optional</span>}
@@ -3688,13 +3743,17 @@ function App() {
         )}
         {!it.ex.repProgress && (
           <div className="mt-1.5">
-            <DbToggle count={cnt} onSet={(n) => setDbMode(it.ex.name, n)} disabled={sessionStarted} />
+            <DbToggle count={cnt} onSet={(n) => setDbMode(it.ex.name, n)} />
           </div>
         )}
         {bars > 0 && bandFactor(it.ex, cnt) > 0 && (
           <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>+ {bars} bars · {dispW1(bars * BAR_LB * bandFactor(it.ex, cnt), unit)} {uw(unit)}</p>
         )}
         <p className="mt-1.5 font-mono text-[10px]" style={{ color: C.ashDim }}>{rx}</p>
+        <button onClick={() => toggleSkip(exIdx)} className="mt-1.5 flex min-h-[36px] items-center gap-1 font-mono text-[10px] uppercase tracking-wider active:scale-95"
+          style={{ color: skippedEx.has(exIdx) ? C.gold : C.ashDim }}>
+          {skippedEx.has(exIdx) ? <>restore</> : <><SkipForward size={11} /> skip today</>}
+        </button>
       </div>
     );
   };
@@ -3752,11 +3811,12 @@ function App() {
         </div>
 
         <div className="mt-4 space-y-2">
-          {warmA.map((si) => renderSetRow(a, si, { name: rowName(A.ex.name) }))}
-          {warmB.map((si) => renderSetRow(b, si, { name: rowName(B.ex.name) }))}
+          {!skippedEx.has(a) && warmA.map((si) => renderSetRow(a, si, { name: rowName(A.ex.name) }))}
+          {!skippedEx.has(b) && warmB.map((si) => renderSetRow(b, si, { name: rowName(B.ex.name) }))}
           {rounds.map((rd) => {
-            const keyA = rd.aSi != null ? `${a}-${rd.aSi}` : null;
-            const keyB = rd.bSi != null ? `${b}-${rd.bSi}` : null;
+            const keyA = rd.aSi != null && !skippedEx.has(a) ? `${a}-${rd.aSi}` : null;   // a skipped half's rows drop out of the round
+            const keyB = rd.bSi != null && !skippedEx.has(b) ? `${b}-${rd.bSi}` : null;
+            if (!keyA && !keyB) return null;
             const doneA = keyA ? done.has(keyA) : true;
             const doneB = keyB ? done.has(keyB) : true;
             const complete = doneA && doneB;
@@ -3969,10 +4029,10 @@ function App() {
         {!summary && !pending && bandableDay && (
           <div className="mb-3 mt-5 flex items-center justify-between rounded-2xl border px-4 py-2.5" style={{ background: C.card, borderColor: C.edge }}>
             <div className="min-w-0">
-              <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>arm bands{sessionStarted ? " · locked" : ""}</p>
-              <p className="mt-0.5 font-mono text-[11px]" style={{ color: C.ashDim }}>{bars * 200} g/arm{sessionStarted ? "" : ` · ${suggest.why}`}</p>
+              <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>arm bands</p>
+              <p className="mt-0.5 font-mono text-[11px]" style={{ color: C.ashDim }}>{bars * 200} g/arm{sessionStarted ? " · sets record the bars they're done with" : ` · ${suggest.why}`}</p>
             </div>
-            <ValueWheel value={bars} label="band bars" disabled={sessionStarted} resetKey={`band-${day}`}
+            <ValueWheel value={bars} label="band bars" noFlick resetKey={`band-${day}`}
               onStep={(d) => setSessionBars(Math.max(0, Math.min(10, bars + d)))}
               onSetExact={(v) => setSessionBars(Math.max(0, Math.min(10, Math.round(v))))}
               peekUp={String(Math.min(10, bars + 1))} peekDn={String(Math.max(0, bars - 1))} />
