@@ -32,7 +32,7 @@
 <script type="text/babel" data-type="module" data-presets="react">
 const _b = document.getElementById("boot"); if (_b) _b.remove();
 import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
-import { Dumbbell, Clock, ArrowLeftRight, Play, Pause, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package, Camera, Sparkles, ScanBarcode, Unlink, Link2, List } from "lucide-react";
+import { Dumbbell, Clock, ArrowLeftRight, Play, Pause, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package, Camera, Sparkles, ScanBarcode, Unlink, Link2, List, Activity } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { readBarcodes } from "zxing-wasm";
@@ -197,7 +197,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0825-2345";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0909-2157";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -604,7 +604,15 @@ const DEFAULT_FOODS = [
 ];
 const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weights: {}, targets: {}, lastByDay: {}, audit: [], recentCues: {}, lastChanges: {}, history: {}, setHistory: {}, quadChoice: 0, abChoice: 0, body: { bw: null, waist: null, height: null, bwHist: [] }, stalls: {}, unit: "lb", dietUnit: "kg", dbMode: {}, bandByDay: {}, bandMiss: {}, rebasedTargets: false, seededStalls: false, pb: {}, pbSeeded: false,
   nutrition: { goals: { kcal: 2100, protein: 175, carbs: 215, fat: 60, steps: 15000, water: 3000, goalBwLb: 154.32, fiber: 30, sodium: 2300, calcium: 1000, iron: 8, potassium: 3400, caffeine: 400 }, days: {}, foods: DEFAULT_FOODS, meals: [], proxyUrl: "", geminiKey: "", usdaKey: "" },
-  sleep: { def: { bed: "23:00", wake: "08:00" }, days: {} } };
+  sleep: { def: { bed: "23:00", wake: "08:00" }, days: {} },
+  // cardio: treadmill/walk data from PadCoach (a separate macOS app), imported from a dropped JSON file —
+  // never posted here automatically. Its own namespace, not folded into nutrition.days[].steps, because that
+  // field is a manually-entered/Health-app number for a different purpose; PadCoach's steps are treadmill-only.
+  // Shown on its own first-class Cardio tab (Task 48, Part B) — day nav, import, per-day totals, per-session
+  // detail, and manual entries for activities PadCoach never saw (own `manual` array, tagged distinctly).
+  // days[date] = { steps, distanceKm, movingTimeSec, zone2Min, calorie:{kcal,lowKcal,highKcal}|null,
+  //                sessions:[...] (PadCoach, measured), manual:[{id,type,durationSec,distanceKm,steps,t}] }.
+  cardio: { days: {}, lastImportAt: null } };
 
 /* ───────────────────────── program ───────────────────────── */
 const AB_VARIANTS = [
@@ -2688,6 +2696,175 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
   );
 }
 
+// CardioView (Task 48, Part B): first-class Cardio tab, promoted out of Diet's advanced settings — PadCoach
+// import + the day's cardio summary now live here instead. Additive only, its own `mem.cardio` namespace,
+// never touches nutrition.days[].steps (a manually-entered field for a different purpose — see DEFAULT's own
+// comment on `cardio`). Own local `viewDate`, mirroring DietView's day-navigation pattern exactly.
+function CardioView({ mem, importCardioExport, addManualCardio, removeManualCardio }) {
+  const cardio = mem.cardio || DEFAULT.cardio;
+  const [viewDate, setViewDate] = useState(todayKey());
+  const isToday = viewDate === todayKey();
+  const k = viewDate;
+  const cd = cardio.days[k] || null;                 // PadCoach + manual data for the viewed day, if any
+  const manual = (cd && cd.manual) || [];
+  const [toast, setToast] = useState("");
+  const flash = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2200); };
+  const tHM = (iso) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; } };
+  const [form, setForm] = useState({ type: "walk", durationMin: 0, distanceKm: 0, steps: 0 });
+  const resetForm = () => setForm({ type: "walk", durationMin: 0, distanceKm: 0, steps: 0 });
+
+  // Daily total across all sources — only fields both PadCoach and a manual entry actually carry (steps,
+  // distance, time) are summed; zone-2 minutes and calories are derived from heart-rate data a manual entry
+  // never has, so those stay PadCoach-only figures, never silently padded with a guess.
+  const manualStepsTotal = manual.reduce((s, m) => s + (m.steps || 0), 0);
+  const manualDistTotal = manual.reduce((s, m) => s + (m.distanceKm || 0), 0);
+  const manualSecTotal = manual.reduce((s, m) => s + (m.durationSec || 0), 0);
+  const totalSteps = (cd ? cd.steps || 0 : 0) + manualStepsTotal;
+  const totalDist = (cd ? cd.distanceKm || 0 : 0) + manualDistTotal;
+  const totalSec = (cd ? cd.movingTimeSec || 0 : 0) + manualSecTotal;
+  const hasAnything = !!cd && (totalSteps > 0 || totalDist > 0 || totalSec > 0 || (cd.sessions || []).length > 0 || manual.length > 0);
+
+  return (
+    <>
+      <div className="mt-6 flex items-center justify-between">
+        <button onClick={() => setViewDate(shiftDate(viewDate, -1))} aria-label="previous day" className="flex h-11 w-11 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronLeft size={18} /></button>
+        <div className="flex flex-col items-center">
+          <span className="font-mono text-[12px] font-bold" style={{ color: isToday ? C.gold : C.bone }}>{relDay(viewDate)}</span>
+          <input type="date" value={viewDate} onChange={(e) => e.target.value && setViewDate(e.target.value)} className="bg-transparent font-mono text-[16px] outline-none" style={{ color: C.ash, colorScheme: "dark" }} />
+        </div>
+        <button onClick={() => setViewDate(shiftDate(viewDate, 1))} aria-label="next day" className="flex h-11 w-11 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronRight size={18} /></button>
+      </div>
+
+      {/* Import — moved here verbatim from Diet's advanced settings, now front-and-centre since this is its
+          own tab rather than a buried toggle. */}
+      <div className="mt-4 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
+        <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}><Activity size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />PadCoach import</span>
+        <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>Import the file PadCoach exports (Dashboard → Settings → "Export for Coach App") — steps, distance, moving time, zone-2 minutes &amp; calories, per day. Nothing is sent automatically; you pick the file each time.</p>
+        <div className="mt-3 flex items-center gap-3">
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>
+            Import PadCoach export…
+            <input type="file" accept="application/json" className="hidden" onChange={async (e) => {
+              const file = e.target.files && e.target.files[0]; e.target.value = "";
+              if (!file) return;
+              try {
+                const json = JSON.parse(await file.text());
+                const n = await importCardioExport(json);
+                flash(`Imported cardio for ${n} day${n === 1 ? "" : "s"}`);
+              } catch (err) { flash("Import failed: " + (err && err.message ? err.message : "bad file")); }
+            }} />
+          </label>
+          {toast && <span className="font-mono text-[10px]" style={{ color: C.sage }}>{toast}</span>}
+        </div>
+        {cardio.lastImportAt && (
+          <p className="mt-1.5 font-mono text-[9px]" style={{ color: C.ashDim }}>last imported {new Date(cardio.lastImportAt).toLocaleString()}</p>
+        )}
+      </div>
+
+      {/* Daily total across all sources */}
+      <div className="mt-4 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
+        <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>{isToday ? "Today" : relDay(viewDate)} · total</span>
+        {hasAnything ? (
+          <>
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[11px]" style={{ color: C.bone }}>
+              <span>{totalSteps.toLocaleString()} steps</span>
+              <span>{totalDist.toFixed(2)} km</span>
+              <span>{fmtHM(totalSec / 3600)} moving</span>
+            </div>
+            {/* Zone-2 minutes and calories only ever come from PadCoach's own HR-derived sessions — shown
+                only when a real import produced them, never a synthetic zero from a manual-only day. */}
+            {cd && Array.isArray(cd.sessions) && cd.sessions.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[10px]" style={{ color: C.ashDim }}>
+                <span>{Math.round(cd.zone2Min || 0)} min zone 2 (PadCoach)</span>
+                {cd.calorie && <span>≈{Math.round(cd.calorie.kcal)} kcal ({Math.round(cd.calorie.lowKcal)}–{Math.round(cd.calorie.highKcal)}, PadCoach)</span>}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>nothing recorded for this day yet</p>
+        )}
+      </div>
+
+      {/* PadCoach sessions — individual figures per session, not just a count */}
+      {cd && Array.isArray(cd.sessions) && cd.sessions.length > 0 && (
+        <div className="mt-4 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
+          <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>PadCoach sessions</span>
+          <div className="mt-3 flex flex-col gap-2">
+            {cd.sessions.map((s, i) => (
+              <div key={s.id || i} className="flex flex-col gap-1 rounded-lg border px-3 py-2" style={{ borderColor: C.edge }}>
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                  <span className="font-mono text-[11px] font-bold" style={{ color: C.bone }}>{tHM(s.startedAt)}–{tHM(s.endedAt)}{s.bandName ? ` · ${s.bandName}` : ""}</span>
+                  <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.goldDim }}>measured</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px]" style={{ color: C.ash }}>
+                  <span>{(s.distanceKm || 0).toFixed(2)} km</span>
+                  <span>{fmtHM((s.movingTimeSec || 0) / 3600)}</span>
+                  <span>{(s.totalSteps || 0).toLocaleString()} steps</span>
+                  {s.avgHeartRate != null && <span>avg {s.avgHeartRate} bpm</span>}
+                  {s.maxHeartRate != null && <span>max {s.maxHeartRate} bpm</span>}
+                  {s.timeInZoneSec > 0 && <span>{Math.round(s.timeInZoneSec / 60)} min in zone</span>}
+                  {s.calorie && <span>≈{Math.round(s.calorie.kcal)} kcal ({Math.round(s.calorie.lowKcal)}–{Math.round(s.calorie.highKcal)})</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Manual entries — an activity PadCoach never saw. Always tagged "Manual", never merged into the
+          PadCoach sessions list above, so the two sources can never be mistaken for one another. */}
+      <div className="mt-4 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
+        <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Manual entry</span>
+        <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>An outdoor walk, run or ride PadCoach never saw. Logged as-is — no heart-rate or calorie data, since none was measured.</p>
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <div className="flex flex-col gap-1">
+            <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>type</label>
+            <select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
+              className="rounded-lg border px-2 py-2 font-mono text-[12px]" style={{ background: "#100E09", borderColor: C.edge, color: C.bone }}>
+              <option value="walk">Walk</option>
+              <option value="run">Run</option>
+              <option value="ride">Ride</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>duration (min)</label>
+            <NumberField value={form.durationMin} step={5} label="duration" width={64} onChange={(n) => setForm((f) => ({ ...f, durationMin: n }))} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>distance (km)</label>
+            <NumberField value={form.distanceKm} step={0.5} label="distance" width={64} onChange={(n) => setForm((f) => ({ ...f, distanceKm: n }))} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>steps</label>
+            <NumberField value={form.steps} step={500} label="steps" width={72} onChange={(n) => setForm((f) => ({ ...f, steps: n }))} />
+          </div>
+          <button onClick={async () => {
+            if (!form.durationMin && !form.distanceKm && !form.steps) { flash("Enter at least one of duration/distance/steps"); return; }
+            await addManualCardio(viewDate, form); resetForm(); flash("Logged");
+          }} className="rounded-full px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Add</button>
+        </div>
+
+        {manual.length > 0 && (
+          <div className="mt-4 flex flex-col gap-2">
+            {manual.map((m) => (
+              <div key={m.id} className="flex items-center justify-between rounded-lg border px-3 py-2" style={{ borderColor: C.edge }}>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]" style={{ color: C.bone }}>
+                  <span className="capitalize font-bold">{m.type}</span>
+                  {m.durationSec > 0 && <span>{fmtHM(m.durationSec / 3600)}</span>}
+                  {m.distanceKm > 0 && <span>{m.distanceKm.toFixed(2)} km</span>}
+                  {m.steps > 0 && <span>{m.steps.toLocaleString()} steps</span>}
+                  <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.rust }}>manual</span>
+                </div>
+                <button onClick={() => removeManualCardio(viewDate, m.id)} aria-label="remove" className="flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.ashDim }}><X size={14} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
 // ReviewDay: an equipment-prep glance at the whole day's plan — one row per plan item (not per unit),
 // work prescription only (no cues/descriptions). Tap a row to jump the pager to its unit and close.
 function ReviewDay({ plan, units, mem, unit, done, bars, onClose, onJump }) {
@@ -3336,6 +3513,71 @@ function App() {
   const setProxyUrl = async (url) => updateMem((prev) => { const nut = nutFrom(prev); return withNut(prev, { ...nut, proxyUrl: (url || "").trim() }); });
   const setGeminiKey = async (key) => updateMem((prev) => { const nut = nutFrom(prev); return withNut(prev, { ...nut, geminiKey: (key || "").trim() }); });
   const setUsdaKey = async (key) => updateMem((prev) => { const nut = nutFrom(prev); return withNut(prev, { ...nut, usdaKey: (key || "").trim() }); });
+  // Task 41 — import PadCoach's dropped JSON export (CoachExportStore's own file) into its own `cardio`
+  // namespace. Validated defensively since this is the one place an external file's shape reaches mem
+  // directly; a malformed/foreign file throws rather than partially merging. Each day in the import REPLACES
+  // that day's cardio entry — PadCoach always sends a full recompute of a day, never a partial one — and this
+  // never touches nutrition/sleep/strength history, only ever `cardio.days`. Rides the existing sync/persist
+  // path (updateMem → saveState → bumpChange) exactly like every other mutation, so a re-enabled cross-device
+  // sync picks cardio data up for free, with no code here aware that sync exists.
+  const importCardioExport = async (json) => {
+    if (!json || typeof json !== "object" || json.source !== "padcoach" || !json.days || typeof json.days !== "object")
+      throw new Error("not a PadCoach export");
+    const clean = {};
+    Object.keys(json.days).forEach((k) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) return;   // only real YYYY-MM-DD keys
+      const d = json.days[k];
+      if (!d || typeof d !== "object") return;
+      clean[k] = {
+        steps: Math.max(0, Math.round(+d.steps || 0)),
+        distanceKm: +d.distanceKm || 0,
+        movingTimeSec: +d.movingTimeSec || 0,
+        zone2Min: +d.zone2Min || 0,
+        calorie: (d.calorie && typeof d.calorie === "object")
+          ? { kcal: +d.calorie.kcal || 0, lowKcal: +d.calorie.lowKcal || 0, highKcal: +d.calorie.highKcal || 0 } : null,
+        sessions: Array.isArray(d.sessions) ? d.sessions : [],
+      };
+    });
+    if (!Object.keys(clean).length) throw new Error("no valid days found in file");
+    return updateMem((prev, ret) => {
+      const cardio = prev.cardio || DEFAULT.cardio;
+      // Task 48 (Part B) — a day's PadCoach fields are replaced wholesale (PadCoach always sends a full
+      // recompute, never a partial one — same as before), but `manual` entries are a wholly separate source
+      // this import knows nothing about and must never wipe out just because PadCoach re-exported that day.
+      const merged = { ...cardio.days };
+      Object.keys(clean).forEach((dk) => { merged[dk] = { ...clean[dk], manual: (merged[dk] && merged[dk].manual) || [] }; });
+      const days = pruneDays(merged, 90);
+      ret(Object.keys(clean).length);
+      return { ...prev, cardio: { ...cardio, days, lastImportAt: new Date().toISOString() } };
+    });
+  };
+  // Task 48 (Part B) — an activity PadCoach never saw (outdoor walk/run/ride): type, duration, distance,
+  // steps, kept in the SAME per-day cardio.days[k] object as PadCoach's own fields but in its own `manual`
+  // array, always rendered tagged "Manual" (see CardioView) so it is never confused with measured data.
+  // Mirrors addWater's own shape (an id'd array appended under a day key, pruned the same way).
+  const addManualCardio = async (dk, entry) => updateMem((prev) => {
+    const cardio = prev.cardio || DEFAULT.cardio;
+    const k = dk || todayKey();
+    const day = cardio.days[k] || { steps: 0, distanceKm: 0, movingTimeSec: 0, zone2Min: 0, calorie: null, sessions: [], manual: [] };
+    const row = {
+      id: uid(), type: entry.type || "walk",
+      durationSec: Math.max(0, Math.round((+entry.durationMin || 0) * 60)),
+      distanceKm: Math.max(0, +entry.distanceKm || 0),
+      steps: Math.max(0, Math.round(+entry.steps || 0)),
+      t: new Date().toISOString(),
+    };
+    const manual = [...(day.manual || []), row];
+    const days = pruneDays({ ...cardio.days, [k]: { ...day, manual } }, 90);
+    return { ...prev, cardio: { ...cardio, days } };
+  });
+  const removeManualCardio = async (dk, id) => updateMem((prev) => {
+    const cardio = prev.cardio || DEFAULT.cardio;
+    const k = dk || todayKey();
+    const day = cardio.days[k];
+    if (!day) return prev;
+    const manual = (day.manual || []).filter((m) => m.id !== id);
+    return { ...prev, cardio: { ...cardio, days: { ...cardio.days, [k]: { ...day, manual } } } };
+  });
   // refresh lastGrams/lastUsedT on matching library foods so bulk logs (meal/plate/copy) surface in Recents like logFood.
   // touches: [{ foodId, grams, ts }]. Only rows whose foodId exists in `foods` are updated; unknown ids are ignored.
   const touchFoods = (foods, touches) => { let arr = foods || []; (touches || []).forEach((t) => { if (!t || !t.foodId) return; const i = arr.findIndex((f) => f.id === t.foodId); if (i < 0) return; arr = arr.map((f, j) => (j === i ? { ...f, lastGrams: t.grams, lastUsedT: t.ts } : f)); }); return arr; };
@@ -3945,7 +4187,7 @@ function App() {
         </div>
 
         <div className="mt-5 inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
-          {[["workout", "Workout", Dumbbell], ["diet", "Diet", Apple]].map(([t, lab, Icon]) => (
+          {[["workout", "Workout", Dumbbell], ["diet", "Diet", Apple], ["cardio", "Cardio", Activity]].map(([t, lab, Icon]) => (
             <button key={t} onClick={() => { setTab(t); setOpenInfo(null); }} className="flex items-center gap-1.5 rounded-full px-5 py-2.5 font-mono text-sm active:scale-95"
               style={{ background: tab === t ? C.gold : "transparent", color: tab === t ? C.bg : C.ash, fontWeight: tab === t ? 700 : 400 }}>
               <Icon size={16} />{lab}{t === "workout" && sessionStarted && <span style={{ width: 6, height: 6, borderRadius: 9, background: tab === t ? C.bg : C.gold, display: "inline-block" }} />}
@@ -4127,6 +4369,10 @@ function App() {
 
         {tab === "diet" && (
           <DietView mem={mem} unit={mem.dietUnit || "kg"} setDietUnit={setDietUnit} logFood={logFood} editEntry={editEntry} corrFood={corrFood} removeEntry={removeEntry} addFood={addFood} removeFood={removeFood} toggleFav={toggleFav} favFood={favFood} addMeal={addMeal} removeMeal={removeMeal} logMeal={logMeal} logPlate={logPlate} copyDay={copyDay} setSteps={setSteps} addWater={addWater} removeWaterEntry={removeWaterEntry} setSleepToday={setSleepToday} setSleepDefault={setSleepDefault} setNutGoals={setNutGoals} setProxyUrl={setProxyUrl} setGeminiKey={setGeminiKey} setUsdaKey={setUsdaKey} setBody={setBody} logBW={logBW} />
+        )}
+
+        {tab === "cardio" && (
+          <CardioView mem={mem} importCardioExport={importCardioExport} addManualCardio={addManualCardio} removeManualCardio={removeManualCardio} />
         )}
 
         {/* shared cross-device sync (app-wide, both tabs) */}
