@@ -192,18 +192,66 @@ const REMOTE = {
     dbg(`push → HTTP ${r.status} OK sha=${shortSha(newSha)} wroteTs=${tsLabel(stamp)}`);
     return { sha: newSha, ts: stamp };
   },
+  // Task 51 — plain read of an arbitrary repo file, decoded straight to its parsed JSON. Unlike pull()
+  // above, this does NOT assume the {ts,data} wrapper this app's own data.json uses — cardio.json is
+  // PadCoach's CoachExportPayload shape as CoachExportStore writes it, verbatim, with no wrapper at all.
+  // Returns null on a 404 (normal before PadCoach's first sync — never treated as an error) and reuses
+  // the same cfg (repo/branch/token) already decrypted for data.json, just against a different path.
+  async getRaw(cfg, path) {
+    const url = `https://api.github.com/repos/${cfg.repo}/contents/${encodeURIComponent(path).replace(/%2F/g, "/")}?ref=${encodeURIComponent(cfg.branch || "main")}&t=${Date.now()}`;
+    const r = await fetch(url, { headers: ghHeaders(cfg), cache: "no-store" });
+    if (r.status === 404) { dbg(`getRaw(${path}) ← 404 (PadCoach hasn't synced yet)`); return null; }
+    if (!r.ok) { const body = await r.text().catch(() => ""); dbg(`getRaw(${path}) ← HTTP ${r.status} ${body.slice(0, 140)}`); throw new Error("read " + r.status); }
+    const j = await r.json();
+    try { return JSON.parse(b64dec(j.content)); }
+    catch (e) { dbg(`getRaw(${path}) ← HTTP 200 but JSON decode failed: ${e.message}`); throw e; }
+  },
 };
 const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0909-2157";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0909-2257";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
 const relDay = (key) => { const t = todayKey(); if (key === t) return "Today"; if (key === shiftDate(t, -1)) return "Yesterday"; if (key === shiftDate(t, 1)) return "Tomorrow"; const [y, m, d] = key.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }); };
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
 const pruneDays = (days, n = 90) => { const ks = Object.keys(days).sort(); if (ks.length <= n) return days; const out = { ...days }; ks.slice(0, ks.length - n).forEach((k) => delete out[k]); return out; };
+// Task 51 — the shared merge logic behind BOTH cardio import paths: the manual PadCoach-export file
+// picker (unchanged since Task 41/48) and the new automatic cardio.json sync tick. Split in two so the
+// validating half can run (and throw) before either caller touches live state, exactly like the manual
+// path always has: cleanCardioDays(json) validates + normalizes a raw PadCoach export with no dependency
+// on current state, then mergeCardioDays(prevDays, clean) folds the result into an existing cardio.days,
+// replacing each day's PadCoach fields wholesale (PadCoach always sends a full recompute, never a
+// partial one) while preserving any `manual` entries already there (PadCoach knows nothing about those).
+// Both are pure — no fetch, no updateMem — so both are covered directly by tests/run-tests.mjs.
+const cleanCardioDays = (json) => {
+  if (!json || typeof json !== "object" || json.source !== "padcoach" || !json.days || typeof json.days !== "object")
+    throw new Error("not a PadCoach export");
+  const clean = {};
+  Object.keys(json.days).forEach((k) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) return;   // only real YYYY-MM-DD keys
+    const d = json.days[k];
+    if (!d || typeof d !== "object") return;
+    clean[k] = {
+      steps: Math.max(0, Math.round(+d.steps || 0)),
+      distanceKm: +d.distanceKm || 0,
+      movingTimeSec: +d.movingTimeSec || 0,
+      zone2Min: +d.zone2Min || 0,
+      calorie: (d.calorie && typeof d.calorie === "object")
+        ? { kcal: +d.calorie.kcal || 0, lowKcal: +d.calorie.lowKcal || 0, highKcal: +d.calorie.highKcal || 0 } : null,
+      sessions: Array.isArray(d.sessions) ? d.sessions : [],
+    };
+  });
+  if (!Object.keys(clean).length) throw new Error("no valid days found in file");
+  return clean;
+};
+const mergeCardioDays = (prevDays, clean) => {
+  const merged = { ...(prevDays || {}) };
+  Object.keys(clean).forEach((dk) => { merged[dk] = { ...clean[dk], manual: (merged[dk] && merged[dk].manual) || [] }; });
+  return pruneDays(merged, 90);
+};
 const DEFAULT_FOOD_IDS = ["chicken300", "rice200", "eggs3", "whites200", "whey1"];   // original staples — never pruned
 // keep all favs + default staples; cap other foods to the n most-recently-used (by lastUsedT).
 const pruneFoods = (foods, n = 40) => { const arr = foods || []; const keep = arr.filter((f) => f.fav || f.corr || DEFAULT_FOOD_IDS.includes(f.id)); const rest = arr.filter((f) => !f.fav && !f.corr && !DEFAULT_FOOD_IDS.includes(f.id)).sort((a, b) => (b.lastUsedT || "").localeCompare(a.lastUsedT || "")).slice(0, n); const ok = new Set([...keep, ...rest]); return arr.filter((f) => ok.has(f)); };
@@ -612,7 +660,9 @@ const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weight
   // detail, and manual entries for activities PadCoach never saw (own `manual` array, tagged distinctly).
   // days[date] = { steps, distanceKm, movingTimeSec, zone2Min, calorie:{kcal,lowKcal,highKcal}|null,
   //                sessions:[...] (PadCoach, measured), manual:[{id,type,durationSec,distanceKm,steps,t}] }.
-  cardio: { days: {}, lastImportAt: null } };
+  // lastAutoSyncAt: Task 51 — set only by the automatic PadCoach→cardio.json sync tick, kept separate
+  // from lastImportAt (the manual file-picker path) so each surfaces its own honest "last happened" time.
+  cardio: { days: {}, lastImportAt: null, lastAutoSyncAt: null } };
 
 /* ───────────────────────── program ───────────────────────── */
 const AB_VARIANTS = [
@@ -2758,6 +2808,11 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
         {cardio.lastImportAt && (
           <p className="mt-1.5 font-mono text-[9px]" style={{ color: C.ashDim }}>last imported {new Date(cardio.lastImportAt).toLocaleString()}</p>
         )}
+        {/* Task 51 — the automatic path's own "last happened" line, separate from the manual one above so
+            neither ever silently claims the other's timing. Only ever set by syncCardioFromPadCoach(). */}
+        {cardio.lastAutoSyncAt && (
+          <p className="mt-1.5 font-mono text-[9px]" style={{ color: C.ashDim }}>auto-synced from PadCoach {new Date(cardio.lastAutoSyncAt).toLocaleString()}</p>
+        )}
       </div>
 
       {/* Daily total across all sources */}
@@ -3001,6 +3056,7 @@ function App() {
         setSync(cfg);
         syncReady.current = true;   // reconcile() may push genuine local changes during boot
         await reconcile(cfg, "boot", true);
+        syncCardioFromPadCoach(cfg, "boot");   // Task 51 — not awaited: a background merge, never gates first paint
       }
       setLoaded(true);
       syncReady.current = true;   // only start auto-pushing after the initial reconcile
@@ -3119,7 +3175,7 @@ function App() {
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("pagehide", flush);
-    const poll = setInterval(() => { if (document.visibilityState === "visible") reconcile(sync, "poll", false); }, 20000);
+    const poll = setInterval(() => { if (document.visibilityState === "visible") { reconcile(sync, "poll", false); syncCardioFromPadCoach(sync, "poll"); } }, 20000);
     return () => { window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("pagehide", flush); clearInterval(poll); };
   }, [sync]);
 
@@ -3140,6 +3196,7 @@ function App() {
       shaRef.current = null; setSync(cfg); setSyncLocked(false); syncReady.current = true;
       dbg("sync unlocked with password");
       await reconcile(cfg, "unlock", true);
+      syncCardioFromPadCoach(cfg, "unlock");   // Task 51 — first time this device has a working cfg at all
       setSyncMsg("synced · " + new Date().toLocaleTimeString());
     } catch (e) { dbg("unlock failed: wrong password"); setSyncMsg("wrong password"); }
   };
@@ -3520,36 +3577,45 @@ function App() {
   // never touches nutrition/sleep/strength history, only ever `cardio.days`. Rides the existing sync/persist
   // path (updateMem → saveState → bumpChange) exactly like every other mutation, so a re-enabled cross-device
   // sync picks cardio data up for free, with no code here aware that sync exists.
+  //
+  // Task 51 — the validate+clean half now lives in the pure, top-level cleanCardioDays(json) (thrown
+  // BEFORE updateMem, same ordering as before this refactor: a malformed file never touches live state at
+  // all) and the merge half in mergeCardioDays(prevDays, clean), reused as-is by the automatic
+  // syncCardioFromPadCoach() below — one merge implementation, one set of tests, two entry points.
   const importCardioExport = async (json) => {
-    if (!json || typeof json !== "object" || json.source !== "padcoach" || !json.days || typeof json.days !== "object")
-      throw new Error("not a PadCoach export");
-    const clean = {};
-    Object.keys(json.days).forEach((k) => {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) return;   // only real YYYY-MM-DD keys
-      const d = json.days[k];
-      if (!d || typeof d !== "object") return;
-      clean[k] = {
-        steps: Math.max(0, Math.round(+d.steps || 0)),
-        distanceKm: +d.distanceKm || 0,
-        movingTimeSec: +d.movingTimeSec || 0,
-        zone2Min: +d.zone2Min || 0,
-        calorie: (d.calorie && typeof d.calorie === "object")
-          ? { kcal: +d.calorie.kcal || 0, lowKcal: +d.calorie.lowKcal || 0, highKcal: +d.calorie.highKcal || 0 } : null,
-        sessions: Array.isArray(d.sessions) ? d.sessions : [],
-      };
-    });
-    if (!Object.keys(clean).length) throw new Error("no valid days found in file");
+    const clean = cleanCardioDays(json);
+    const count = Object.keys(clean).length;
     return updateMem((prev, ret) => {
       const cardio = prev.cardio || DEFAULT.cardio;
-      // Task 48 (Part B) — a day's PadCoach fields are replaced wholesale (PadCoach always sends a full
-      // recompute, never a partial one — same as before), but `manual` entries are a wholly separate source
-      // this import knows nothing about and must never wipe out just because PadCoach re-exported that day.
-      const merged = { ...cardio.days };
-      Object.keys(clean).forEach((dk) => { merged[dk] = { ...clean[dk], manual: (merged[dk] && merged[dk].manual) || [] }; });
-      const days = pruneDays(merged, 90);
-      ret(Object.keys(clean).length);
+      const days = mergeCardioDays(cardio.days, clean);
+      ret(count);
       return { ...prev, cardio: { ...cardio, days, lastImportAt: new Date().toISOString() } };
     });
+  };
+  // Task 51 — the automatic half: fetches cardio.json from the same repo/branch/token the already-
+  // decrypted sync config (`cfg`) uses for data.json, reusing REMOTE.getRaw and the SAME merge logic
+  // importCardioExport uses above. A missing file (PadCoach hasn't synced yet) or any fetch/parse
+  // failure is swallowed here (dbg-logged only) — this is a background convenience riding the existing
+  // sync tick, never something that should interrupt his workout/diet flow with an error. `cardioSyncing`
+  // guards against overlapping calls (boot + a poll landing close together).
+  const cardioSyncing = useRef(false);
+  const syncCardioFromPadCoach = async (cfg, reason) => {
+    cfg = cfg || sync; if (!cfg || cardioSyncing.current) return;
+    cardioSyncing.current = true;
+    try {
+      const json = await REMOTE.getRaw(cfg, "cardio.json");
+      if (json) {
+        const clean = cleanCardioDays(json);
+        const count = Object.keys(clean).length;
+        await updateMem((prev) => {
+          const cardio = prev.cardio || DEFAULT.cardio;
+          const days = mergeCardioDays(cardio.days, clean);
+          return { ...prev, cardio: { ...cardio, days, lastAutoSyncAt: new Date().toISOString() } };
+        });
+        dbg(`cardio sync(${reason}): merged ${count} day(s) from cardio.json`);
+      }
+    } catch (e) { dbg(`cardio sync(${reason}): ${e.message}`); }
+    finally { cardioSyncing.current = false; }
   };
   // Task 48 (Part B) — an activity PadCoach never saw (outdoor walk/run/ride): type, duration, distance,
   // steps, kept in the SAME per-day cardio.days[k] object as PadCoach's own fields but in its own `manual`
