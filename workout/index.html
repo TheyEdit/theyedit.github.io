@@ -211,7 +211,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0911-0037";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0911-0107";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -524,6 +524,11 @@ const cardioSession = (s) => {
     context: ctx,
     // NOT SENT YET: PadCoach records no RPE. Kept so the row fills itself in if it ever does.
     effort: cPos(s.perceivedEffort), hrHistogram: hist && hist.length ? hist : null,
+    // Task 67 — `CoachExportSession.series` (schema 4), carried through RAW and parsed only when a row
+    // is actually opened. A 386-bucket parse per session is nothing; 142 of them on every render of a
+    // list that shows eight rows is waste, and `cardioSessionList` runs the whole history. See
+    // `cardioSeries`, which takes this normalized session and does the work on demand.
+    series: s.series && typeof s.series === "object" ? s.series : null,
     // `efficiencyRatio` is a BARE NUMBER on the wire (ACSM VO2 ÷ avg HR for this one session) — it carries
     // no direction and no confidence of its own, and is never diagnostic alone. The trustworthy reading
     // is analytics.efficiency, which is where direction and confidence actually live.
@@ -976,6 +981,9 @@ const CARDIO_NOT_COMPUTED = [
     why: "Walking efficiency is speed ÷ heart rate; cycling's real Efficiency Factor is power ÷ heart rate, and nothing here measures power. PadCoach's own export says it plainly: never plot two bases on one axis and never average them. A 28 km/h trainer session scored on the walking scale reads about 3.3 against walking's 0.5, which would show a step change on the day you bought a bike and nothing about your fitness. The zone-weighted load is refused for the same reason — its weights are fractions of a band drawn for your walking heart rate. A session with no modality recorded is treated as a walk, because until PadCoach knew about modalities it could only ever talk to a treadmill." },
   { id: "sessionslope", what: "A trend line through session totals, or through any comparison that spans a change in the recorded grade",
     why: "A session's calories and its distance move with how long you chose to walk, so a slope through them would mostly be a slope through your own decisions — the per-hour rate beside them is the comparable figure. And every energy or speed figure moves with the incline: your belt was recorded at one number for months and measured at 8.75%, so a line drawn across that step is two different walks pretending to be one trend. The Sessions card refuses the slope in both cases, says which, and offers the slope within the grade currently in force instead." },
+  // Task 67 — the in-session series arrived, and with it the two tempting things to do with it.
+  { id: "seriesderive", what: "A calories-per-minute curve derived in this app, or any in-session detail for a session that carries none",
+    why: "PadCoach sends kcal/min from the same model its session total uses, so the curve and the headline number cannot disagree. Deriving one here would mean a second copy of the ACSM and Pandolf equations, the grade-scaled desk-support correction and the net/gross subtraction living in a browser — and two of the last four bugs in this pipe were exactly the two ends of that wire disagreeing about that model. One producer, one answer. The same rule covers the whole series: a session PadCoach did not send detail for gets a sentence saying which of four things happened to it — the belt never started, it aged out of the 30-day window, it was inside the window but not carried, or the export predates the field — and never an interpolated chart. A line is drawn across a gap only when the export says there was no gap." },
   { id: "kcalproj", what: "A projection of future calories",
     why: "The projections card fits volume, speed, efficiency and resting heart rate — things that move with fitness. Calories move with how long you walk and how steep the belt is, both of which you set directly, so a fitted line through them would forecast your own decisions and dress them up as a trend." },
 ];
@@ -1752,6 +1760,272 @@ const cardioSessionUnknowns = (r) => {
   return out;
 };
 
+/* ───────────────── in-session series (Task 67) ─────────────────
+   `CoachExportSession.series` + payload-level `seriesPolicy` (schema 4) — the first thing in this
+   payload that is not a scalar, and the answer to the one complaint every card before it could only
+   dodge: "no option to click on previous workout and see details and data changes over its course."
+   Until schema 4 not one sample crossed the wire, so no chart of the INSIDE of a walk was possible at
+   any quality. Everything below is optional and read defensively: a schema-3 session decodes with
+   `series` null and renders exactly as it did yesterday.
+
+   THE ONE RULE, from CoachExportSeries.swift: a channel is values joined by ",", one field per bucket,
+   and AN EMPTY FIELD MEANS NO DATA FOR THAT BUCKET — never a zero. Bucket i covers
+   [startedAt + i·resolutionSec, startedAt + (i+1)·resolutionSec); there is no `t` channel because the
+   grid is uniform, and the last bucket may be short.
+
+   TWO GRAMMARS SHARE THAT COMMA and conflating them is the whole trap:
+     • a CHANNEL (heartRate.mean, speed.max, kcalPerMin) has exactly `bucketCount` fields, and "" is a
+       null BUCKET;
+     • an EVENT LIST (gaps, speedChanges) has one field per event, and "" is ZERO EVENTS — "checked,
+       none found". A non-string is NEVER CHECKED, which is a third claim again and stays null.
+       `CoachExportSeriesGaps` is explicit that those last two are not the same and must not be encoded
+       the same way, so they are not read the same way either. */
+
+// A CHANNEL → an array of exactly `n` numbers-or-nulls. Anything unparseable in a field is a null
+// bucket rather than a NaN allowed to poison an axis.
+const cSeriesNums = (s, n) => {
+  if (typeof s !== "string" || !(n > 0)) return null;
+  const parts = s.split(",");
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const v = i < parts.length ? parts[i].trim() : "";
+    const x = v === "" ? NaN : +v;
+    out[i] = isFinite(x) ? x : null;
+  }
+  return out;
+};
+// An EVENT LIST → an array of raw fields. "" is an empty list; a non-string is null, meaning the
+// producer never checked rather than checked and found nothing.
+const cSeriesList = (s) => (typeof s !== "string" ? null : s === "" ? [] : s.split(",").map((v) => v.trim()));
+
+// One measured quantity across the buckets: mean, and the bucket's own real min/max.
+// `min`/`max` are what make this shape worth carrying at all — his automatic 4.0 → 4.1 → 4.2 climb is a
+// DISCRETE STEP in `max` and a smeared two-bucket slope in `mean`, so a mean-only chart would draw a
+// ramp for something that was a staircase. A bucket with no mean has no extremes either, whatever the
+// min/max fields happen to say: an envelope drawn around a hole is an invention.
+const cSeriesChannel = (c, n) => {
+  if (!c || typeof c !== "object") return null;
+  const mean = cSeriesNums(c.mean, n);
+  if (!mean) return null;
+  const min = cSeriesNums(c.min, n) || mean.slice(), max = cSeriesNums(c.max, n) || mean.slice();
+  let have = 0, lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < n; i++) {
+    if (mean[i] == null) { min[i] = null; max[i] = null; continue; }
+    have++;
+    if (min[i] == null || min[i] > mean[i]) min[i] = mean[i];
+    if (max[i] == null || max[i] < mean[i]) max[i] = mean[i];
+    if (min[i] < lo) lo = min[i];
+    if (max[i] > hi) hi = max[i];
+  }
+  return have ? { mean, min, max, have, empty: n - have, lo, hi } : null;
+};
+// The same shape for a channel that carries no extremes of its own (kcalPerMin is one value per bucket),
+// so everything downstream draws one kind of thing instead of two.
+const cSeriesFlat = (arr) => {
+  if (!arr) return null;
+  let have = 0, lo = Infinity, hi = -Infinity;
+  arr.forEach((v) => { if (v != null) { have++; if (v < lo) lo = v; if (v > hi) hi = v; } });
+  return have ? { mean: arr, min: arr, max: arr, have, empty: arr.length - have, lo, hi, flat: true } : null;
+};
+
+// A pair of parallel channels of SECOND OFFSETS → intervals. Not bucket indices: `CoachExportSeriesGaps`
+// carries seconds precisely because every strap dropout on his real 96-minute walk is about ONE SECOND
+// long, and no resolution worth syncing can represent that.
+const cSeriesIntervals = (a, b) => {
+  const s = cSeriesList(a), e = cSeriesList(b);
+  if (!s || !e) return null;                       // never checked — not the same as checked-and-empty
+  const out = [];
+  for (let i = 0; i < Math.min(s.length, e.length); i++) {
+    const from = +s[i], to = +e[i];
+    if (!isFinite(from) || !isFinite(to) || to < from) continue;
+    out.push({ from, to });
+  }
+  out.sort((x, y) => x.from - y.from);
+  return out;
+};
+
+// HOW MANY SECONDS OF EACH BUCKET a set of intervals actually covers — the honest mapping from an
+// interval onto the grid, and the reason this is a function rather than a one-liner.
+//
+// A one-second dropout inside a fifteen-second bucket leaves fourteen seconds of perfectly good samples
+// in it. Blanking that bucket would delete real data and DRAW A BREAK THE WALK NEVER HAD; drawing the
+// line straight through a bucket the strap was silent for the whole of would invent data that never
+// existed. So neither decision is taken here at all: this returns the covered seconds and lets the
+// caller say "0.9 s of 15" out loud. The line's own breaks come from the CHANNEL — a bucket PadCoach
+// found no valid sample for is empty on the wire, and that is the only thing that breaks a line.
+// Overlapping intervals are merged first, so a bucket can never report more covered seconds than it has.
+const cSeriesCoverage = (intervals, res, n) => {
+  const out = new Array(n > 0 ? n : 0).fill(0);
+  if (!intervals || !intervals.length || !(res > 0) || !(n > 0)) return out;
+  const merged = [];
+  intervals.slice().sort((a, b) => a.from - b.from).forEach((g) => {
+    const last = merged[merged.length - 1];
+    if (last && g.from <= last.to) { if (g.to > last.to) last.to = g.to; }
+    else merged.push({ from: g.from, to: g.to });
+  });
+  merged.forEach((g) => {
+    const first = Math.max(0, Math.floor(g.from / res));
+    const last = Math.min(n - 1, Math.floor(Math.max(g.from, g.to - 1e-9) / res));
+    for (let i = first; i <= last; i++) {
+      const a = Math.max(g.from, i * res), b = Math.min(g.to, (i + 1) * res);
+      if (b > a) out[i] += b - a;
+    }
+  });
+  return out;
+};
+
+// Every commanded speed change, at FULL timestamp precision — deliberately not snapped to the grid
+// upstream, because the closest pair on his real walk is ten seconds apart and would otherwise collapse
+// into one bucket and lose a step.
+const cSeriesChanges = (sc) => {
+  if (!sc || typeof sc !== "object") return null;
+  const at = cSeriesList(sc.atSec);
+  if (!at) return null;
+  const from = cSeriesList(sc.fromKmh) || [], to = cSeriesList(sc.toKmh) || [], why = cSeriesList(sc.reason) || [];
+  const out = [];
+  for (let i = 0; i < at.length; i++) {
+    const t = +at[i];
+    if (!isFinite(t)) continue;
+    const a = +from[i], b = +to[i];
+    out.push({ at: t, from: isFinite(a) ? a : null, to: isFinite(b) ? b : null,
+      reason: typeof why[i] === "string" && why[i] ? why[i] : null });
+  }
+  out.sort((x, y) => x.at - y.at);
+  return out;
+};
+
+// `reason` is an OPEN SET — CoachExportSeriesSpeedChanges' own word, and the same rule `modality`
+// already follows on this tab: an unrecognised word is shown AS ITSELF rather than folded into a known
+// one or dropped. No human-readable label crosses the wire (a string repeated 71 times is this app's to
+// not pay for), so the wording below is this app's own choice.
+const CARDIO_SPEED_REASON = {
+  autoBelowBand: { short: "below band", label: "your heart rate was below the band, so PadCoach sped the belt up", auto: true },
+  autoAboveBand: { short: "above band", label: "your heart rate was above the band, so PadCoach slowed the belt down", auto: true },
+  manual: { short: "by hand", label: "you changed the speed yourself", auto: false },
+  preset: { short: "preset", label: "a preset step in the session's own plan", auto: false },
+};
+const cardioSpeedReason = (r) => CARDIO_SPEED_REASON[r]
+  || { short: r || "unspecified", label: r ? `PadCoach called this “${r}” — a reason this app has no wording for yet, shown as it arrived` : "no reason was recorded for this change", auto: null, unknown: true };
+
+// One session's series, normalized and ready to draw. Takes the session cardioSession() produced, so the
+// zone band comes from where it actually lives — `bandLowerBPM`/`bandUpperBPM` on the SESSION ROW, not
+// inside the series, because PadCoach records one band per session rather than a band timeline and
+// repeating it per bucket would imply a precision the record does not have.
+const cardioSeries = (s) => {
+  const raw = s && s.series && typeof s.series === "object" ? s.series : null;
+  if (!raw) return null;
+  const resRaw = cPos(raw.resolutionSec);
+  const res = resRaw || 15;                     // read it, never hard-code — but say so when it is assumed
+  const fields = (c) => (c && typeof c === "object" && typeof c.mean === "string" ? c.mean.split(",").length : 0);
+  const n = cPos(raw.bucketCount)
+    || Math.max(fields(raw.heartRate), fields(raw.speed), typeof raw.kcalPerMin === "string" ? raw.kcalPerMin.split(",").length : 0);
+  if (!(n > 0)) return null;
+  const hr = cSeriesChannel(raw.heartRate, n), speed = cSeriesChannel(raw.speed, n);
+  const kcal = cSeriesFlat(cSeriesNums(raw.kcalPerMin, n));
+  if (!hr && !speed && !kcal) return null;      // a series with nothing in it is not a series
+  const g = raw.gaps && typeof raw.gaps === "object" ? raw.gaps : null;
+  const hrGaps = g ? cSeriesIntervals(g.heartRateStartSec, g.heartRateEndSec) : null;
+  const presGaps = g ? cSeriesIntervals(g.presenceStartSec, g.presenceEndSec) : null;
+  return {
+    res, resAssumed: resRaw == null, n, durSec: n * res,
+    startedAt: typeof raw.startedAt === "string" && raw.startedAt ? raw.startedAt : (s && s.startedAt) || null,
+    hr, speed, kcal,
+    hrGaps, presGaps,
+    hrCover: hrGaps ? cSeriesCoverage(hrGaps, res, n) : null,
+    presCover: presGaps ? cSeriesCoverage(presGaps, res, n) : null,
+    changes: cSeriesChanges(raw.speedChanges),
+    band: s && s.bandLow != null && s.bandHigh != null && s.bandHigh > s.bandLow
+      ? { lo: s.bandLow, hi: s.bandHigh, name: s.bandName || null } : null,
+  };
+};
+
+// What the series says about itself, in countable form — every sentence the card prints underneath the
+// charts is built from this rather than from a second pass over the arrays.
+const cardioSeriesSummary = (x) => {
+  if (!x) return null;
+  const cover = (arr) => { const o = { full: 0, partial: 0 };
+    (arr || []).forEach((c) => { if (c <= 0) return; if (c >= x.res - 1e-6) o.full++; else o.partial++; });
+    return o; };
+  const secs = (list) => (list || []).reduce((a, g) => a + Math.max(0, g.to - g.from), 0);
+  const ch = (c) => (c ? { have: c.have, empty: c.empty, lo: c.lo, hi: c.hi } : null);
+  const byReason = {};
+  let up = 0, down = 0;
+  (x.changes || []).forEach((c) => {
+    const k = c.reason || "unspecified";
+    const e = byReason[k] || (byReason[k] = { reason: k, n: 0, up: 0, down: 0 });
+    e.n++;
+    if (c.from != null && c.to != null) {
+      if (c.to > c.from) { e.up++; up++; } else if (c.to < c.from) { e.down++; down++; }
+    }
+  });
+  return {
+    minutes: x.durSec / 60, buckets: x.n, res: x.res,
+    hr: ch(x.hr), speed: ch(x.speed), kcal: ch(x.kcal),
+    hrGaps: x.hrGaps ? Object.assign({ n: x.hrGaps.length, sec: secs(x.hrGaps) }, cover(x.hrCover)) : null,
+    presence: x.presGaps ? Object.assign({ n: x.presGaps.length, sec: secs(x.presGaps) }, cover(x.presCover)) : null,
+    changes: x.changes ? x.changes.length : null, up, down,
+    reasons: Object.keys(byReason).map((k) => byReason[k]).sort((a, b) => b.n - a.n || (a.reason < b.reason ? -1 : 1)),
+  };
+};
+
+// One bucket, for the readout that follows a finger across the chart. Speed changes are matched by their
+// REAL TIMESTAMP against the bucket's window — two of his automatic corrections are ten seconds apart and
+// both belong to the same bucket, rather than one of them being rounded away.
+const cardioSeriesAt = (x, i) => {
+  if (!x || !(i >= 0) || i >= x.n) return null;
+  const a = i * x.res, b = (i + 1) * x.res;
+  const val = (c) => (c && c.mean[i] != null ? { mean: c.mean[i], min: c.min[i], max: c.max[i] } : null);
+  const win = (list) => (list || []).filter((g) => g.to > a && g.from < b);
+  return { i, fromSec: a, toSec: b, hr: val(x.hr), speed: val(x.speed), kcal: val(x.kcal),
+    changes: (x.changes || []).filter((c) => c.at >= a && c.at < b),
+    hrGaps: x.hrGaps ? win(x.hrGaps) : null, presGaps: x.presGaps ? win(x.presGaps) : null,
+    hrCoverSec: x.hrCover ? x.hrCover[i] : null, presCoverSec: x.presCover ? x.presCover[i] : null };
+};
+
+// A SESSION WITH NO SERIES IS NOT A SESSION WITH NO DATA, and the four reasons it can have none are not
+// interchangeable. `CoachExportPayload.seriesPolicy` exists precisely so this app can say which one
+// applies instead of drawing an empty chart, and it carries a sentence written to be shown verbatim.
+// Age is measured against the EXPORT's own clock (`generatedAt`), not this device's today, because that
+// is the clock the retention rule was actually evaluated on.
+const cardioSeriesMissing = (s, policy) => {
+  const started = s && s.startedAt ? Date.parse(s.startedAt) : NaN;
+  // A record the belt never moved for has no inside to draw, and saying so beats reciting a retention
+  // rule that had nothing to do with it. His 2026-09-09 row is exactly this: 94 seconds of the app being
+  // open. Checked FIRST, because it is true whatever the export's policy says.
+  if (s && !(s.movingSec > 0)) return { reason: "idle",
+    headline: "the belt never started for this record",
+    why: "PadCoach recorded the app being open, not a walk — there was no session to reduce, so there is nothing to draw. This is a fact about the record, not a gap in it." };
+  if (!policy || policy.retentionDays == null) return { reason: "unsent",
+    headline: "no per-session detail arrived with this walk",
+    why: "Every number on this row is a summary — an average, a maximum or a total. PadCoach only began sending what happened DURING a session in a later build than the one that exported this row. Nothing is lost upstream: the samples are still on the PadCoach machine, and a re-export fills this in by itself." };
+  if (policy.retentionDays === 0 || (policy.sessionsWithSeries === 0 && policy.sessionsWithoutSeries > 0))
+    return { reason: "off", headline: "per-session detail is switched off in this export",
+      why: policy.note || "This export carried no time series for any session. Every summary row is complete; only the inside of each walk is missing.", note: policy.note };
+  const ref = policy.generatedAt ? Date.parse(policy.generatedAt) : NaN;
+  const ageDays = isFinite(started) && isFinite(ref) ? Math.floor((ref - started) / 86400000) : null;
+  if (ageDays != null && ageDays >= policy.retentionDays) return { reason: "retention", ageDays,
+    headline: `not kept for sessions over ${policy.retentionDays} days`,
+    why: `This walk was ${ageDays} days old when PadCoach built the export, and PadCoach carries per-session detail only for the most recent ${policy.retentionDays} days${policy.budgetBytes ? `, within a ${Math.round(policy.budgetBytes / 1000)} KB budget` : ""} — the export is pushed through an API that stops returning a file inline past 1 MB, so it has a ceiling. The summary above is complete and permanent; only the inside of the walk is not carried, and it still exists on the PadCoach machine.`,
+    note: policy.note };
+  return { reason: "notcarried", ageDays,
+    headline: "this export did not carry the inside of this walk",
+    why: `This walk is inside the ${policy.retentionDays}-day window, so it was not aged out. Two things can leave a recent session without detail: PadCoach stops adding series once the export reaches its ${policy.budgetBytes ? `${Math.round(policy.budgetBytes / 1000)} KB` : ""} budget, and a session recorded before PadCoach kept per-session samples has none to send.`,
+    note: policy.note };
+};
+
+// The payload-level `seriesPolicy`, normalized. `generatedAt` is lifted from the payload root and stored
+// alongside it because the retention rule is measured from the export's own clock — without it, a
+// session's age would be computed against whenever this device happened to open the app.
+const cleanCardioSeriesPolicy = (json) => {
+  const p = json && typeof json === "object" && json.seriesPolicy && typeof json.seriesPolicy === "object" ? json.seriesPolicy : null;
+  if (!p) return null;
+  const n = (v) => (typeof v === "number" && isFinite(v) && v >= 0 ? v : null);
+  return { resolutionSec: n(p.resolutionSec), retentionDays: n(p.retentionDays), budgetBytes: n(p.budgetBytes),
+    sessionsWithSeries: n(p.sessionsWithSeries), sessionsWithoutSeries: n(p.sessionsWithoutSeries),
+    note: typeof p.note === "string" && p.note ? p.note : null,
+    generatedAt: typeof json.generatedAt === "string" && json.generatedAt ? json.generatedAt : null };
+};
+
 const DEFAULT_FOOD_IDS = ["chicken300", "rice200", "eggs3", "whites200", "whey1"];   // original staples — never pruned
 // keep all favs + default staples; cap other foods to the n most-recently-used (by lastUsedT).
 const pruneFoods = (foods, n = 40) => { const arr = foods || []; const keep = arr.filter((f) => f.fav || f.corr || DEFAULT_FOOD_IDS.includes(f.id)); const rest = arr.filter((f) => !f.fav && !f.corr && !DEFAULT_FOOD_IDS.includes(f.id)).sort((a, b) => (b.lastUsedT || "").localeCompare(a.lastUsedT || "")).slice(0, n); const ok = new Set([...keep, ...rest]); return arr.filter((f) => ok.has(f)); };
@@ -2165,7 +2439,12 @@ const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weight
   // analytics: Task 59 — the schema-2 payload's top-level `analytics` block (efficiency trend, HRV,
   // resting HR, weekly time in zone, adaptive volume target), stored whole and REPLACED on every import
   // because PadCoach recomputes all of it from scratch each time. null until a schema-2 export arrives.
-  cardio: { days: {}, lastImportAt: null, lastAutoSyncAt: null, analytics: null } };
+  // seriesPolicy: Task 67 — the schema-4 payload's top-level `seriesPolicy`, plus the export's own
+  // `generatedAt`. Replaced wholesale on every import like `analytics`, and for the same reason: it
+  // describes what THAT export did, not what any one day holds. null until a schema-4 export arrives,
+  // and a session with no series then says "no detail arrived" rather than naming a retention rule
+  // this app was never told about.
+  cardio: { days: {}, lastImportAt: null, lastAutoSyncAt: null, analytics: null, seriesPolicy: null } };
 
 /* ───────────────────────── program ───────────────────────── */
 const AB_VARIANTS = [
@@ -4249,6 +4528,306 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
   );
 }
 
+/* ───────────────────── SessionSeries (Task 67) ─────────────────────
+   The inside of one walk: heart rate and belt speed across the whole session, the zone band behind the
+   heart rate, calories per minute when PadCoach could compute them, and — the thing no other fitness app
+   can draw — WHY the belt moved, at each moment it did.
+
+   Hand-drawn SVG rather than the recharts every other chart on this tab uses. That is a deliberate
+   exception, for reasons specific to this picture rather than complaints about recharts:
+
+     • Everything here has to land on ONE x-scale. The min/max envelope, the mean line, the zone lane,
+       the dropout marks at their real second offsets and the strip of speed-change ticks underneath are
+       five different mark types that only mean anything if they line up exactly, across three stacked
+       charts. Owning the scale is cheaper than making five recharts layers agree about a plot area.
+     • A BREAK IN THE LINE IS THE POINT, not a rendering option. A bucket PadCoach found no valid sample
+       for is a hole in the walk's record, and it is drawn as one.
+     • 386 buckets × three charts, redrawn as a finger moves across them, is the one place on this tab
+       where recharts' per-point reconciliation would be felt on a phone. Here the paths are built once
+       per session and the crosshair is two elements.
+
+   No library was added: this is the same SVG the browser already had. */
+
+const SERIES_W = 1000;                       // x units; the viewBox is stretched to whatever width the card is
+const SERIES_H = 100;                        // y units, likewise — so nothing inside may be text
+const seriesClock = (sec) => { const t = Math.max(0, Math.round(sec)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  return (h ? `${h}:${String(m).padStart(2, "0")}` : `${m}`) + `:${String(s).padStart(2, "0")}`; };
+// A y-domain that always contains the data and, for heart rate, always contains the band as well — a
+// band drawn off the top of the chart would say "you were never near it" when the truth is the opposite.
+const seriesDomain = (ch, extra, minSpan) => {
+  let lo = ch.lo, hi = ch.hi;
+  (extra || []).forEach((v) => { if (v != null && isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } });
+  if (hi - lo < (minSpan || 0)) { const mid = (hi + lo) / 2, half = (minSpan || 1) / 2; lo = mid - half; hi = mid + half; }
+  const pad = (hi - lo) * 0.08 || 1;
+  return { lo: lo - pad, hi: hi + pad };
+};
+
+// One channel: bucket-wide min/max boxes as an envelope, the bucket means as a line, and a break
+// wherever the wire said there was nothing to draw.
+function SeriesTrace({ ch, n, dom, height, line, fill, step, band, marks, hoverI, onHover }) {
+  const geo = useMemo(() => {
+    const span = dom.hi - dom.lo || 1;
+    const y = (v) => SERIES_H - ((v - dom.lo) / span) * SERIES_H;
+    const L = (i) => (i / n) * SERIES_W, R = (i) => ((i + 1) / n) * SERIES_W, X = (i) => ((i + 0.5) / n) * SERIES_W;
+    const runs = []; let start = -1;
+    for (let i = 0; i < n; i++) {
+      const has = ch.mean[i] != null;
+      if (has && start < 0) start = i;
+      if (!has && start >= 0) { runs.push([start, i - 1]); start = -1; }
+    }
+    if (start >= 0) runs.push([start, n - 1]);
+    const f2 = (v) => v.toFixed(2);
+    // The envelope is drawn as BUCKET-WIDE BOXES on purpose: min and max are what happened across those
+    // fifteen seconds, not at a point in the middle of them.
+    const area = runs.map(([a, b]) => {
+      let d = "";
+      for (let i = a; i <= b; i++) { const v = f2(y(ch.max[i])); d += `${i === a ? "M" : "L"}${f2(L(i))} ${v}L${f2(R(i))} ${v}`; }
+      for (let i = b; i >= a; i--) { const v = f2(y(ch.min[i])); d += `L${f2(R(i))} ${v}L${f2(L(i))} ${v}`; }
+      return d + "Z";
+    }).join("");
+    // The belt only ever moves in steps, at a moment — so a speed line is drawn as steps. A heart rate
+    // is continuous and is drawn through bucket centres. Same data, two honest shapes.
+    const mean = runs.map(([a, b]) => {
+      let d = "";
+      for (let i = a; i <= b; i++) {
+        const v = f2(y(ch.mean[i]));
+        d += step ? `${i === a ? "M" : "L"}${f2(L(i))} ${v}L${f2(R(i))} ${v}` : `${i === a ? "M" : "L"}${f2(X(i))} ${v}`;
+      }
+      if (a === b && !step) d += `L${f2(X(a))} ${f2(y(ch.mean[a]))}`;   // a lone bucket is a dot, not nothing
+      return d;
+    }).join("");
+    return { y, area, mean, runs };
+  }, [ch, n, dom.lo, dom.hi, step]);
+
+  const move = (e) => {
+    if (!onHover) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    if (!(r.width > 0)) return;
+    const cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX) - r.left;
+    onHover(Math.max(0, Math.min(n - 1, Math.floor((cx / r.width) * n))));
+  };
+  const bandY = band ? { a: Math.max(0, geo.y(band.hi)), b: Math.min(SERIES_H, geo.y(band.lo)) } : null;
+  return (
+    <div style={{ height, width: "100%", touchAction: "pan-y" }}
+      onPointerMove={move} onPointerDown={move} onPointerLeave={() => onHover && onHover(null)}>
+      <svg viewBox={`0 0 ${SERIES_W} ${SERIES_H}`} preserveAspectRatio="none" width="100%" height="100%" style={{ display: "block", overflow: "visible" }}>
+        {/* the band PadCoach was holding him in — behind everything, so time in and out of it reads at a glance */}
+        {bandY && bandY.b > bandY.a && <rect x="0" y={bandY.a} width={SERIES_W} height={bandY.b - bandY.a} fill={C.sage} opacity="0.14" />}
+        {[0, 50, 100].map((p) => <line key={p} x1="0" x2={SERIES_W} y1={p} y2={p} stroke="#221E15" strokeWidth="1" vectorEffect="non-scaling-stroke" />)}
+        {bandY && bandY.b > bandY.a && [bandY.a, bandY.b].map((v, j) => (
+          <line key={j} x1="0" x2={SERIES_W} y1={v} y2={v} stroke={C.sage} strokeWidth="1" opacity="0.5" strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
+        ))}
+        {/* dropouts, at their REAL second offsets — never rounded up to a bucket they did not fill */}
+        {(marks || []).map((m, j) => (
+          <rect key={j} x={m.x} y="0" width={Math.max(2.5, m.w)} height={SERIES_H} fill={m.color} opacity={m.opacity} />
+        ))}
+        <path d={geo.area} fill={fill} stroke="none" />
+        <path d={geo.mean} fill="none" stroke={line} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        {hoverI != null && (
+          <line x1={((hoverI + 0.5) / n) * SERIES_W} x2={((hoverI + 0.5) / n) * SERIES_W} y1="0" y2={SERIES_H}
+            stroke={C.bone} strokeWidth="1" opacity="0.55" vectorEffect="non-scaling-stroke" />
+        )}
+        {hoverI != null && ch.mean[hoverI] != null && (
+          <circle cx={((hoverI + 0.5) / n) * SERIES_W} cy={geo.y(ch.mean[hoverI])} r="2.6" fill={line} vectorEffect="non-scaling-stroke" />
+        )}
+      </svg>
+    </div>
+  );
+}
+
+// The commanded speed changes, on their own row directly under the belt-speed trace rather than over it.
+// Same width, same viewBox width, so a tick and the step it caused sit at the same x by construction —
+// and 71 of them stop being a picket fence across the reading you came for. Up above the line, down
+// below it, coloured by the reason PadCoach gave.
+function SeriesEvents({ changes, durSec, color, n, hoverI, onHover }) {
+  const move = (e) => {
+    if (!onHover) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    if (!(r.width > 0)) return;
+    const cx = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX) - r.left;
+    onHover(Math.max(0, Math.min(n - 1, Math.floor((cx / r.width) * n))));
+  };
+  return (
+    <div style={{ height: 15, width: "100%", touchAction: "pan-y" }}
+      onPointerMove={move} onPointerDown={move} onPointerLeave={() => onHover && onHover(null)}>
+      <svg viewBox={`0 0 ${SERIES_W} 16`} preserveAspectRatio="none" width="100%" height="100%" style={{ display: "block" }}>
+        <line x1="0" x2={SERIES_W} y1="8" y2="8" stroke="#221E15" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        {changes.map((c, j) => {
+          const cx = (Math.max(0, Math.min(durSec, c.at)) / durSec) * SERIES_W;
+          const down = c.from != null && c.to != null && c.to < c.from;
+          return <line key={j} x1={cx} x2={cx} y1={down ? 8 : 1} y2={down ? 15 : 8}
+            stroke={color(c.reason)} strokeWidth="1" opacity="0.9" vectorEffect="non-scaling-stroke" />;
+        })}
+        {hoverI != null && (
+          <line x1={((hoverI + 0.5) / n) * SERIES_W} x2={((hoverI + 0.5) / n) * SERIES_W} y1="0" y2="16"
+            stroke={C.bone} strokeWidth="1" opacity="0.55" vectorEffect="non-scaling-stroke" />
+        )}
+      </svg>
+    </div>
+  );
+}
+
+// The inside of one session, or the sentence that replaces it.
+function SessionSeries({ s, policy, sub, cap }) {
+  const x = useMemo(() => cardioSeries(s), [s]);
+  const sum = useMemo(() => cardioSeriesSummary(x), [x]);
+  const [hoverI, setHoverI] = useState(null);
+  const [allChanges, setAllChanges] = useState(false);
+  const at = x && hoverI != null ? cardioSeriesAt(x, hoverI) : null;
+
+  // A SESSION WITH NO SERIES IS NOT A SESSION WITH NO DATA. Never an empty chart — the reason, by name.
+  if (!x) {
+    const m = cardioSeriesMissing(s, policy);
+    return (
+      <div>
+        <span className={sub} style={{ color: C.ashDim }}>during the walk — {m.headline}</span>
+        <p className="mt-1 font-mono text-[10px] leading-relaxed" style={{ color: C.ash }}>{m.why}</p>
+        {m.note && m.note !== m.why && <p className="mt-1 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>PadCoach: “{m.note}”</p>}
+      </div>
+    );
+  }
+
+  const mark = (list, color, opacity) => (list || []).map((g) => ({
+    x: (Math.max(0, g.from) / x.durSec) * SERIES_W,
+    w: ((Math.min(x.durSec, g.to) - Math.max(0, g.from)) / x.durSec) * SERIES_W, color, opacity }));
+  const hrMarks = mark(x.hrGaps, C.rust, 0.42);
+  const presMarks = mark(x.presGaps, C.ash, 0.35);
+  const reasonColor = (r) => (r === "autoBelowBand" ? C.gold : r === "autoAboveBand" ? C.rust
+    : r === "manual" ? C.bone : r === "preset" ? C.sage : C.ash);
+  const n1 = (v, d) => (v == null ? "—" : (Math.round(v * 10 ** d) / 10 ** d).toFixed(d));
+
+  const head = (label, right) => (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className={sub} style={{ color: C.ashDim }}>{label}</span>
+      <span className="font-mono text-[10px]" style={{ color: at ? C.bone : C.ash }}>{right}</span>
+    </div>
+  );
+  const changes = allChanges ? x.changes : (x.changes || []).slice(0, 8);
+
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className={sub} style={{ color: C.ashDim }}>during the walk</span>
+        <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>
+          {sum.buckets} buckets × {x.res}s{x.resAssumed ? "*" : ""}
+        </span>
+      </div>
+      <p className="mt-0.5 font-mono text-[9px]" style={{ color: hoverI == null ? C.ashDim : C.gold }}>
+        {hoverI == null ? "drag across a chart to read any moment of it" : `at ${seriesClock(at.fromSec)}–${seriesClock(at.toSec)}`}
+      </p>
+
+      {x.hr && (
+        <div className="mt-2">
+          {head("heart rate", at ? (at.hr ? `${n1(at.hr.mean, 0)} bpm · ${n1(at.hr.min, 0)}–${n1(at.hr.max, 0)}` : "no strap reading in this bucket")
+            : `${n1(x.hr.lo, 0)}–${n1(x.hr.hi, 0)} bpm${x.band ? ` · band ${x.band.lo}–${x.band.hi}` : ""}`)}
+          <SeriesTrace ch={x.hr} n={x.n} dom={seriesDomain(x.hr, x.band ? [x.band.lo, x.band.hi] : [], 12)}
+            height={104} line={C.bone} fill="rgba(236,230,216,0.15)" band={x.band} marks={hrMarks}
+            hoverI={hoverI} onHover={setHoverI} />
+        </div>
+      )}
+
+      {x.speed && (
+        <div className="mt-2">
+          {head("belt speed", at ? (at.speed ? `${n1(at.speed.mean, 2)} km/h · ${n1(at.speed.min, 2)}–${n1(at.speed.max, 2)}` : "no belt reading in this bucket")
+            : `${n1(x.speed.lo, 2)}–${n1(x.speed.hi, 2)} km/h`)}
+          <SeriesTrace ch={x.speed} n={x.n} dom={seriesDomain(x.speed, [], 0.4)} step
+            height={92} line={C.gold} fill="rgba(201,162,39,0.20)" marks={presMarks}
+            hoverI={hoverI} onHover={setHoverI} />
+          {x.changes && x.changes.length > 0 && (
+            <SeriesEvents changes={x.changes} durSec={x.durSec} color={reasonColor} n={x.n}
+              hoverI={hoverI} onHover={setHoverI} />
+          )}
+        </div>
+      )}
+
+      {x.kcal && (
+        <div className="mt-2">
+          {head("calories per minute", at ? (at.kcal ? `${n1(at.kcal.mean, 2)} kcal/min` : "not computed for this bucket")
+            : `${n1(x.kcal.lo, 2)}–${n1(x.kcal.hi, 2)} kcal/min active`)}
+          <SeriesTrace ch={x.kcal} n={x.n} dom={seriesDomain(x.kcal, [], 0.5)}
+            height={64} line={C.rust} fill="rgba(176,106,58,0.18)" hoverI={hoverI} onHover={setHoverI} />
+        </div>
+      )}
+
+      <div className="mt-1 flex justify-between font-mono text-[9px]" style={{ color: C.ashDim }}>
+        {[0, 0.25, 0.5, 0.75, 1].map((f) => <span key={f}>{seriesClock(f * x.durSec)}</span>)}
+      </div>
+
+      {/* What was under the finger, in words — including the one sentence this whole task exists for. */}
+      {at && (at.changes.length > 0 || (at.hrGaps && at.hrGaps.length) || (at.presGaps && at.presGaps.length)) && (
+        <div className="mt-1 flex flex-col gap-0.5 font-mono text-[10px] leading-relaxed">
+          {at.changes.map((c, j) => (
+            <span key={j} style={{ color: C.bone }}>
+              <span style={{ color: reasonColor(c.reason) }}>{seriesClock(c.at)}</span> the belt went {n1(c.from, 2)} → {n1(c.to, 2)} km/h — {cardioSpeedReason(c.reason).label}
+            </span>
+          ))}
+          {(at.hrGaps || []).length > 0 && <span style={{ color: C.rust }}>the strap dropped out here for {n1(at.hrCoverSec, 1)}s of this {x.res}s bucket</span>}
+          {(at.presGaps || []).length > 0 && <span style={{ color: C.ash }}>the belt ran here with nobody confirmed on it — this stretch is not counted in distance, steps, moving time or zone minutes, but the speed is a real reading</span>}
+        </div>
+      )}
+
+      {/* Every commanded change, with its reason. The single most valuable thing on this chart. */}
+      {x.changes && x.changes.length > 0 && (
+        <div className="mt-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className={sub} style={{ color: C.ashDim }}>why the belt moved — {x.changes.length}</span>
+            <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{sum.up} up · {sum.down} down</span>
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[9px]">
+            {sum.reasons.map((r) => (
+              <span key={r.reason} style={{ color: C.ashDim }}>
+                <span style={{ color: reasonColor(r.reason) }}>▌</span> {cardioSpeedReason(r.reason).short} × {r.n}
+              </span>
+            ))}
+          </div>
+          <div className="mt-1 flex flex-col gap-0.5 font-mono text-[9.5px] leading-relaxed" style={{ color: C.ash }}>
+            {changes.map((c, j) => (
+              <button key={j} onClick={() => setHoverI(Math.min(x.n - 1, Math.floor(c.at / x.res)))} className="text-left">
+                <span style={{ color: C.ashDim }}>{seriesClock(c.at)}</span>{" "}
+                <span style={{ color: reasonColor(c.reason) }}>{n1(c.from, 2)} → {n1(c.to, 2)} km/h</span>{" "}
+                <span style={{ color: C.ashDim }}>{cardioSpeedReason(c.reason).short}</span>
+              </button>
+            ))}
+          </div>
+          {x.changes.length > changes.length && (
+            <button onClick={() => setAllChanges(true)} className={`mt-1 ${sub} block text-left`} style={{ color: C.goldDim }}>
+              ▸ show the other {x.changes.length - changes.length}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* What the picture is, and every place it deliberately does not join the dots. */}
+      <p className={cap} style={{ color: C.ashDim }}>
+        the shaded band behind each line is that {x.res}-second bucket's own minimum and maximum; the line is its mean.
+        {x.speed ? ` belt speed is drawn as steps because a belt only ever moves in steps — where the mean sits between two of them, the change happened inside that bucket, and the tick underneath says when.` : ""}
+        {x.band ? ` the green lane is the ${x.band.name ? `${x.band.name} ` : ""}band PadCoach was holding you in (${x.band.lo}–${x.band.hi} bpm).` : " no zone band was recorded for this session, so there is no lane to draw behind the heart rate."}
+        {x.resAssumed ? " * this series carried no resolution of its own and a 15-second grid was assumed for it." : ""}
+      </p>
+      {sum.hrGaps && (
+        <p className={cap} style={{ color: C.ashDim }}>
+          {sum.hrGaps.n === 0
+            ? "the strap was checked for dropouts across this session and none were found — a checked-and-clear, not an unchecked."
+            : `the strap dropped out ${sum.hrGaps.n === 1 ? "once" : `${sum.hrGaps.n} times`}, for ${n1(sum.hrGaps.sec, 1)}s in total, marked in red at the second ${sum.hrGaps.n === 1 ? "it" : "each"} happened. ${
+                sum.hrGaps.partial > 0 ? `${sum.hrGaps.partial} bucket${sum.hrGaps.partial === 1 ? " was" : "s were"} nicked by one without losing it — a dropout shorter than the ${x.res}-second grid leaves its bucket full of good samples, and blanking it would delete real data to draw a break the walk never had, so the line is NOT broken for ${sum.hrGaps.partial === 1 ? "it" : "those"}. ` : ""}${
+                sum.hr && sum.hr.empty > 0 ? `${sum.hr.empty} bucket${sum.hr.empty === 1 ? "" : "s"} lost every sample${sum.hrGaps.full > 0 ? ` (${sum.hrGaps.full} of them covered end to end by a dropout)` : ""}, and the line breaks across ${sum.hr.empty === 1 ? "it" : "those"} rather than being drawn through.` : "no bucket lost every one of its samples, so the line is unbroken."}`}
+        </p>
+      )}
+      {sum.presence && sum.presence.n > 0 && (
+        <p className={cap} style={{ color: C.ashDim }}>
+          the belt ran for {n1(sum.presence.sec, 1)}s across {sum.presence.n} stretch{sum.presence.n === 1 ? "" : "es"} with nobody confirmed on it. Distance, steps, moving time and zone minutes all excluded {sum.presence.n === 1 ? "it" : "them"} — the speed reading is genuine and is still drawn, greyed on the axis, rather than hidden or zeroed.
+        </p>
+      )}
+      {!x.kcal && (
+        <p className={cap} style={{ color: C.ashDim }}>
+          no calories-per-minute curve: PadCoach sends one only for a session it could estimate calories for at all, which needs both the treadmill grade and your body weight. This app does not derive one — that would be a second, disagreeing copy of the ACSM and Pandolf equations living in a browser.
+        </p>
+      )}
+    </div>
+  );
+}
+
+
 // CardioView — Task 48 Part B made Cardio a first-class tab; Task 57 gave it something to say.
 // It used to render one day at a time with no chart at all, which is exactly what he reported:
 // "I cannot see anything but time and steps." Now the analysis comes first and the plumbing last —
@@ -4295,6 +4874,10 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
   const [sessMetric, setSessMetric] = useState("speed");
   const [sessShow, setSessShow] = useState(8);
   const [sessRecon, setSessRecon] = useState(false);
+  // Task 67 — what THIS export did about per-session detail. Read here rather than inside the row so a
+  // session with no series can name the reason (aged out, budget, or a PadCoach that never sent one)
+  // instead of rendering an empty chart. null until a schema-4 export arrives.
+  const seriesPolicy = cardio.seriesPolicy || null;
   const card = "mt-4 rounded-2xl border p-5";
   const hdr = "font-mono text-[11px] uppercase tracking-[0.2em]";
   const sub = "font-mono text-[9px] uppercase tracking-wider";
@@ -5580,6 +6163,11 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
 
                     {open && (
                       <div className="mt-2 flex flex-col gap-2 border-t pt-2" style={{ borderColor: C.edge }}>
+                        {/* Task 67 — WHAT HAPPENED DURING THE WALK, first, because it is the thing every
+                            card before it could only summarise. Everything below this block is still a
+                            summary; this is the only part that shows the session changing. */}
+                        <SessionSeries s={s} policy={seriesPolicy} sub={sub} cap={cap} />
+                        <div className="border-t" style={{ borderColor: C.edge }} />
                         {/* Everything known about this one session, grouped the way it was measured. */}
                         {[
                           ["Timing", [
@@ -6511,12 +7099,14 @@ function App() {
   const importCardioExport = async (json) => {
     const clean = cleanCardioDays(json);
     const an = cleanCardioAnalytics(json);
+    const sp = cleanCardioSeriesPolicy(json);
     const count = Object.keys(clean).length;
     return updateMem((prev, ret) => {
       const cardio = prev.cardio || DEFAULT.cardio;
       const days = mergeCardioDays(cardio.days, clean);
       ret(count);
-      return { ...prev, cardio: { ...cardio, days, analytics: an || cardio.analytics || null, lastImportAt: new Date().toISOString() } };
+      return { ...prev, cardio: { ...cardio, days, analytics: an || cardio.analytics || null,
+        seriesPolicy: sp || cardio.seriesPolicy || null, lastImportAt: new Date().toISOString() } };
     });
   };
   // Task 51 — the automatic half: fetches cardio.json from the same repo/branch/token the already-
@@ -6534,11 +7124,13 @@ function App() {
       if (json) {
         const clean = cleanCardioDays(json);
         const an = cleanCardioAnalytics(json);
+        const sp = cleanCardioSeriesPolicy(json);
         const count = Object.keys(clean).length;
         await updateMem((prev) => {
           const cardio = prev.cardio || DEFAULT.cardio;
           const days = mergeCardioDays(cardio.days, clean);
-          return { ...prev, cardio: { ...cardio, days, analytics: an || cardio.analytics || null, lastAutoSyncAt: new Date().toISOString() } };
+          return { ...prev, cardio: { ...cardio, days, analytics: an || cardio.analytics || null,
+            seriesPolicy: sp || cardio.seriesPolicy || null, lastAutoSyncAt: new Date().toISOString() } };
         });
         dbg(`cardio sync(${reason}): merged ${count} day(s) from cardio.json`);
       }
