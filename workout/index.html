@@ -34,7 +34,7 @@ const _b = document.getElementById("boot"); if (_b) _b.remove();
 import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { Dumbbell, Clock, ArrowLeftRight, Play, Pause, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package, Camera, Sparkles, ScanBarcode, Unlink, Link2, List, Activity } from "lucide-react";
 import { createRoot } from "react-dom/client";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { readBarcodes } from "zxing-wasm";
 
 /* ───────────────────────── palette ───────────────────────── */
@@ -211,13 +211,19 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0909-2257";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0910-1756";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
 const relDay = (key) => { const t = todayKey(); if (key === t) return "Today"; if (key === shiftDate(t, -1)) return "Yesterday"; if (key === shiftDate(t, 1)) return "Tomorrow"; const [y, m, d] = key.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }); };
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
 const pruneDays = (days, n = 90) => { const ks = Object.keys(days).sort(); if (ks.length <= n) return days; const out = { ...days }; ks.slice(0, ks.length - n).forEach((k) => delete out[k]); return out; };
+// Task 57 — cardio gets its OWN retention cap, and diet/sleep keep the 90-day default above unchanged.
+// 90 day-keys is roughly 4–5 months at his frequency, which quietly amputates exactly the 3–6-month window
+// the efficiency signal lives in — the one thing a progress view exists to show. PadCoach holds the full
+// history upstream and recomputes the whole payload on every export, so this truncation was purely a
+// coach-app decision and nothing is lost upstream by widening it. 1095 active day-keys ≈ 3 years.
+const CARDIO_DAY_CAP = 1095;
 // Task 51 — the shared merge logic behind BOTH cardio import paths: the manual PadCoach-export file
 // picker (unchanged since Task 41/48) and the new automatic cardio.json sync tick. Split in two so the
 // validating half can run (and throw) before either caller touches live state, exactly like the manual
@@ -243,6 +249,24 @@ const cleanCardioDays = (json) => {
         ? { kcal: +d.calorie.kcal || 0, lowKcal: +d.calorie.lowKcal || 0, highKcal: +d.calorie.highKcal || 0 } : null,
       sessions: Array.isArray(d.sessions) ? d.sessions : [],
     };
+    // Task 59 — the day-level fields a schema-2 PadCoach export MAY carry, under the names
+    // `CoachExportDay` actually emits. Verified field by field against
+    // ~/Desktop/padcoach/Sources/PadCoachCore/Export/CoachExport.swift: that encoder is left on
+    // JSONEncoder's DEFAULT key strategy, so every JSON key is the Swift property name verbatim.
+    // Carried through only when actually present — a day PadCoach sent nothing for keeps the key absent
+    // rather than gaining a fabricated 0, because "no reading" and "a reading of zero" are different
+    // facts and the Cardio tab renders them differently.
+    // NOT read here: `volumeTarget`. The adaptive target is top-level `analytics.volume` (see
+    // cleanCardioAnalytics below) and stays there on purpose — it is a whole-history figure, and
+    // top-level keeps it clear of CARDIO_DAY_CAP.
+    // Session-level additions (avgSpeedKmh, gradePercent, efficiencyRatio, decoupling, context…) need no
+    // work here — `sessions` has always been passed through whole, so they arrive intact on their own.
+    const pos = (v) => typeof v === "number" && isFinite(v) && v > 0;
+    if (pos(d.avgHeartRate)) clean[k].avgHeartRate = d.avgHeartRate;
+    if (pos(d.maxHeartRate)) clean[k].maxHeartRate = d.maxHeartRate;
+    if (pos(d.restingBPM)) clean[k].restingBPM = d.restingBPM;
+    if (typeof d.restingSource === "string" && d.restingSource) clean[k].restingSource = d.restingSource;
+    if (d.hrv && typeof d.hrv === "object") clean[k].hrv = d.hrv;
   });
   if (!Object.keys(clean).length) throw new Error("no valid days found in file");
   return clean;
@@ -250,7 +274,310 @@ const cleanCardioDays = (json) => {
 const mergeCardioDays = (prevDays, clean) => {
   const merged = { ...(prevDays || {}) };
   Object.keys(clean).forEach((dk) => { merged[dk] = { ...clean[dk], manual: (merged[dk] && merged[dk].manual) || [] }; });
-  return pruneDays(merged, 90);
+  return pruneDays(merged, CARDIO_DAY_CAP);
+};
+// Task 59 — the OTHER half of a schema-2 payload: the top-level `analytics` block
+// (`CoachExportAnalytics`), normalized. Deliberately separate from cleanCardioDays, because these are
+// whole-history trends PadCoach recomputes from scratch on every export — they belong to the payload,
+// not to any one day, which is also what keeps them clear of CARDIO_DAY_CAP.
+//
+// Shape, verified against CoachExportAnalytics.swift rather than guessed:
+//   analytics.zoneName                                             — the band every zone figure is for
+//   analytics.efficiency        { readings[{day,ratio}], rolling[{day,average}], direction, confidence }
+//   analytics.hrv               { readings[{day,rmssdMs,sdnnMs,artifactRate}], rollingShort[], rollingLong[],
+//                                 latestShortMs, latestLongMs, confidence }
+//   analytics.restingHeartRate  { readings[{day,bpm,source}], rolling[{day,average}], latestRollingBPM, confidence }
+//   analytics.timeInZone        { weeks[{weekStart,minutes,sessionCount,byBand}], confidence }
+//   analytics.volume            { goalMinutes, targetMinutes, anchorMinutes, increaseWithheld,
+//                                 holdReason, holdMessage, projectedDaysToGoal, projectedDate }
+// Note the series are ARRAYS carrying a "YYYY-MM-DD" `day`/`weekStart` string — not objects keyed by day.
+// Returns null for a schema-1 payload (his live data until he installs the new PadCoach build), which is
+// the whole reason nothing downstream may assume this exists.
+const cleanCardioAnalytics = (json) => {
+  const a = json && typeof json === "object" && json.analytics && typeof json.analytics === "object" ? json.analytics : null;
+  if (!a) return null;
+  const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+  const str = (v) => (typeof v === "string" && v ? v : null);
+  const day = (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  // One day-keyed series → [{ day, v }]. `key` names the value field on the wire, which differs per series
+  // (`ratio`, `average`, `bpm`, `rmssdMs`) — pinning it here is the point.
+  const series = (arr, key) => (Array.isArray(arr) ? arr.map((p) => {
+    if (!p || typeof p !== "object" || !day(p.day) || num(p[key]) == null) return null;
+    const out = { day: p.day, v: num(p[key]) };
+    if (str(p.source)) out.source = str(p.source);
+    return out;
+  }).filter(Boolean) : []);
+  const sub = (key) => (a[key] && typeof a[key] === "object" ? a[key] : null);
+  const eff = sub("efficiency"), hrv = sub("hrv"), rhr = sub("restingHeartRate"), tiz = sub("timeInZone"), vol = sub("volume");
+  return {
+    zoneName: str(a.zoneName),
+    efficiency: eff ? { readings: series(eff.readings, "ratio"), rolling: series(eff.rolling, "average"),
+      direction: str(eff.direction), confidence: cConf(eff.confidence) } : null,
+    hrv: hrv ? { readings: series(hrv.readings, "rmssdMs"), rollingShort: series(hrv.rollingShort, "average"),
+      rollingLong: series(hrv.rollingLong, "average"), latestShortMs: num(hrv.latestShortMs),
+      latestLongMs: num(hrv.latestLongMs), confidence: cConf(hrv.confidence) } : null,
+    restingHeartRate: rhr ? { readings: series(rhr.readings, "bpm"), rolling: series(rhr.rolling, "average"),
+      latestRollingBPM: num(rhr.latestRollingBPM), confidence: cConf(rhr.confidence) } : null,
+    timeInZone: tiz ? { weeks: (Array.isArray(tiz.weeks) ? tiz.weeks : []).map((w) => (w && typeof w === "object" && day(w.weekStart)
+        ? { weekStart: w.weekStart, minutes: num(w.minutes) || 0, sessionCount: num(w.sessionCount) || 0,
+            byBand: w.byBand && typeof w.byBand === "object" ? w.byBand : {} } : null)).filter(Boolean),
+      confidence: cConf(tiz.confidence) } : null,
+    // A day under target is DATA, not failure (VolumeProgression's own rule) — `holdMessage` is written to
+    // be shown verbatim and must never be rendered in red.
+    volume: vol ? { goalMinutes: num(vol.goalMinutes), targetMinutes: num(vol.targetMinutes),
+      anchorMinutes: num(vol.anchorMinutes), increaseWithheld: vol.increaseWithheld === true,
+      holdReason: str(vol.holdReason), holdMessage: str(vol.holdMessage),
+      projectedDaysToGoal: num(vol.projectedDaysToGoal), projectedDate: day(vol.projectedDate) } : null,
+  };
+};
+
+/* ───────────────────── cardio analytics (Task 57) ─────────────────────
+   Pure selectors over cardio.days, behind every card on the Cardio tab and covered directly by
+   tests/run-tests.mjs. Three rules run through all of them, worth stating once rather than at each:
+
+   • SPARSE FIRST. He has one real walk. Everything here has to say something true after a single
+     session — so nothing below waits on a long history, and the few figures that genuinely do need
+     one (trend directions) come back null WITH the reason, never as a confident-looking zero.
+   • NEVER INVENT. A day with no cardio is a 0 for a VOLUME (minutes, steps, km) and a null for a
+     RATE (avg HR, speed, % in zone). Walking zero minutes is a fact; having a zero heart rate is not.
+   • EVERY NEW EXPORT FIELD IS OPTIONAL. PadCoach's payload is widening (avg speed, grade, efficiency,
+     decoupling, HRV, resting HR, volume target, confidence grades, context tags). Until he installs
+     that build his live data carries none of it, so every reader degrades to what really arrived. */
+
+const Z2_LO = 125, Z2_HI = 135, Z2_MID = 130;      // his real measured band, not an age-guessed one
+const WHO_WEEK_MIN = 150;                          // WHO's 150 moderate min/week floor (Garmin's Intensity Minutes goal)
+const TREND_FLOOR = 6;                             // PadCoach's TrendDataFloor rule: five or fewer readings is not a trend
+const TREND_DEADBAND = 0.03;                       // EfficiencyTrend's own 3% before anything is called a change
+const cNum = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+const cPos = (v) => { const n = cNum(v); return n != null && n > 0 ? n : null; };
+// PadCoach's `CoachExportConfidence` on the wire is { level, reason, trendworthy } — `level` is the key it
+// really emits, `reason` is a sentence written to be shown verbatim, and `trendworthy` is PRECOMPUTED
+// upstream exactly so this app can never invent its own threshold for when a number becomes a verdict.
+// A bare string ("high") is still honoured for a hand-written fixture; anything else counts as "no grade
+// was sent", which is never silently treated as a pass.
+const cConf = (c) => {
+  const tw = (g) => g === "moderate" || g === "high";
+  if (typeof c === "string" && c) return { grade: c, reason: null, trendworthy: tw(c) };
+  if (c && typeof c === "object") {
+    const g = c.level || c.grade || c.confidence;
+    if (!g) return null;
+    const grade = String(g);
+    return { grade, reason: typeof c.reason === "string" && c.reason ? c.reason : null,
+      trendworthy: typeof c.trendworthy === "boolean" ? c.trendworthy : tw(grade) };
+  }
+  return null;
+};
+const confOk = (c) => !!c && c.trendworthy === true;   // PadCoach's own gate; insufficient/low never earn a verdict
+
+// One PadCoach session, normalized. avgSpeedKmh is the interesting one: PadCoach's own figure when the
+// export carries it, otherwise derived from distance ÷ moving time — two fields it has always sent. The
+// source is kept so the UI can say "derived" rather than imply a measured belt-speed average.
+const cardioSession = (s) => {
+  if (!s || typeof s !== "object") return null;
+  const movingSec = cPos(s.movingTimeSec) || 0;
+  const distanceKm = cPos(s.distanceKm) || 0;
+  const exported = cPos(s.avgSpeedKmh);
+  const derived = movingSec > 0 && distanceKm > 0 ? distanceKm / (movingSec / 3600) : null;
+  const inZoneSec = cPos(s.timeInZoneSec) || 0;
+  const dec = s.decoupling && typeof s.decoupling === "object" ? s.decoupling : null;
+  // Session context is an OBJECT on the wire — `CoachExportSessionContext { tag, source }` — not the bare
+  // string this reader first guessed at, which silently hid every tag. `source` carries its own weight:
+  // "tagged" is something he said about THIS session, "standingDefault" was inherited from a default he
+  // set once, and an inherited tag is an assumption, not a statement.
+  const ctx = s.context && typeof s.context === "object" && typeof s.context.tag === "string" && s.context.tag
+    ? { tag: s.context.tag, source: typeof s.context.source === "string" && s.context.source ? s.context.source : null }
+    : typeof s.context === "string" && s.context ? { tag: s.context, source: null } : null;
+  // CADENCE UNITS — settled in Task 59, deliberately BEFORE the field exists, because the ambiguity is
+  // the whole bug. The strap reports STRIDES per minute; PadCoach's StepAccumulator doubles that to
+  // STEPS. A bare "spm" would read ~53 where he expects ~106 and nothing on screen would say which. So
+  // this app reads only self-describing names, and always shows STEPS per minute:
+  //   avgCadenceStepsPerMin    — steps/min, taken as-is
+  //   avgCadenceStridesPerMin  — strides/min, DOUBLED here to steps/min
+  // A bare `avgCadenceSpm` is deliberately NOT read: an ambiguous number is worse than a blank.
+  // Nothing sends any of these today (CoachExport.swift has no cadence at all) — cadence reads
+  // "not sent yet" until PadCoach picks one of the two names above.
+  const cadSteps = cPos(s.avgCadenceStepsPerMin), cadStrides = cPos(s.avgCadenceStridesPerMin);
+  // NOT SENT YET: no heart-rate histogram is in the schema-2 export — the export author deferred it as a
+  // genuinely new computation. The reader stays so the card lights up by itself the day it arrives.
+  const hist = Array.isArray(s.hrHistogram)
+    ? s.hrHistogram.map((b) => ({ lo: cNum(b && (b.lo != null ? b.lo : b.from != null ? b.from : b.bpm)), hi: cNum(b && (b.hi != null ? b.hi : b.to)), sec: cPos(b && (b.sec != null ? b.sec : b.seconds)) || 0 })).filter((b) => b.lo != null)
+    : null;
+  return {
+    id: s.id || null, startedAt: s.startedAt || null, endedAt: s.endedAt || null,
+    movingSec, distanceKm, steps: cPos(s.totalSteps) || 0,
+    avgHr: cPos(s.avgHeartRate), maxHr: cPos(s.maxHeartRate),
+    inZoneSec, inZonePct: movingSec > 0 && inZoneSec > 0 ? (inZoneSec / movingSec) * 100 : null,
+    avgSpeedKmh: exported != null ? exported : derived,
+    speedSource: exported != null ? "measured" : derived != null ? "derived" : null,
+    maxSpeedKmh: cPos(s.maxSpeedKmh),
+    gradePercent: cNum(s.gradePercent),
+    // "measured" / "assumed" / "unverified" — read BEFORE rendering gradePercent as fact. He measured the
+    // TP8's max at 5° (8.75%); the middle position was never checked, and older sessions carry a grade
+    // from a superseded product listing.
+    gradeSource: typeof s.gradeSource === "string" && s.gradeSource ? s.gradeSource : null,
+    cadenceStepsPerMin: cadSteps != null ? cadSteps : cadStrides != null ? cadStrides * 2 : null,
+    bandName: s.bandName || null, bandLow: cPos(s.bandLowerBPM), bandHigh: cPos(s.bandUpperBPM),
+    calorie: s.calorie && typeof s.calorie === "object" ? s.calorie : null,
+    context: ctx,
+    // NOT SENT YET: PadCoach records no RPE. Kept so the row fills itself in if it ever does.
+    effort: cPos(s.perceivedEffort), hrHistogram: hist && hist.length ? hist : null,
+    // `efficiencyRatio` is a BARE NUMBER on the wire (ACSM VO2 ÷ avg HR for this one session) — it carries
+    // no direction and no confidence of its own, and is never diagnostic alone. The trustworthy reading
+    // is analytics.efficiency, which is where direction and confidence actually live.
+    efficiencyRatio: cPos(s.efficiencyRatio),
+    // Wire keys are `speedDriftPercent` / `hrDriftPercent`, and the two half-speeds come across too — so
+    // the drift sentence can name the actual km/h instead of only a percentage.
+    decoupling: dec ? { percent: cNum(dec.percent), speedDriftPercent: cNum(dec.speedDriftPercent),
+      hrDriftPercent: cNum(dec.hrDriftPercent), firstHalfSpeedKmh: cPos(dec.firstHalfSpeedKmh),
+      secondHalfSpeedKmh: cPos(dec.secondHalfSpeedKmh), confidence: cConf(dec.confidence) } : null,
+  };
+};
+// A session counts toward "speed at 130 bpm" only if its own average heart rate actually LANDED in the
+// band — like for like, with no model and no adjustment. A walk that averaged 118 bpm is simply left out
+// rather than scaled up to pretend it was a zone-2 walk.
+const inBandSession = (s) => !!s && s.avgHr != null && s.avgSpeedKmh != null
+  && s.avgHr >= (s.bandLow || Z2_LO) && s.avgHr <= (s.bandHigh || Z2_HI);
+
+// One day, normalized: PadCoach's measured figures plus any manual entries, kept summable but never
+// blended where the sources disagree about what they know (zone-2 min and kcal stay PadCoach-only —
+// a manual walk has no heart rate, so padding them with a guess would be a lie).
+const cardioDay = (d) => {
+  if (!d || typeof d !== "object") return null;
+  const sessions = (Array.isArray(d.sessions) ? d.sessions : []).map(cardioSession).filter(Boolean);
+  const manual = Array.isArray(d.manual) ? d.manual : [];
+  const steps = (cPos(d.steps) || 0) + manual.reduce((a, m) => a + (cPos(m.steps) || 0), 0);
+  const distanceKm = (cPos(d.distanceKm) || 0) + manual.reduce((a, m) => a + (cPos(m.distanceKm) || 0), 0);
+  const movingSec = (cPos(d.movingTimeSec) || 0) + manual.reduce((a, m) => a + (cPos(m.durationSec) || 0), 0);
+  const measuredSec = sessions.reduce((a, s) => a + s.movingSec, 0);
+  const inZoneSec = sessions.reduce((a, s) => a + s.inZoneSec, 0);
+  const hrW = sessions.filter((s) => s.avgHr != null && s.movingSec > 0);
+  const bandS = sessions.filter(inBandSession);
+  return {
+    steps, distanceKm, movingSec, measuredSec, inZoneSec, sessions, manual,
+    zone2Min: cPos(d.zone2Min),                                     // PadCoach only — null, not 0, when it sent none
+    kcal: d.calorie && typeof d.calorie === "object" ? cPos(d.calorie.kcal) : null,
+    calorie: d.calorie && typeof d.calorie === "object" ? d.calorie : null,
+    // PadCoach's OWN day figure wins when it sends one (CoachExportDay.avgHeartRate/maxHeartRate) — it is
+    // time-weighted across the day upstream, so taking it verbatim is what stops this app quietly
+    // disagreeing with PadCoach's dashboard for the same day. Falls back to the session-weighted average
+    // this app has always computed, which is all a schema-1 payload allows.
+    avgHr: cPos(d.avgHeartRate) != null ? cPos(d.avgHeartRate)
+      : hrW.length ? hrW.reduce((a, s) => a + s.avgHr * s.movingSec, 0) / hrW.reduce((a, s) => a + s.movingSec, 0) : null,
+    avgHrSource: cPos(d.avgHeartRate) != null ? "padcoach" : hrW.length ? "derived" : null,
+    maxHr: cPos(d.maxHeartRate) != null ? cPos(d.maxHeartRate)
+      : sessions.reduce((a, s) => (s.maxHr != null && s.maxHr > a ? s.maxHr : a), 0) || null,
+    inZonePct: measuredSec > 0 && inZoneSec > 0 ? (inZoneSec / measuredSec) * 100 : null,
+    speedAtZone: bandS.length ? bandS.reduce((a, s) => a + s.avgSpeedKmh * s.movingSec, 0) / bandS.reduce((a, s) => a + s.movingSec, 0) : null,
+    bandSessions: bandS.length,
+    // Resting HR is from the seated pre-walk baseline, NEVER from the walk. `restingSource` says
+    // "measured" / "manual" / "mixed" and is present exactly when restingBPM is.
+    restingBPM: cPos(d.restingBPM),
+    restingSource: typeof d.restingSource === "string" && d.restingSource ? d.restingSource : null,
+    hrv: d.hrv && typeof d.hrv === "object" ? { rmssdMs: cPos(d.hrv.rmssdMs), sdnnMs: cPos(d.hrv.sdnnMs),
+      artifactRate: cNum(d.hrv.artifactRate),
+      // "good" / "usableWithCaveat" — a rejected capture never produces a reading at all, so this is
+      // never a way of saying "bad data got through".
+      quality: typeof d.hrv.quality === "string" && d.hrv.quality ? d.hrv.quality : null } : null,
+    walked: steps > 0 || distanceKm > 0 || movingSec > 0 || sessions.length > 0 || manual.length > 0,
+  };
+};
+
+// n calendar days ending at endKey, oldest → newest. Days he never walked are present with a null stat,
+// so a chart draws a real gap in the habit rather than quietly closing it up.
+const cardioWindow = (days, endKey, n) => [...Array(n)].map((_, i) => {
+  const key = shiftDate(endKey, -(n - 1 - i));
+  return { key, st: cardioDay((days || {})[key]) };
+});
+// Totals over a window. `walkedDays` is the reading count every trend gate below is judged against.
+const cardioAgg = (win) => {
+  const st = win.map((x) => x.st).filter((s) => s && s.walked);
+  const sum = (f) => st.reduce((a, s) => a + (f(s) || 0), 0);
+  const hrD = st.filter((s) => s.avgHr != null), bandD = st.filter((s) => s.speedAtZone != null), restD = st.filter((s) => s.restingBPM != null);
+  const measuredSec = sum((s) => s.measuredSec), inZoneSec = sum((s) => s.inZoneSec);
+  return {
+    days: win.length, walkedDays: st.length,
+    zone2Min: sum((s) => s.zone2Min), movingSec: sum((s) => s.movingSec), distanceKm: sum((s) => s.distanceKm),
+    steps: sum((s) => s.steps), kcal: sum((s) => s.kcal), measuredSec, inZoneSec,
+    sessions: sum((s) => s.sessions.length),
+    inZonePct: measuredSec > 0 && inZoneSec > 0 ? (inZoneSec / measuredSec) * 100 : null,
+    avgHr: hrD.length ? hrD.reduce((a, s) => a + s.avgHr, 0) / hrD.length : null, hrDays: hrD.length,
+    speedAtZone: bandD.length ? bandD.reduce((a, s) => a + s.speedAtZone, 0) / bandD.length : null,
+    bandSessions: sum((s) => s.bandSessions),
+    restingBPM: restD.length ? restD.reduce((a, s) => a + s.restingBPM, 0) / restD.length : null, restDays: restD.length,
+  };
+};
+
+// Apple's Trends, scaled to the history he actually has: the last n days against the n before them.
+// Apple refuses to draw an arrow until it has 180 days; the same discipline applies here at TREND_FLOOR
+// readings per window, and a row that can't clear it reports how far short it is instead of a direction.
+const cardioTrendRows = (days, endKey, n = 28) => {
+  const cur = cardioAgg(cardioWindow(days, endKey, n));
+  const prev = cardioAgg(cardioWindow(days, shiftDate(endKey, -n), n));
+  const row = (id, label, from, to, unit, better, prevN, curN, dp) => {
+    const ready = prevN >= TREND_FLOOR && curN >= TREND_FLOOR && from != null && to != null && from !== 0;
+    const pct = ready ? (to - from) / Math.abs(from) : null;
+    const shown = ready ? Math.round(pct * 100) / 100 : null;
+    const dir = !ready ? null : Math.abs(shown) < TREND_DEADBAND ? "flat" : pct > 0 ? "up" : "down";
+    return { id, label, from, to, unit, better, dir, pct, ready, prevN, curN, floor: TREND_FLOOR, dp: dp == null ? 0 : dp };
+  };
+  const rows = [
+    row("zone2", "Zone-2 min/day", prev.zone2Min / n, cur.zone2Min / n, " min", "up", prev.walkedDays, cur.walkedDays),
+    row("moving", "Moving min/day", prev.movingSec / 60 / n, cur.movingSec / 60 / n, " min", "up", prev.walkedDays, cur.walkedDays),
+    row("daysWk", "Days walked/week", (prev.walkedDays / n) * 7, (cur.walkedDays / n) * 7, "", "up", prev.walkedDays, cur.walkedDays, 1),
+    row("inZone", "Time in zone", prev.inZonePct, cur.inZonePct, "%", "up", prev.walkedDays, cur.walkedDays),
+    // Avg HR is deliberately NEUTRAL here: PadCoach pins heart rate and lets the belt float, so this number
+    // is the controller's setpoint, not a fitness result. Speed is where fitness shows up.
+    row("avgHr", "Avg HR", prev.avgHr, cur.avgHr, " bpm", null, prev.hrDays, cur.hrDays),
+    row("speed", "Speed at " + Z2_MID + " bpm", prev.speedAtZone, cur.speedAtZone, " km/h", "up", prev.bandSessions, cur.bandSessions, 2),
+  ];
+  // Resting HR only appears once PadCoach is actually sending it — a permanently blank row would be noise.
+  if (prev.restDays || cur.restDays) rows.push(row("resting", "Resting HR", prev.restingBPM, cur.restingBPM, " bpm", "down", prev.restDays, cur.restDays));
+  return { rows, cur, prev, n };
+};
+
+// Monday-anchored weeks, oldest → newest, ending with the week that contains endKey (Strava and Zwift
+// both anchor weekly views to Monday; his walks run late, so a Sunday-anchored week would split them).
+const niceCeil = (v) => { if (!(v > 0)) return 0; const p = Math.pow(10, Math.floor(Math.log10(v / 4))); const c = [1, 2, 2.5, 3, 4, 5, 10].map((f) => f * p); return (c.find((x) => x * 4 >= v) || c[c.length - 1]) * 4; };
+const weekStartKey = (key) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() - ((dt.getDay() + 6) % 7)); return dt.toLocaleDateString("en-CA"); };
+const cardioWeeks = (days, endKey, n) => {
+  const thisWeek = weekStartKey(endKey);
+  return [...Array(n)].map((_, i) => {
+    const start = shiftDate(thisWeek, -(n - 1 - i) * 7);
+    const win = [...Array(7)].map((__, j) => ({ key: shiftDate(start, j), st: cardioDay((days || {})[shiftDate(start, j)]) }))
+      .filter((x) => x.key <= endKey);                       // never count days that haven't happened yet
+    const a = cardioAgg(win);
+    const [, mm, dd] = start.split("-");
+    return { start, lbl: `${+mm}/${+dd}`, partial: start === thisWeek, ...a };
+  });
+};
+// 8 × 7 of gold-opacity cells. `future` marks the rest of this week so today never looks like a miss.
+const cardioCalendar = (days, endKey, weeks = 8) => cardioWeeks(days, endKey, weeks).map((w) => ({
+  start: w.start,
+  cells: [...Array(7)].map((_, j) => { const key = shiftDate(w.start, j); return { key, st: cardioDay((days || {})[key]), future: key > endKey }; }),
+}));
+
+// Consecutive days walked, counted back from today — and if today hasn't happened yet the count starts at
+// yesterday rather than breaking. A streak is a nudge, not a punishment (Strava's own streak is weekly for
+// exactly this reason), so nothing here ever renders a missed day as a failure.
+const cardioStreak = (days, endKey) => {
+  const walked = (k) => { const s = cardioDay((days || {})[k]); return !!(s && s.walked); };
+  let k = walked(endKey) ? endKey : shiftDate(endKey, -1), n = 0;
+  while (walked(k) && n < 4000) { n++; k = shiftDate(k, -1); }
+  return n;
+};
+// The three records that reward the behaviour he actually wants — time in zone, not pace (a treadmill
+// pace record under closed-loop control measures the controller, not him).
+const cardioRecords = (days, endKey) => {
+  const keys = Object.keys(days || {}).sort();
+  let session = null, day = null;
+  keys.forEach((k) => {
+    const st = cardioDay(days[k]); if (!st) return;
+    st.sessions.forEach((s) => { const min = (s.inZoneSec || 0) / 60; if (min > 0 && (!session || min > session.min)) session = { min, key: k, movingMin: s.movingSec / 60 }; });
+    const dmin = st.zone2Min; if (dmin != null && dmin > 0 && (!day || dmin > day.min)) day = { min: dmin, key: k };
+  });
+  const wk = cardioWeeks(days, endKey, 53).filter((w) => w.zone2Min > 0).sort((a, b) => b.zone2Min - a.zone2Min)[0] || null;
+  return { session, day, week: wk ? { min: wk.zone2Min, start: wk.start } : null,
+    longestSessionMin: keys.reduce((a, k) => { const st = cardioDay(days[k]); return st ? st.sessions.reduce((b, s) => Math.max(b, s.movingSec / 60), a) : a; }, 0) };
 };
 const DEFAULT_FOOD_IDS = ["chicken300", "rice200", "eggs3", "whites200", "whey1"];   // original staples — never pruned
 // keep all favs + default staples; cap other foods to the n most-recently-used (by lastUsedT).
@@ -662,7 +989,10 @@ const DEFAULT = { version: 2, lastTag: null, lastDay: 0, sessionCount: 0, weight
   //                sessions:[...] (PadCoach, measured), manual:[{id,type,durationSec,distanceKm,steps,t}] }.
   // lastAutoSyncAt: Task 51 — set only by the automatic PadCoach→cardio.json sync tick, kept separate
   // from lastImportAt (the manual file-picker path) so each surfaces its own honest "last happened" time.
-  cardio: { days: {}, lastImportAt: null, lastAutoSyncAt: null } };
+  // analytics: Task 59 — the schema-2 payload's top-level `analytics` block (efficiency trend, HRV,
+  // resting HR, weekly time in zone, adaptive volume target), stored whole and REPLACED on every import
+  // because PadCoach recomputes all of it from scratch each time. null until a schema-2 export arrives.
+  cardio: { days: {}, lastImportAt: null, lastAutoSyncAt: null, analytics: null } };
 
 /* ───────────────────────── program ───────────────────────── */
 const AB_VARIANTS = [
@@ -2746,33 +3076,142 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
   );
 }
 
-// CardioView (Task 48, Part B): first-class Cardio tab, promoted out of Diet's advanced settings — PadCoach
-// import + the day's cardio summary now live here instead. Additive only, its own `mem.cardio` namespace,
-// never touches nutrition.days[].steps (a manually-entered field for a different purpose — see DEFAULT's own
-// comment on `cardio`). Own local `viewDate`, mirroring DietView's day-navigation pattern exactly.
+// CardioView — Task 48 Part B made Cardio a first-class tab; Task 57 gave it something to say.
+// It used to render one day at a time with no chart at all, which is exactly what he reported:
+// "I cannot see anything but time and steps." Now the analysis comes first and the plumbing last —
+// today, trend, consistency, progress, this week, records, sessions, manual entry, sync.
+//
+// Two constraints shaped every card below, and they pull in opposite directions:
+//   1. He has ONE real walk. Anything that only works after three months of history is a failure
+//      dressed as a roadmap, so the first screen has to be useful after a single session — records,
+//      time-in-zone, week-against-the-WHO-line and the day hero all are.
+//   2. Nothing may be rendered as fact that the data cannot support. Trend directions stay behind
+//      PadCoach's own TrendDataFloor and print how far short they are; a figure PadCoach hasn't sent
+//      says so by name instead of appearing as a zero. If the treadmill isn't moving, it says so.
 function CardioView({ mem, importCardioExport, addManualCardio, removeManualCardio }) {
   const cardio = mem.cardio || DEFAULT.cardio;
-  const [viewDate, setViewDate] = useState(todayKey());
-  const isToday = viewDate === todayKey();
+  const days = cardio.days || {};
+  const today = todayKey();
+  const [viewDate, setViewDate] = useState(today);
+  const isToday = viewDate === today;
   const k = viewDate;
-  const cd = cardio.days[k] || null;                 // PadCoach + manual data for the viewed day, if any
+  const cd = days[k] || null;                        // raw stored day (PadCoach + manual), if any
+  const st = cardioDay(cd);                          // …normalized: derived rates, nulls where unknown
   const manual = (cd && cd.manual) || [];
   const [toast, setToast] = useState("");
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2200); };
   const tHM = (iso) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; } };
+  const dLbl = (key) => { const [y, m, d] = key.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric" }); };
   const [form, setForm] = useState({ type: "walk", durationMin: 0, distanceKm: 0, steps: 0 });
   const resetForm = () => setForm({ type: "walk", durationMin: 0, distanceKm: 0, steps: 0 });
+  const [metric, setMetric] = useState("zone2");
+  const [range, setRange] = useState("14d");         // 14d | 8w — same numbers, two zoom levels
+  const [openSess, setOpenSess] = useState(null);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const card = "mt-4 rounded-2xl border p-5";
+  const hdr = "font-mono text-[11px] uppercase tracking-[0.2em]";
+  const sub = "font-mono text-[9px] uppercase tracking-wider";
+  const cap = "mt-2 font-mono text-[9px] leading-relaxed";
 
-  // Daily total across all sources — only fields both PadCoach and a manual entry actually carry (steps,
-  // distance, time) are summed; zone-2 minutes and calories are derived from heart-rate data a manual entry
-  // never has, so those stay PadCoach-only figures, never silently padded with a guess.
-  const manualStepsTotal = manual.reduce((s, m) => s + (m.steps || 0), 0);
-  const manualDistTotal = manual.reduce((s, m) => s + (m.distanceKm || 0), 0);
-  const manualSecTotal = manual.reduce((s, m) => s + (m.durationSec || 0), 0);
-  const totalSteps = (cd ? cd.steps || 0 : 0) + manualStepsTotal;
-  const totalDist = (cd ? cd.distanceKm || 0 : 0) + manualDistTotal;
-  const totalSec = (cd ? cd.movingTimeSec || 0 : 0) + manualSecTotal;
-  const hasAnything = !!cd && (totalSteps > 0 || totalDist > 0 || totalSec > 0 || (cd.sessions || []).length > 0 || manual.length > 0);
+  // ── derived once per render of the whole history ──
+  const win14 = useMemo(() => cardioWindow(days, today, 14), [days, today]);
+  const weeks8 = useMemo(() => cardioWeeks(days, today, 8), [days, today]);
+  const cal = useMemo(() => cardioCalendar(days, today, 8), [days, today]);
+  const agg28 = useMemo(() => cardioAgg(cardioWindow(days, today, 28)), [days, today]);
+  const streak = useMemo(() => cardioStreak(days, today), [days, today]);
+  const recs = useMemo(() => cardioRecords(days, today), [days, today]);
+  const trend = useMemo(() => cardioTrendRows(days, today, 28), [days, today]);
+  const spd90 = useMemo(() => cardioWindow(days, today, 90), [days, today]);
+  const allDays = useMemo(() => Object.keys(days).sort().map((key) => ({ key, st: cardioDay(days[key]) })).filter((x) => x.st && x.st.walked), [days]);
+  const everWalked = allDays.length;
+  // Task 59 — PadCoach's whole-history analysis block. TOP-LEVEL, not per-day: these are trends over the
+  // entire history, recomputed from scratch on every export, and keeping them out of `days` is also what
+  // keeps them clear of CARDIO_DAY_CAP. null for a schema-1 payload — every card below tolerates that.
+  const an = cardio.analytics || null;
+  // Card 2's right-hand figure: the adaptive daily target, from analytics.volume (never a per-day key).
+  const target = an && an.volume && an.volume.targetMinutes ? an.volume : null;
+  // Task 59 — two different kinds of "not here", kept apart on purpose:
+  //   missing  — PadCoach DOES compute it; this payload just doesn't carry it (a schema-1 export, or a
+  //              trend with nothing behind it yet). It fills in by itself once he installs the newer build.
+  //   deferred — PadCoach does not compute it AT ALL yet, verified in CoachExport.swift. Saying so
+  //              separately stops the tab implying that installing a build would fix these.
+  const missing = useMemo(() => {
+    const have = { eff: !!(an && an.efficiency), dec: false, rest: !!(an && an.restingHeartRate && an.restingHeartRate.readings.length) };
+    allDays.forEach((x) => { if (x.st.restingBPM != null || x.st.hrv) have.rest = true;
+      x.st.sessions.forEach((s) => { if (s.decoupling) have.dec = true; }); });
+    return [!have.eff && "efficiency trend", !have.dec && "per-session decoupling", !have.rest && "resting HR & HRV"].filter(Boolean);
+  }, [allDays, an]);
+  const deferred = useMemo(() => {
+    const have = { hist: false, cad: false, rpe: false };
+    allDays.forEach((x) => x.st.sessions.forEach((s) => {
+      if (s.hrHistogram) have.hist = true; if (s.cadenceStepsPerMin != null) have.cad = true; if (s.effort != null) have.rpe = true; }));
+    return [!have.cad && "cadence (steps/min)", !have.hist && "heart-rate histograms", !have.rpe && "perceived effort"].filter(Boolean);
+  }, [allDays]);
+
+  const fmt = (v, dp) => (v == null ? "—" : dp ? (Math.round(v * 10 ** dp) / 10 ** dp).toFixed(dp) : Math.round(v).toLocaleString());
+  const mins = (sec) => Math.round((sec || 0) / 60);
+  // Volume metrics read 0 on a day he didn't walk — that is a true fact. Rate metrics (HR, speed, % in
+  // zone) read null, because "didn't walk" is not the same statement as "walked at zero km/h".
+  const M = [
+    { id: "zone2", label: "Zone-2 min", suffix: " min", dp: 0, day: (s) => (s ? s.zone2Min || 0 : 0), week: (w) => w.zone2Min },
+    { id: "moving", label: "Moving", suffix: " min", dp: 0, day: (s) => (s ? s.movingSec / 60 : 0), week: (w) => w.movingSec / 60 },
+    { id: "distance", label: "Distance", suffix: " km", dp: 1, day: (s) => (s ? s.distanceKm : 0), week: (w) => w.distanceKm },
+    { id: "steps", label: "Steps", suffix: "", dp: 0, day: (s) => (s ? s.steps : 0), week: (w) => w.steps },
+    { id: "kcal", label: "Calories", suffix: " kcal", dp: 0, day: (s) => (s ? s.kcal || 0 : 0), week: (w) => w.kcal },
+    { id: "avgHr", label: "Avg HR", suffix: " bpm", dp: 0, rate: true, day: (s) => (s ? s.avgHr : null), week: (w) => w.avgHr },
+    { id: "inZone", label: "% in zone", suffix: "%", dp: 0, rate: true, day: (s) => (s ? s.inZonePct : null), week: (w) => w.inZonePct },
+    { id: "speed", label: `km/h @ ${Z2_MID}`, suffix: " km/h", dp: 2, rate: true, day: (s) => (s ? s.speedAtZone : null), week: (w) => w.speedAtZone },
+  ];
+  const m = M.find((x) => x.id === metric) || M[0];
+  const rnd = (v) => (v == null ? null : Math.round(v * 100) / 100);
+  const series = range === "8w"
+    ? weeks8.map((w) => ({ d: w.lbl, v: rnd(m.week(w)) }))
+    : win14.map((x) => { const [, mm, dd] = x.key.split("-"); return { d: `${+mm}/${+dd}`, v: rnd(m.day(x.st)) }; });
+  const sVals = series.map((p) => p.v).filter((v) => v != null && (m.rate ? true : v > 0));
+  const sAvg = sVals.length ? sVals.reduce((a, b) => a + b, 0) / sVals.length : null;
+  // Task 59 — the reference line on every weekly volume view. The WHO's 150 min/week is near-meaningless
+  // at his volume: a normal week for him is ~470 min, so that line sits on the floor of the chart and
+  // every week clears it without saying anything. His OWN adaptive target × 7 is the honest line — and it
+  // only exists once PadCoach sends analytics.volume, so the WHO floor stays as the fallback. Whichever
+  // one is drawn is labelled by name, so he always knows which line he is looking at.
+  const weekGoalPad = target && target.targetMinutes ? target.targetMinutes * 7 : null;
+  const weekGoal = weekGoalPad != null ? weekGoalPad : WHO_WEEK_MIN;
+  const weekGoalLabel = weekGoalPad != null ? "your target" : "WHO floor";
+  const weekGoalNote = weekGoalPad != null
+    ? `PadCoach's adaptive target, ${Math.round(target.targetMinutes)} min/day × 7`
+    : `the WHO's ${WHO_WEEK_MIN} min/week floor — a stand-in until PadCoach sends your own target`;
+  const chartGoal = m.id === "zone2" ? (range === "8w" ? weekGoal : target && target.targetMinutes) || null : null;
+
+  // ── speed at 130 bpm: one point per day, only from sessions whose avg HR actually landed in the band ──
+  const spdPts = spd90.filter((x) => x.st && x.st.speedAtZone != null).map((x) => { const [, mm, dd] = x.key.split("-"); return { d: `${+mm}/${+dd}`, v: Math.round(x.st.speedAtZone * 100) / 100 }; });
+  const spdSessions = spd90.reduce((a, x) => a + (x.st ? x.st.bandSessions : 0), 0);
+  const spdNow = spdPts.length ? spdPts[spdPts.length - 1].v : null;
+  // Task 59 — PadCoach's own EfficiencyTrend verdict lives in analytics.efficiency, NOT on a session: a
+  // session carries only a bare `efficiencyRatio`, with no direction and no confidence attached. This
+  // block sees the full history and folds grade in, so it wins outright over anything derived here, and
+  // its confidence sentence is written to be shown word for word.
+  const padEff = an && an.efficiency ? an.efficiency : null;
+  const padEffRatio = !padEff ? null
+    : padEff.rolling.length ? padEff.rolling[padEff.rolling.length - 1].v
+    : padEff.readings.length ? padEff.readings[padEff.readings.length - 1].v : null;
+  const padRest = an && an.restingHeartRate && an.restingHeartRate.latestRollingBPM != null ? an.restingHeartRate : null;
+  const padHrv = an && an.hrv && an.hrv.latestShortMs != null ? an.hrv : null;
+
+  const arrow = { up: "↑", down: "↓", flat: "→" };
+  const dirCol = (r) => (!r.ready || !r.better ? C.ash : r.dir === "flat" ? C.ash : (r.dir === r.better ? C.sage : C.rust));
+  const cellBg = (s) => {
+    if (!s || !s.walked) return C.edge;
+    const mn = s.zone2Min != null ? s.zone2Min : s.movingSec / 60;      // fall back to moving time when there's no HR
+    return `rgba(201,162,39,${Math.max(0.18, Math.min(1, mn / 120)).toFixed(2)})`;
+  };
+  // Only weeks that overlap the history he actually has count toward the weekly average — averaging in
+  // the weeks before his first logged walk would report "avg 0 min/week" at someone who walked 75 minutes.
+  const firstKey = allDays.length ? allDays[0].key : null;
+  const liveWeeks = weeks8.filter((w) => !w.partial && firstKey && shiftDate(w.start, 6) >= firstKey);
+  const weekOver = liveWeeks.filter((w) => w.zone2Min >= weekGoal).length;
+  const doneWeeks = liveWeeks.length;
+  const wkAvg = doneWeeks ? liveWeeks.reduce((a, w) => a + w.zone2Min, 0) / doneWeeks : null;
+  const thisWeek = weeks8[weeks8.length - 1];
 
   return (
     <>
@@ -2785,94 +3224,362 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
         <button onClick={() => setViewDate(shiftDate(viewDate, 1))} aria-label="next day" className="flex h-11 w-11 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronRight size={18} /></button>
       </div>
 
-      {/* Import — moved here verbatim from Diet's advanced settings, now front-and-centre since this is its
-          own tab rather than a buried toggle. */}
-      <div className="mt-4 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
-        <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}><Activity size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />PadCoach import</span>
-        <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>Import the file PadCoach exports (Dashboard → Settings → "Export for Coach App") — steps, distance, moving time, zone-2 minutes &amp; calories, per day. Nothing is sent automatically; you pick the file each time.</p>
-        <div className="mt-3 flex items-center gap-3">
-          <label className="inline-flex cursor-pointer items-center gap-2 rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>
-            Import PadCoach export…
-            <input type="file" accept="application/json" className="hidden" onChange={async (e) => {
-              const file = e.target.files && e.target.files[0]; e.target.value = "";
-              if (!file) return;
-              try {
-                const json = JSON.parse(await file.text());
-                const n = await importCardioExport(json);
-                flash(`Imported cardio for ${n} day${n === 1 ? "" : "s"}`);
-              } catch (err) { flash("Import failed: " + (err && err.message ? err.message : "bad file")); }
-            }} />
-          </label>
-          {toast && <span className="font-mono text-[10px]" style={{ color: C.sage }}>{toast}</span>}
-        </div>
-        {cardio.lastImportAt && (
-          <p className="mt-1.5 font-mono text-[9px]" style={{ color: C.ashDim }}>last imported {new Date(cardio.lastImportAt).toLocaleString()}</p>
-        )}
-        {/* Task 51 — the automatic path's own "last happened" line, separate from the manual one above so
-            neither ever silently claims the other's timing. Only ever set by syncCardioFromPadCoach(). */}
-        {cardio.lastAutoSyncAt && (
-          <p className="mt-1.5 font-mono text-[9px]" style={{ color: C.ashDim }}>auto-synced from PadCoach {new Date(cardio.lastAutoSyncAt).toLocaleString()}</p>
-        )}
-      </div>
-
-      {/* Daily total across all sources */}
-      <div className="mt-4 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
-        <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>{isToday ? "Today" : relDay(viewDate)} · total</span>
-        {hasAnything ? (
+      {/* ── 2. The day ── hero pair: minutes in zone against whatever the honest comparison is today. */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <span className={hdr} style={{ color: C.ash }}><Footprints size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />{isToday ? "Today" : relDay(viewDate)}</span>
+        {st && st.walked ? (
           <>
-            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[11px]" style={{ color: C.bone }}>
-              <span>{totalSteps.toLocaleString()} steps</span>
-              <span>{totalDist.toFixed(2)} km</span>
-              <span>{fmtHM(totalSec / 3600)} moving</span>
-            </div>
-            {/* Zone-2 minutes and calories only ever come from PadCoach's own HR-derived sessions — shown
-                only when a real import produced them, never a synthetic zero from a manual-only day. */}
-            {cd && Array.isArray(cd.sessions) && cd.sessions.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[10px]" style={{ color: C.ashDim }}>
-                <span>{Math.round(cd.zone2Min || 0)} min zone 2 (PadCoach)</span>
-                {cd.calorie && <span>≈{Math.round(cd.calorie.kcal)} kcal ({Math.round(cd.calorie.lowKcal)}–{Math.round(cd.calorie.highKcal)}, PadCoach)</span>}
+            <div className="mt-3 flex items-end justify-between gap-3">
+              <div>
+                <p className={sub} style={{ color: C.ashDim }}>{st.zone2Min != null ? "minutes in zone 2" : "moving time"}</p>
+                <p className="font-mono text-2xl font-bold" style={{ color: C.bone }}>{st.zone2Min != null ? Math.round(st.zone2Min) : mins(st.movingSec)}<span className="ml-1 font-mono text-[13px] font-normal" style={{ color: C.ash }}>min</span></p>
               </div>
-            )}
+              {/* The comparison is a ZONE-2 figure, so it only belongs beside a zone-2 hero. On a
+                  manual-only day the hero is moving time and "30 of 98" would be comparing two
+                  different things, so the whole right-hand column and its target notes drop out. */}
+              {st.zone2Min != null && (
+                <div className="text-right">
+                  <p className={sub} style={{ color: C.ashDim }}>{target ? "PadCoach target" : "your 28-day avg"}</p>
+                  {/* An average of one day IS that day, so comparing today against it would be circular —
+                      it needs a few days behind it before it is a comparison at all. */}
+                  <p className="font-mono text-xl font-bold" style={{ color: target || agg28.walkedDays >= 3 ? C.gold : C.ashDim }}>{target ? Math.round(target.targetMinutes) : agg28.walkedDays >= 3 ? Math.round(agg28.zone2Min / agg28.walkedDays) : "—"}<span className="ml-1 font-mono text-[12px] font-normal" style={{ color: C.ash }}>min</span></p>
+                  {!target && agg28.walkedDays < 3 && <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>needs 3+ days to average</p>}
+                </div>
+              )}
+            </div>
+            {/* `holdMessage` is VolumeProgression's own single factual line, written to be rendered verbatim.
+                A day under target is DATA, not failure — nothing here is ever red. */}
+            {st.zone2Min != null && target && (target.holdMessage || target.holdReason) && <p className={cap} style={{ color: C.ashDim }}>{target.holdMessage || `increase held back — ${target.holdReason}`}</p>}
+            {st.zone2Min != null && target && target.projectedDaysToGoal != null && <p className="mt-1 font-mono text-[10px]" style={{ color: C.ash }}>projected to reach {target.goalMinutes ? `${Math.round(target.goalMinutes)} min/day` : "the goal"} in ~{Math.round(target.projectedDaysToGoal)} days{target.projectedDate ? ` · ${target.projectedDate}` : ""}</p>}
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[11px]" style={{ color: C.bone }}>
+              <span>{st.steps.toLocaleString()} steps</span>
+              <span>{st.distanceKm.toFixed(2)} km</span>
+              <span>{fmtHM(st.movingSec / 3600)} moving</span>
+              {st.sessions.length > 0 && <span style={{ color: C.ash }}>{st.sessions.length} session{st.sessions.length === 1 ? "" : "s"}</span>}
+            </div>
+            {/* Zone-2 minutes, calories and % in zone are heart-rate figures — PadCoach-only, never padded
+                out with a manual entry's guess. A manual-only day simply doesn't show them. */}
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[10px]" style={{ color: C.ashDim }}>
+              {st.inZonePct != null && <span><span style={{ color: C.sage }}>{Math.round(st.inZonePct)}%</span> of measured walking inside the band</span>}
+              {st.avgHr != null && <span>avg {Math.round(st.avgHr)} bpm{st.maxHr ? ` · max ${Math.round(st.maxHr)}` : ""}</span>}
+              {st.calorie && <span>≈{Math.round(st.calorie.kcal)} kcal ({Math.round(st.calorie.lowKcal)}–{Math.round(st.calorie.highKcal)})</span>}
+              {/* resting HR is from the seated pre-walk baseline, never from the walk — `restingSource`
+                  says whether it was measured, typed in by hand, or a mix of both that day. */}
+              {st.restingBPM != null && <span>resting {Math.round(st.restingBPM)} bpm{st.restingSource ? ` (${st.restingSource})` : ""}</span>}
+              {st.hrv && st.hrv.rmssdMs != null && <span>HRV {Math.round(st.hrv.rmssdMs)} ms rmssd{st.hrv.quality === "usableWithCaveat" ? " (usable, with a caveat)" : ""}</span>}
+            </div>
+            {st.sessions.length === 0 && manual.length > 0 && <p className={cap} style={{ color: C.ashDim }}>manual entry only — no heart rate was measured, so there are no zone-2 minutes or calories for this day.</p>}
           </>
         ) : (
           <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>nothing recorded for this day yet</p>
         )}
       </div>
 
-      {/* PadCoach sessions — individual figures per session, not just a count */}
-      {cd && Array.isArray(cd.sessions) && cd.sessions.length > 0 && (
-        <div className="mt-4 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
-          <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>PadCoach sessions</span>
-          <div className="mt-3 flex flex-col gap-2">
-            {cd.sessions.map((s, i) => (
-              <div key={s.id || i} className="flex flex-col gap-1 rounded-lg border px-3 py-2" style={{ borderColor: C.edge }}>
-                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                  <span className="font-mono text-[11px] font-bold" style={{ color: C.bone }}>{tHM(s.startedAt)}–{tHM(s.endedAt)}{s.bandName ? ` · ${s.bandName}` : ""}</span>
-                  <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.goldDim }}>measured</span>
-                </div>
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px]" style={{ color: C.ash }}>
-                  <span>{(s.distanceKm || 0).toFixed(2)} km</span>
-                  <span>{fmtHM((s.movingTimeSec || 0) / 3600)}</span>
-                  <span>{(s.totalSteps || 0).toLocaleString()} steps</span>
-                  {s.avgHeartRate != null && <span>avg {s.avgHeartRate} bpm</span>}
-                  {s.maxHeartRate != null && <span>max {s.maxHeartRate} bpm</span>}
-                  {s.timeInZoneSec > 0 && <span>{Math.round(s.timeInZoneSec / 60)} min in zone</span>}
-                  {s.calorie && <span>≈{Math.round(s.calorie.kcal)} kcal ({Math.round(s.calorie.lowKcal)}–{Math.round(s.calorie.highKcal)})</span>}
-                </div>
+      {everWalked === 0 ? (
+        /* Deliberately empty, not broken: there is genuinely nothing to chart yet, and inventing a
+           scaffold of zero-height bars would be a worse answer than saying so. */
+        <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+          <span className={hdr} style={{ color: C.ash }}><TrendingUp size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Progress</span>
+          <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>No walks have reached this app yet. Your trend, consistency calendar, weekly volume and records all appear here after the first one — PadCoach syncs on its own, or add a walk by hand below.</p>
+        </div>
+      ) : (
+        <>
+          {/* ── 3. Trend ── the Diet tab's chart, pointed at cardio. Same numbers, two zoom levels. */}
+          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+            <div className="flex items-center justify-between gap-2">
+              <span className={hdr} style={{ color: C.ash }}><TrendingUp size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Trend</span>
+              <div className="flex gap-1.5">
+                {[["14d", "14 days"], ["8w", "8 weeks"]].map(([id, lab]) => (
+                  <button key={id} onClick={() => setRange(id)} className="rounded-full border px-3 py-1 font-mono text-[10px]" style={{ borderColor: range === id ? C.goldDim : C.edge, background: range === id ? "#241F12" : "transparent", color: range === id ? C.gold : C.ash }}>{lab}</button>
+                ))}
               </div>
-            ))}
+            </div>
+            <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+              {M.map((x) => (
+                <button key={x.id} onClick={() => setMetric(x.id)} className="shrink-0 rounded-full border px-3 py-1.5 font-mono text-[11px] whitespace-nowrap" style={{ borderColor: metric === x.id ? C.goldDim : C.edge, background: metric === x.id ? "#241F12" : "transparent", color: metric === x.id ? C.gold : C.ash }}>{x.label}</button>
+              ))}
+            </div>
+            <div className="mt-2 font-mono text-[11px]">
+              <span style={{ color: C.ash }}>avg <span style={{ color: C.bone }}>{fmt(sAvg, m.dp)}</span>{m.suffix}{range === "8w" ? (m.rate ? "" : "/week") : m.rate ? "" : " per day walked"}</span>
+              <span className="ml-3" style={{ color: C.ash }}>{sVals.length} of {series.length} {range === "8w" ? "weeks" : "days"} with data</span>
+            </div>
+            <div className="mt-3" style={{ height: 130, width: "100%" }}>
+              <ResponsiveContainer>
+                <LineChart data={series} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                  <CartesianGrid stroke="#221E15" vertical={false} />
+                  <XAxis dataKey="d" tick={{ fill: C.ashDim, fontSize: 8, fontFamily: "monospace" }} stroke="#2A2418" interval={range === "8w" ? 0 : 2} />
+                  <YAxis tick={{ fill: C.ashDim, fontSize: 9, fontFamily: "monospace" }} stroke="#2A2418" width={40} domain={m.rate ? ["auto", "auto"] : [0, chartGoal ? (mx) => niceCeil(Math.max(mx * 1.02, chartGoal * 1.05)) : "auto"]} />
+                  <Tooltip contentStyle={{ background: "#15120A", border: `1px solid ${C.edge}`, borderRadius: 8, fontFamily: "monospace", fontSize: 11 }} labelStyle={{ color: C.ash }} itemStyle={{ color: C.bone }} formatter={(v) => [`${v}${m.suffix}`, m.label]} />
+                  {chartGoal ? <ReferenceLine y={chartGoal} stroke={C.goldDim} strokeDasharray="2 4" /> : null}
+                  <Line type="monotone" dataKey="v" stroke={C.gold} strokeWidth={2} dot={{ r: 2, fill: C.gold }} connectNulls isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <p className={cap} style={{ color: C.ashDim }}>
+              {m.rate
+                ? `a ${range === "8w" ? "week" : "day"} with no measured heart rate leaves a gap rather than a zero — you didn't walk at 0 bpm.`
+                : `${range === "8w" ? "weeks" : "days"} you didn't walk count as zero, because they are.`}
+              {chartGoal ? ` dashed line = ${range === "8w" ? weekGoalNote : "PadCoach's adaptive target for the day"}.` : ""}
+              {sVals.length < 3 ? " the line needs a few more days before its shape means anything." : ""}
+            </p>
           </div>
+
+          {/* ── 4. Consistency ── the training variable that actually is his goal. Never a red cell. */}
+          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+            <span className={hdr} style={{ color: C.ash }}><CalendarDays size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Consistency · 8 weeks</span>
+            <div className="mt-3 flex gap-1" style={{ paddingLeft: 0 }}>
+              {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => <span key={i} className="flex-1 text-center font-mono text-[8px]" style={{ color: C.ashDim }}>{d}</span>)}
+            </div>
+            <div className="mt-1 flex flex-col gap-1">
+              {cal.map((w) => (
+                <div key={w.start} className="flex gap-1">
+                  {w.cells.map((c) => (
+                    <div key={c.key} title={`${c.key}${c.st && c.st.walked ? ` · ${c.st.zone2Min != null ? Math.round(c.st.zone2Min) + " min in zone" : mins(c.st.movingSec) + " min moving"}` : ""}`}
+                      className="flex-1 rounded-[3px]" style={{ height: 16, background: c.future ? "transparent" : cellBg(c.st), border: c.future ? `1px dashed ${C.edge}` : c.key === today ? `1px solid ${C.activeEdge}` : "none" }} />
+                  ))}
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 font-mono text-[11px]" style={{ color: C.ash }}>
+              <span style={{ color: C.bone }}>{agg28.walkedDays}</span> of the last 28 days
+              <span className="ml-3" style={{ color: streak > 0 ? C.sage : C.ash }}>{streak}-day streak</span>
+              <span className="ml-3" style={{ color: C.ashDim }}>{everWalked} day{everWalked === 1 ? "" : "s"} logged in all</span>
+            </p>
+            <p className={cap} style={{ color: C.ashDim }}>brighter = more minutes in zone that day. dashed cells are the rest of this week, not misses.</p>
+          </div>
+
+          {/* ── 5. Progress ── speed at 130 bpm, then the 28-vs-28 comparison in Apple's Trends shape. */}
+          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+            <span className={hdr} style={{ color: C.ash }}><Activity size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Progress</span>
+            <div className="mt-3 flex items-end justify-between gap-3">
+              <div>
+                <p className={sub} style={{ color: C.ashDim }}>speed at {Z2_MID} bpm</p>
+                <p className="font-mono text-2xl font-bold" style={{ color: spdNow != null ? C.bone : C.ashDim }}>{spdNow != null ? spdNow.toFixed(2) : "—"}<span className="ml-1 font-mono text-[13px] font-normal" style={{ color: C.ash }}>km/h</span></p>
+              </div>
+              <div className="text-right">
+                <p className={sub} style={{ color: C.ashDim }}>based on</p>
+                <p className="font-mono text-[12px]" style={{ color: C.ash }}>{spdSessions} session{spdSessions === 1 ? "" : "s"} in band</p>
+              </div>
+            </div>
+            {/* PadCoach's own EfficiencyTrend verdict wins when it arrives — it sees the whole history and
+                folds grade in, and its confidence sentence is written to be shown word for word. */}
+            {padEff ? (
+              <>
+                {/* A direction is a VERDICT, so it is coloured only when PadCoach's own
+                    `confidence.trendworthy` says it may be — this app never reinvents that threshold.
+                    "unknown" is never rendered as "flat": no data is not measured-no-change. */}
+                <p className="mt-2 font-mono text-[12px]" style={{ color: !confOk(padEff.confidence) ? C.ash : padEff.direction === "improving" ? C.sage : padEff.direction === "declining" ? C.rust : C.ash }}>
+                  PadCoach's efficiency trend: {padEff.direction && padEff.direction !== "unknown" ? padEff.direction : "no direction yet"}
+                  {padEffRatio != null ? ` · ratio ${padEffRatio.toFixed(3)}` : ""}
+                  {padEff.readings.length ? <span style={{ color: C.ashDim }}> · {padEff.readings.length} matched-effort session{padEff.readings.length === 1 ? "" : "s"}</span> : null}
+                </p>
+                {padEff.confidence && <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>{padEff.confidence.reason || `confidence: ${padEff.confidence.grade}`}</p>}
+              </>
+            ) : null}
+            {/* PadCoach's own rolling resting-HR and HRV figures, shown only when it actually sends them. */}
+            {padRest && (
+              <p className="mt-2 font-mono text-[11px]" style={{ color: C.ash }}>resting HR, 7-day rolling <span style={{ color: C.bone }}>{Math.round(padRest.latestRollingBPM)}</span> bpm
+                {padRest.confidence && padRest.confidence.reason ? <span className="block font-mono text-[10px]" style={{ color: C.ashDim }}>{padRest.confidence.reason}</span> : null}</p>
+            )}
+            {padHrv && (
+              <p className="mt-2 font-mono text-[11px]" style={{ color: C.ash }}>HRV rmssd, 7-day <span style={{ color: C.bone }}>{Math.round(padHrv.latestShortMs)}</span> ms{padHrv.latestLongMs != null ? ` against a 60-day ${Math.round(padHrv.latestLongMs)} ms` : ""}
+                {padHrv.confidence && padHrv.confidence.reason ? <span className="block font-mono text-[10px]" style={{ color: C.ashDim }}>{padHrv.confidence.reason}</span> : null}</p>
+            )}
+            {spdPts.length >= 2 ? (
+              <div className="mt-3" style={{ height: 120, width: "100%" }}>
+                <ResponsiveContainer>
+                  <LineChart data={spdPts} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                    <CartesianGrid stroke="#221E15" vertical={false} />
+                    <XAxis dataKey="d" tick={{ fill: C.ashDim, fontSize: 8, fontFamily: "monospace" }} stroke="#2A2418" interval="preserveStartEnd" />
+                    <YAxis tick={{ fill: C.ashDim, fontSize: 9, fontFamily: "monospace" }} stroke="#2A2418" width={40} domain={[(mn) => Math.floor(mn * 20) / 20, (mx) => Math.ceil(mx * 20) / 20]} />
+                    <Tooltip contentStyle={{ background: "#15120A", border: `1px solid ${C.edge}`, borderRadius: 8, fontFamily: "monospace", fontSize: 11 }} labelStyle={{ color: C.ash }} itemStyle={{ color: C.bone }} formatter={(v) => [`${v} km/h`, `at ~${Z2_MID} bpm`]} />
+                    <Line type="monotone" dataKey="v" stroke={C.gold} strokeWidth={2} dot={{ r: 2, fill: C.gold }} connectNulls isAnimationActive={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>{spdSessions === 0
+                ? "No session has averaged inside the band yet, so there is nothing honest to compare. This fills in on its own as you walk."
+                : "One session in band so far — the line starts at two. This is the number that answers “am I getting fitter”: if the belt runs faster at the same heart rate, you are."}</p>
+            )}
+            <p className={cap} style={{ color: C.ashDim }}>
+              only sessions whose <em>average</em> heart rate landed inside {Z2_LO}–{Z2_HI} bpm are counted, with no adjustment applied — a slower walk is left out rather than scaled up.
+              speed is distance ÷ moving time unless PadCoach sends its own. it is <em>not</em> grade-adjusted, so changing the treadmill's incline breaks the comparison.
+              you walk while working, and work stress moves heart rate independently of fitness — read months, never one session.
+            </p>
+
+            {/* 28 vs 28 — Apple's Trends, scaled to the history that exists. */}
+            <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
+              <p className={sub} style={{ color: C.ashDim }}>last 28 days vs the 28 before</p>
+              <div className="mt-2 flex flex-col gap-1.5">
+                {trend.rows.map((r) => (
+                  <div key={r.id} className="flex items-baseline justify-between gap-2 font-mono text-[11px]">
+                    <span style={{ color: r.ready ? C.bone : C.ashDim }}>{r.label}</span>
+                    {r.ready ? (
+                      <span style={{ color: dirCol(r) }}>{arrow[r.dir]} {fmt(r.from, r.dp)} → {fmt(r.to, r.dp)}{r.unit}<span className="ml-2" style={{ color: C.ashDim }}>({r.pct > 0 ? "+" : ""}{Math.round(r.pct * 100)}%)</span></span>
+                    ) : (
+                      <span className="text-right" style={{ color: C.ashDim }}>needs {r.floor}+ readings per window — {r.curN} now, {r.prevN} before</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p className={cap} style={{ color: C.ashDim }}>a change under 3% is called flat, not an arrow. avg HR is shown without a verdict on purpose — PadCoach pins your heart rate and lets the belt float, so that number is the setpoint, not a result.</p>
+            </div>
+
+            {missing.length > 0 && (
+              <p className="mt-3 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>
+                not in your export yet: {missing.join(", ")}. these appear here by themselves once PadCoach starts sending them — nothing on this page is guessing at them in the meantime.
+              </p>
+            )}
+            {deferred.length > 0 && (
+              <p className="mt-2 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>
+                not sent yet, because PadCoach doesn't compute them at all so far: {deferred.join(", ")}. blank rather than zero, on purpose — and cadence will arrive as steps/min, not strides.
+              </p>
+            )}
+          </div>
+
+          {/* ── 6. This week ── weekly minutes in zone against the WHO line, plus how much of it held. */}
+          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+            <span className={hdr} style={{ color: C.ash }}><Flame size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Weekly volume</span>
+            <div className="mt-3 flex items-end justify-between gap-3">
+              <div>
+                <p className={sub} style={{ color: C.ashDim }}>this week so far</p>
+                <p className="font-mono text-2xl font-bold" style={{ color: C.bone }}>{Math.round(thisWeek.zone2Min)}<span className="ml-1 font-mono text-[13px] font-normal" style={{ color: C.ash }}>min in zone</span></p>
+              </div>
+              <div className="text-right">
+                <p className={sub} style={{ color: C.ashDim }}>{weekGoalLabel}</p>
+                <p className="font-mono text-xl font-bold" style={{ color: thisWeek.zone2Min >= weekGoal ? C.sage : C.gold }}>{Math.round(weekGoal)}<span className="ml-1 font-mono text-[12px] font-normal" style={{ color: C.ash }}>min</span></p>
+              </div>
+            </div>
+            <div className="mt-3" style={{ height: 120, width: "100%" }}>
+              <ResponsiveContainer>
+                <BarChart data={weeks8.map((w) => ({ d: w.lbl, v: Math.round(w.zone2Min) }))} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                  <CartesianGrid stroke="#221E15" vertical={false} />
+                  <XAxis dataKey="d" tick={{ fill: C.ashDim, fontSize: 8, fontFamily: "monospace" }} stroke="#2A2418" interval={0} />
+                  <YAxis tick={{ fill: C.ashDim, fontSize: 9, fontFamily: "monospace" }} stroke="#2A2418" width={40} domain={[0, (mx) => niceCeil(Math.max(mx * 1.02, weekGoal * 1.15))]} />
+                  <Tooltip cursor={{ fill: "#1D1A12" }} contentStyle={{ background: "#15120A", border: `1px solid ${C.edge}`, borderRadius: 8, fontFamily: "monospace", fontSize: 11 }} labelStyle={{ color: C.ash }} itemStyle={{ color: C.bone }} formatter={(v) => [`${v} min`, "in zone"]} />
+                  <ReferenceLine y={weekGoal} stroke={C.goldDim} strokeDasharray="2 4" />
+                  <Bar dataKey="v" fill={C.gold} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="mt-1 font-mono text-[11px]" style={{ color: C.ash }}>
+              {doneWeeks > 0 ? <>avg <span style={{ color: C.bone }}>{Math.round(wkAvg)}</span> min/week<span className="ml-3" style={{ color: weekOver > 0 ? C.sage : C.ash }}>{weekOver} of {doneWeeks} finished week{doneWeeks === 1 ? "" : "s"} over {Math.round(weekGoal)}</span></> : "no finished week yet — the average starts once this one closes."}
+            </p>
+            <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>dashed line = {weekGoalNote}.{an && an.zoneName ? ` zone figures are for ${an.zoneName}.` : ""}</p>
+            {agg28.inZonePct != null && (
+              <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>
+                <span style={{ color: C.sage }}>{Math.round(agg28.inZonePct)}%</span> of measured walking time landed inside the band over the last 28 days, across {agg28.sessions} session{agg28.sessions === 1 ? "" : "s"}
+              </p>
+            )}
+            <p className={cap} style={{ color: C.ashDim }}>weeks run Monday–Sunday; the last bar is still in progress, and the average only counts weeks since your first logged walk. the % is an adherence figure — it says PadCoach held you where you asked, not that you got fitter. it should sit near a ceiling; it's interesting when it drops.</p>
+          </div>
+
+          {/* ── 7. Records ── in the unit of the actual goal. A treadmill pace record measures the
+              controller's decisions, not him, so there isn't one here. */}
+          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+            <span className={hdr} style={{ color: C.ash }}><Star size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Records</span>
+            <div className="mt-3 flex flex-wrap gap-x-6 gap-y-3">
+              {[["longest session", recs.session && Math.round(recs.session.min), recs.session && dLbl(recs.session.key)],
+                ["best day", recs.day && Math.round(recs.day.min), recs.day && dLbl(recs.day.key)],
+                ["best week", recs.week && Math.round(recs.week.min), recs.week && ("week of " + dLbl(recs.week.start))]].map(([lab, v, when]) => (
+                <div key={lab}>
+                  <p className={sub} style={{ color: C.ashDim }}>{lab}</p>
+                  <p className="font-mono text-lg font-bold" style={{ color: v ? C.gold : C.ashDim }}>{v ? v : "—"}<span className="ml-1 font-mono text-[11px] font-normal" style={{ color: C.ash }}>{v ? "min in zone" : ""}</span></p>
+                  {when && <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>{when}</p>}
+                </div>
+              ))}
+            </div>
+            {recs.longestSessionMin > 0 && <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>longest walk of any kind: {Math.round(recs.longestSessionMin)} min moving</p>}
+            <p className={cap} style={{ color: C.ashDim }}>time in zone, not pace — on a treadmill holding your heart rate, a speed record would be a record set by the controller.</p>
+          </div>
+        </>
+      )}
+
+      {/* ── 8. Sessions ── the measured detail for the viewed day. */}
+      {st && st.sessions.length > 0 && (
+        <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+          <span className={hdr} style={{ color: C.ash }}>PadCoach sessions</span>
+          <div className="mt-3 flex flex-col gap-2">
+            {st.sessions.map((s, i) => {
+              const key = s.id || String(i), open = openSess === key;
+              // Wire key is `speedDriftPercent` — the PadCoach-inverted drift signal (falling required
+              // speed at pinned heart rate), which is the number worth showing him in words.
+              const drift = s.decoupling && s.decoupling.speedDriftPercent;
+              const halves = s.decoupling && s.decoupling.firstHalfSpeedKmh != null && s.decoupling.secondHalfSpeedKmh != null
+                ? `${s.decoupling.firstHalfSpeedKmh.toFixed(2)} → ${s.decoupling.secondHalfSpeedKmh.toFixed(2)} km/h` : null;
+              return (
+                <div key={key} className="flex flex-col gap-1 rounded-lg border px-3 py-2" style={{ borderColor: C.edge }}>
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                    <span className="font-mono text-[11px] font-bold" style={{ color: C.bone }}>{tHM(s.startedAt)}–{tHM(s.endedAt)}{s.bandName ? ` · ${s.bandName}` : ""}</span>
+                    <span className="flex items-center gap-2">
+                      {/* context is { tag, source }; an inherited "standingDefault" tag is an assumption,
+                          not something he said about this session, so it is marked as one. */}
+                      {s.context && <span className={sub} style={{ color: C.ash }}>{s.context.tag}{s.context.source === "standingDefault" ? " (default)" : ""}</span>}
+                      {s.effort != null && <span className={sub} style={{ color: C.ash }}>rpe {s.effort}</span>}
+                      <span className={sub} style={{ color: C.goldDim }}>measured</span>
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px]" style={{ color: C.ash }}>
+                    <span>{s.distanceKm.toFixed(2)} km</span>
+                    <span>{fmtHM(s.movingSec / 3600)}</span>
+                    <span>{s.steps.toLocaleString()} steps</span>
+                    {s.avgHr != null && <span>avg {Math.round(s.avgHr)} bpm</span>}
+                    {s.maxHr != null && <span>max {Math.round(s.maxHr)} bpm</span>}
+                    {s.inZonePct != null && <span style={{ color: C.sage }}>{Math.round(s.inZonePct)}% in zone</span>}
+                    {s.avgSpeedKmh != null && <span>{s.avgSpeedKmh.toFixed(2)} km/h avg{s.speedSource === "derived" ? "*" : ""}</span>}
+                    {/* never rendered as bare fact: an "assumed"/"unverified" grade says so inline. */}
+                    {s.gradePercent != null && <span>{s.gradePercent.toFixed(2)}% grade{s.gradeSource && s.gradeSource !== "measured" ? ` (${s.gradeSource})` : ""}</span>}
+                    {s.cadenceStepsPerMin != null && <span>{Math.round(s.cadenceStepsPerMin)} steps/min</span>}
+                    {s.efficiencyRatio != null && <span style={{ color: C.ashDim }}>eff {s.efficiencyRatio.toFixed(3)}</span>}
+                    {s.calorie && <span>≈{Math.round(s.calorie.kcal)} kcal ({Math.round(s.calorie.lowKcal)}–{Math.round(s.calorie.highKcal)})</span>}
+                  </div>
+                  {/* Speed drift, in words. PadCoach pins heart rate, so aerobic drift shows up as the belt
+                      slowing down — that sentence needs no threshold. The decoupling % is kept beside it as
+                      a secondary figure with its own confidence, and deliberately gets no pass/fail badge:
+                      it straddles the 5% line depending on a grade value that may not even be recorded. */}
+                  {drift != null && (
+                    <div className="font-mono text-[10px]" style={{ color: C.ash }}>
+                      {drift < -0.5 ? `the belt slowed ${Math.abs(drift).toFixed(1)}% across the walk to hold your heart rate` : drift > 0.5 ? `the belt sped up ${drift.toFixed(1)}% across the walk at the same heart rate` : "belt speed held steady across the walk"}
+                      {halves ? <span style={{ color: C.ashDim }}> ({halves})</span> : null}
+                      {s.decoupling.percent != null && <span style={{ color: C.ashDim }}> · decoupling {s.decoupling.percent.toFixed(1)}%</span>}
+                      {s.decoupling.confidence && <span className="block" style={{ color: C.ashDim }}>{s.decoupling.confidence.reason || `confidence: ${s.decoupling.confidence.grade}`}</span>}
+                    </div>
+                  )}
+                  {s.hrHistogram && (
+                    <>
+                      <button onClick={() => setOpenSess(open ? null : key)} className={`${sub} text-left`} style={{ color: C.goldDim }}>{open ? "▾ hide" : "▸ show"} heart-rate histogram</button>
+                      {open && (
+                        <div className="mt-1 flex flex-col gap-0.5">
+                          {(() => { const mx = Math.max(...s.hrHistogram.map((b) => b.sec)) || 1; return s.hrHistogram.map((b, j) => {
+                            const inBand = b.lo >= (s.bandLow || Z2_LO) && b.lo <= (s.bandHigh || Z2_HI);
+                            return (
+                              <div key={j} className="flex items-center gap-2 font-mono text-[9px]" style={{ color: C.ashDim }}>
+                                <span style={{ width: 52 }}>{b.lo}{b.hi ? `–${b.hi}` : "+"}</span>
+                                <span style={{ width: 44, color: C.ash }}>{(b.sec / 60).toFixed(1)}m</span>
+                                <span className="flex-1 rounded-[2px]" style={{ height: 8, width: `${(b.sec / mx) * 100}%`, background: inBand ? C.gold : C.goldDim }} />
+                              </div>
+                            ); }); })()}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {st.sessions.some((s) => s.speedSource === "derived") && <p className={cap} style={{ color: C.ashDim }}>* average speed derived from distance ÷ moving time — PadCoach doesn't send a measured belt-speed average yet.</p>}
         </div>
       )}
 
-      {/* Manual entries — an activity PadCoach never saw. Always tagged "Manual", never merged into the
-          PadCoach sessions list above, so the two sources can never be mistaken for one another. */}
-      <div className="mt-4 rounded-2xl border p-5" style={{ background: C.card, borderColor: C.edge }}>
-        <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>Manual entry</span>
+      {/* ── 9. Manual entries — an activity PadCoach never saw. Always tagged, never merged into the
+          measured sessions above, so the two sources can't be mistaken for one another. */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <span className={hdr} style={{ color: C.ash }}>Manual entry</span>
         <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>An outdoor walk, run or ride PadCoach never saw. Logged as-is — no heart-rate or calorie data, since none was measured.</p>
         <div className="mt-3 flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
-            <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>type</label>
+            <label className={sub} style={{ color: C.ashDim }}>type</label>
             <select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
               className="rounded-lg border px-2 py-2 font-mono text-[12px]" style={{ background: "#100E09", borderColor: C.edge, color: C.bone }}>
               <option value="walk">Walk</option>
@@ -2882,15 +3589,15 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>duration (min)</label>
+            <label className={sub} style={{ color: C.ashDim }}>duration (min)</label>
             <NumberField value={form.durationMin} step={5} label="duration" width={64} onChange={(n) => setForm((f) => ({ ...f, durationMin: n }))} />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>distance (km)</label>
+            <label className={sub} style={{ color: C.ashDim }}>distance (km)</label>
             <NumberField value={form.distanceKm} step={0.5} label="distance" width={64} onChange={(n) => setForm((f) => ({ ...f, distanceKm: n }))} />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>steps</label>
+            <label className={sub} style={{ color: C.ashDim }}>steps</label>
             <NumberField value={form.steps} step={500} label="steps" width={72} onChange={(n) => setForm((f) => ({ ...f, steps: n }))} />
           </div>
           <button onClick={async () => {
@@ -2901,25 +3608,54 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
 
         {manual.length > 0 && (
           <div className="mt-4 flex flex-col gap-2">
-            {manual.map((m) => (
-              <div key={m.id} className="flex items-center justify-between rounded-lg border px-3 py-2" style={{ borderColor: C.edge }}>
+            {manual.map((mm) => (
+              <div key={mm.id} className="flex items-center justify-between rounded-lg border px-3 py-2" style={{ borderColor: C.edge }}>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]" style={{ color: C.bone }}>
-                  <span className="capitalize font-bold">{m.type}</span>
-                  {m.durationSec > 0 && <span>{fmtHM(m.durationSec / 3600)}</span>}
-                  {m.distanceKm > 0 && <span>{m.distanceKm.toFixed(2)} km</span>}
-                  {m.steps > 0 && <span>{m.steps.toLocaleString()} steps</span>}
-                  <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.rust }}>manual</span>
+                  <span className="capitalize font-bold">{mm.type}</span>
+                  {mm.durationSec > 0 && <span>{fmtHM(mm.durationSec / 3600)}</span>}
+                  {mm.distanceKm > 0 && <span>{mm.distanceKm.toFixed(2)} km</span>}
+                  {mm.steps > 0 && <span>{mm.steps.toLocaleString()} steps</span>}
+                  <span className={sub} style={{ color: C.rust }}>manual</span>
                 </div>
-                <button onClick={() => removeManualCardio(viewDate, m.id)} aria-label="remove" className="flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.ashDim }}><X size={14} /></button>
+                <button onClick={() => removeManualCardio(viewDate, mm.id)} aria-label="remove" className="flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.ashDim }}><X size={14} /></button>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* ── 10. PadCoach sync — plumbing, demoted to the bottom now that Task 51 made the import
+          automatic. Both "last happened" lines stay visible; only the file picker is folded away. */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <span className={hdr} style={{ color: C.ash }}><Activity size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />PadCoach sync</span>
+        {cardio.lastAutoSyncAt && <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>auto-synced from PadCoach {new Date(cardio.lastAutoSyncAt).toLocaleString()}</p>}
+        {cardio.lastImportAt && <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>last manual import {new Date(cardio.lastImportAt).toLocaleString()}</p>}
+        {!cardio.lastAutoSyncAt && !cardio.lastImportAt && <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>nothing has arrived from PadCoach yet.</p>}
+        <button onClick={() => setSyncOpen((v) => !v)} className={`mt-2 ${sub}`} style={{ color: C.goldDim }}>{syncOpen ? "▾ hide" : "▸ import a file by hand"}</button>
+        {syncOpen && (
+          <div className="mt-3">
+            <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>Cardio syncs on its own through your private repo. This is the manual fallback — the file PadCoach writes at Dashboard → Settings → "Export for Coach App".</p>
+            <div className="mt-3 flex items-center gap-3">
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-full border px-4 py-2 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>
+                Import PadCoach export…
+                <input type="file" accept="application/json" className="hidden" onChange={async (e) => {
+                  const file = e.target.files && e.target.files[0]; e.target.value = "";
+                  if (!file) return;
+                  try {
+                    const json = JSON.parse(await file.text());
+                    const n = await importCardioExport(json);
+                    flash(`Imported cardio for ${n} day${n === 1 ? "" : "s"}`);
+                  } catch (err) { flash("Import failed: " + (err && err.message ? err.message : "bad file")); }
+                }} />
+              </label>
+            </div>
+          </div>
+        )}
+        {toast && <p className="mt-2 font-mono text-[10px]" style={{ color: C.sage }}>{toast}</p>}
+      </div>
     </>
   );
 }
-
 // ReviewDay: an equipment-prep glance at the whole day's plan — one row per plan item (not per unit),
 // work prescription only (no cues/descriptions). Tap a row to jump the pager to its unit and close.
 function ReviewDay({ plan, units, mem, unit, done, bars, onClose, onJump }) {
@@ -3582,14 +4318,19 @@ function App() {
   // BEFORE updateMem, same ordering as before this refactor: a malformed file never touches live state at
   // all) and the merge half in mergeCardioDays(prevDays, clean), reused as-is by the automatic
   // syncCardioFromPadCoach() below — one merge implementation, one set of tests, two entry points.
+  // Task 59 — a schema-2 payload also carries a top-level `analytics` block. It is REPLACED wholesale
+  // (never merged) because PadCoach recomputes every trend in it from its full history on each export;
+  // a schema-1 payload yields null, and the previously-stored block is then kept rather than wiped, so
+  // an old file dropped by hand can never blank out analysis a newer one already delivered.
   const importCardioExport = async (json) => {
     const clean = cleanCardioDays(json);
+    const an = cleanCardioAnalytics(json);
     const count = Object.keys(clean).length;
     return updateMem((prev, ret) => {
       const cardio = prev.cardio || DEFAULT.cardio;
       const days = mergeCardioDays(cardio.days, clean);
       ret(count);
-      return { ...prev, cardio: { ...cardio, days, lastImportAt: new Date().toISOString() } };
+      return { ...prev, cardio: { ...cardio, days, analytics: an || cardio.analytics || null, lastImportAt: new Date().toISOString() } };
     });
   };
   // Task 51 — the automatic half: fetches cardio.json from the same repo/branch/token the already-
@@ -3606,11 +4347,12 @@ function App() {
       const json = await REMOTE.getRaw(cfg, "cardio.json");
       if (json) {
         const clean = cleanCardioDays(json);
+        const an = cleanCardioAnalytics(json);
         const count = Object.keys(clean).length;
         await updateMem((prev) => {
           const cardio = prev.cardio || DEFAULT.cardio;
           const days = mergeCardioDays(cardio.days, clean);
-          return { ...prev, cardio: { ...cardio, days, lastAutoSyncAt: new Date().toISOString() } };
+          return { ...prev, cardio: { ...cardio, days, analytics: an || cardio.analytics || null, lastAutoSyncAt: new Date().toISOString() } };
         });
         dbg(`cardio sync(${reason}): merged ${count} day(s) from cardio.json`);
       }
@@ -3633,7 +4375,7 @@ function App() {
       t: new Date().toISOString(),
     };
     const manual = [...(day.manual || []), row];
-    const days = pruneDays({ ...cardio.days, [k]: { ...day, manual } }, 90);
+    const days = pruneDays({ ...cardio.days, [k]: { ...day, manual } }, CARDIO_DAY_CAP);
     return { ...prev, cardio: { ...cardio, days } };
   });
   const removeManualCardio = async (dk, id) => updateMem((prev) => {
