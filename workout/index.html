@@ -32,7 +32,7 @@
 <script type="text/babel" data-type="module" data-presets="react">
 const _b = document.getElementById("boot"); if (_b) _b.remove();
 import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
-import { Dumbbell, Clock, ArrowLeftRight, Play, Pause, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package, Camera, Sparkles, ScanBarcode, Unlink, Link2, List, Activity } from "lucide-react";
+import { Dumbbell, Clock, ArrowLeftRight, Play, Pause, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package, Camera, Sparkles, ScanBarcode, Unlink, Link2, List, Activity, Gauge, Target } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { readBarcodes } from "zxing-wasm";
@@ -211,7 +211,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0910-1756";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0910-1833";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -427,9 +427,13 @@ const cardioSession = (s) => {
     efficiencyRatio: cPos(s.efficiencyRatio),
     // Wire keys are `speedDriftPercent` / `hrDriftPercent`, and the two half-speeds come across too — so
     // the drift sentence can name the actual km/h instead of only a percentage.
+    // Task 60 — the two half AVERAGE HEART RATES come across too, and are now read: with both
+    // half-speeds AND both half-HRs, Friel's decoupling can be recomputed here from primitives
+    // (EF = speed ÷ HR per half) instead of inferring the sign convention of `percent`.
     decoupling: dec ? { percent: cNum(dec.percent), speedDriftPercent: cNum(dec.speedDriftPercent),
       hrDriftPercent: cNum(dec.hrDriftPercent), firstHalfSpeedKmh: cPos(dec.firstHalfSpeedKmh),
-      secondHalfSpeedKmh: cPos(dec.secondHalfSpeedKmh), confidence: cConf(dec.confidence) } : null,
+      secondHalfSpeedKmh: cPos(dec.secondHalfSpeedKmh), firstHalfAvgHeartRate: cPos(dec.firstHalfAvgHeartRate),
+      secondHalfAvgHeartRate: cPos(dec.secondHalfAvgHeartRate), confidence: cConf(dec.confidence) } : null,
   };
 };
 // A session counts toward "speed at 130 bpm" only if its own average heart rate actually LANDED in the
@@ -578,6 +582,395 @@ const cardioRecords = (days, endKey) => {
   const wk = cardioWeeks(days, endKey, 53).filter((w) => w.zone2Min > 0).sort((a, b) => b.zone2Min - a.zone2Min)[0] || null;
   return { session, day, week: wk ? { min: wk.zone2Min, start: wk.start } : null,
     longestSessionMin: keys.reduce((a, k) => { const st = cardioDay(days[k]); return st ? st.sessions.reduce((b, s) => Math.max(b, s.movingSec / 60), a) : a; }, 0) };
+};
+/* ───────────────── deep cardio analytics (Task 60) ─────────────────
+   The Cardio tab's foundation (Task 57/59) answers "what did I do". This layer answers
+   "is it working, and where is it going" — and it is deliberately NOT a copy of what Garmin,
+   Whoop or Strava compute. `docs/superpowers/specs/2026-09-10-platform-metrics-survey.md`
+   read the primary sources and found that most of the famous load family is structurally
+   wrong for a treadmill-desk walker:
+
+   • Every Garmin load metric is EPOC-derived, and Firstbeat's own white papers say EPOC
+     "plateaus if intensity falls below the anaerobic threshold (75% VO2max)". A 90-minute
+     zone-2 walk therefore scores barely more than a 40-minute one. Blind to duration at
+     exactly the intensity he trains at.
+   • Banister's TRIMP applies an exponential HR weighting written explicitly "to avoid giving
+     too much emphasis to low-intensity exercise of long duration" — i.e. it down-weights his
+     entire training plan on purpose.
+   • ACWR is not defensible as injury risk (see CARDIO_NOT_COMPUTED below), so there is no
+     acute:chronic ratio anywhere in this file, and no number here is ever coloured as danger.
+
+   What IS right for long steady work, and is what this file computes:
+   • Efficiency Factor — SPEED ÷ HR (never pace, which inverts the direction of improvement).
+   • Aerobic decoupling with Friel's <5% / 5–10% / >10% bands.
+   • A LINEAR-IN-DURATION load model, so two hours counts as two hours.
+   • CTL / ATL / TSB on the standard 42-day / 7-day EWMA constants.
+   • Least-squares projections that report an INTERVAL, never a date.
+
+   Every function below is pure, lives in the harness's pure zone, and is covered by
+   tests/run-tests.mjs. The sparse case is the designed case: he has ~4 sessions, so nothing
+   here returns a confident-looking number off two points — it returns null plus the reason. */
+
+// TrainingPeaks: decoupling "values under 20 minutes are not valid". The same floor is applied to
+// Efficiency Factor, for the same reason — a five-minute walk is warm-up, not steady state.
+const STEADY_MIN_SEC = 1200;
+const CTL_TAU = 42, ATL_TAU = 7;          // TrainingPeaks' own constants, unchanged
+const GOAL_MIN_FALLBACK = 240;            // 4 h/day in zone — his stated goal, used only until PadCoach sends one
+// Friel: "if an athlete's decoupling is consistently 5% or less for steady-state aerobic workouts
+// then his or her aerobic endurance is sound." 5–10% = a moderate aerobic limitation, >10% = the
+// effort was above the aerobic threshold.
+const DECOUPLE_BANDS = [
+  { id: "sound", hi: 5, label: "under 5%", meaning: "aerobic endurance is sound (Friel)" },
+  { id: "moderate", hi: 10, label: "5–10%", meaning: "a moderate aerobic limitation (Friel)" },
+  { id: "high", hi: Infinity, label: "over 10%", meaning: "the effort was above your aerobic threshold (Friel)" },
+];
+// Rendered verbatim in the Method card. Anything this app refuses to compute has to say why on
+// screen — an omission the user cannot see is indistinguishable from an oversight.
+const CARDIO_NOT_COMPUTED = [
+  { id: "acwr", what: "Acute:chronic workload ratio / “injury risk” gauge",
+    why: "The acute window sits inside the chronic one, so the two are mathematically coupled. A 1000-season simulation built to contain no ACWR–injury relationship at all still reproduced the published “sweet spot”, and replacing chronic load with random numbers gives the same odds ratios. Garmin ships one anyway; industry adoption is not validation." },
+  { id: "vo2", what: "VO₂max / cardio fitness score",
+    why: "Apple: “Indoor workouts, including ones that require gym equipment, do not count towards your cardio fitness estimate.” Garmin needs outdoor GPS or a power meter, and excludes indoor runs “in order to preserve the accuracy of your fitness level trend”. Both vendors decline to compute it from exactly your conditions. Speed at a fixed heart rate, above, is the measured local substitute." },
+  { id: "garminload", what: "Garmin-style training load / training effect / training status",
+    why: "All of it is EPOC-derived, and Firstbeat's own papers say EPOC stops accumulating below ~75% of VO₂max. It would score your 96-minute walk about the same as a 40-minute one — blind to duration at the one intensity you train at." },
+  { id: "banister", what: "Banister's exponential TRIMP",
+    why: "Its heart-rate weighting exists, in Banister's words, “to avoid giving too much emphasis to low-intensity exercise of long duration”. That is a description of your training plan. The zone-weighted load above is linear in duration instead." },
+  { id: "strain", what: "Whoop Strain, Body Battery, Recovery, Readiness, Fitness Age",
+    why: "Published as a shape, never as a formula. Reimplementing the shape without the calibration produces a number that looks like Whoop's and isn't." },
+  { id: "pace", what: "Pace personal records, best efforts, segments, grade-adjusted pace",
+    why: "The belt speed is set by a controller holding your heart rate. A fastest-5k record would be a record set by PadCoach, not by you. The records card tracks time in zone instead, which is the unit of your actual goal." },
+];
+
+// Day key ↔ integer day, used only as a regression x-axis. Both ends go through the same function,
+// so only the difference matters and it is DST-proof.
+const dayNum = (key) => { const [y, m, d] = key.split("-").map(Number); return Math.round(Date.UTC(y, m - 1, d) / 86400000); };
+
+// ── Efficiency Factor ──────────────────────────────────────────────────────────────────────
+// TrainingPeaks defines it for walking explicitly: Run/Walk EF (metric) = speed in m/min ÷ avg HR.
+// SPEED, never pace: pace (min/km) falls as fitness rises, so a pace-based ratio would render an
+// improvement as a decline. Not grade-adjusted here — his incline is a fixed manual setting, so it
+// is a constant scale factor while it is unchanged, and the caption on the card says so.
+const sessionEF = (s) => {
+  if (!s || s.avgHr == null || !(s.avgHr > 0) || !(s.movingSec >= STEADY_MIN_SEC) || !(s.distanceKm > 0)) return null;
+  return (s.distanceKm * 1000) / (s.movingSec / 60) / s.avgHr;
+};
+
+// ── Aerobic decoupling ─────────────────────────────────────────────────────────────────────
+// Friel: decoupling % = (EF_first_half − EF_second_half) / EF_first_half × 100. A POSITIVE number
+// is drift (output fell relative to heart rate).
+//
+// Two sources, in order of preference:
+//   1. The two halves PadCoach sends (speed + HR for each). Friel's formula computed from
+//      primitives — no sign convention to guess at.
+//   2. PadCoach's own `decoupling.percent`, which is signed as the CHANGE in efficiency
+//      (its fixture pairs percent −5.7 with speedDriftPercent −6.1, i.e. negative = it fell),
+//      so Friel's drift is its negation. That inference is flagged as `assumedSign` and shown.
+// Sessions under 20 minutes get no reading at all — TrainingPeaks' own validity rule.
+const sessionDecoupling = (s) => {
+  const d = s && s.decoupling;
+  if (!d) return null;
+  if (!(s.movingSec >= STEADY_MIN_SEC)) return { pct: null, band: null, tooShort: true, confidence: d.confidence || null, assumedSign: false };
+  let pct = null, assumedSign = false;
+  if (d.firstHalfSpeedKmh && d.secondHalfSpeedKmh && d.firstHalfAvgHeartRate && d.secondHalfAvgHeartRate) {
+    const ef1 = d.firstHalfSpeedKmh / d.firstHalfAvgHeartRate, ef2 = d.secondHalfSpeedKmh / d.secondHalfAvgHeartRate;
+    if (ef1 > 0) pct = ((ef1 - ef2) / ef1) * 100;
+  }
+  if (pct == null && d.percent != null) { pct = -d.percent; assumedSign = true; }
+  if (pct == null) return null;
+  // Negative decoupling — efficiency ROSE across the walk — is not a limitation, so it lands in
+  // Friel's soundest band rather than being read as a large magnitude.
+  const band = pct <= 0 ? DECOUPLE_BANDS[0] : (DECOUPLE_BANDS.find((b) => pct < b.hi) || DECOUPLE_BANDS[DECOUPLE_BANDS.length - 1]);
+  return { pct, band, tooShort: false, confidence: d.confidence || null, assumedSign };
+};
+
+// ── A duration-fair load model ─────────────────────────────────────────────────────────────
+// Zone-time × zone-weight, in Edwards' SHAPE but not his numbers, and the difference is stated on
+// screen rather than buried here. Edwards' five weights are fractions of MAXIMUM heart rate, and
+// he has never done a maximal test — nothing in this app or in PadCoach's export carries an HRmax,
+// and guessing one (220 − age) would put the whole scale on a population curve that a 15 bpm miss
+// moves by ~9%. So the weights are applied to the ONE zone structure his data really contains: the
+// band PadCoach recorded as active for that session.
+//   in band      × 2      the work he is actually there to do
+//   outside it   × 1      warm-up, drift below the band, walking to the machine
+//   above band   × 3      only when the session's own average cleared the band's top
+// Linear in duration by construction: two hours scores twice one hour. That is the whole point —
+// see the survey note on EPOC at the top of this block.
+// Manual entries are excluded: a manual walk has no heart rate, so it has no zone time, and padding
+// it with a guess would be the one thing this tab has never done.
+const ZONE_W_IN = 2, ZONE_W_OUT = 1, ZONE_W_ABOVE = 3;
+const sessionLoad = (s) => {
+  if (!s || !(s.movingSec > 0) || s.avgHr == null) return null;
+  const inMin = Math.min(s.inZoneSec || 0, s.movingSec) / 60;
+  const otherMin = Math.max(0, s.movingSec - (s.inZoneSec || 0)) / 60;
+  const above = s.avgHr > (s.bandHigh || Z2_HI);
+  return inMin * ZONE_W_IN + otherMin * (above ? ZONE_W_ABOVE : ZONE_W_OUT);
+};
+// null (not 0) for a day with no heart-rate-bearing session — "didn't walk" and "walked with the
+// strap off" are different facts, and only the first is honestly a zero.
+const dayLoad = (st) => {
+  if (!st) return null;
+  const ls = st.sessions.map(sessionLoad).filter((v) => v != null);
+  return ls.length ? ls.reduce((a, b) => a + b, 0) : null;
+};
+
+// ── CTL / ATL / TSB ────────────────────────────────────────────────────────────────────────
+// The standard exponentially-weighted moving averages: 42-day chronic (Fitness), 7-day acute
+// (Fatigue), TSB = yesterday's CTL − yesterday's ATL (Form), which is how TrainingPeaks defines it.
+// alpha = 1 − e^(−1/τ) is the continuous-time form, not the 1/τ approximation.
+//
+// TrainingPeaks' own caveat travels with these numbers and is rendered on the card verbatim:
+// TSB is "not a predictor of performance but a measure of how adapted an athlete is to their
+// training load." He is not tapering for anything, so a negative TSB is not a warning here.
+//
+// Runs forward from the first day he has data, never from the start of the chart window, so the
+// EWMAs are correct even when only the last 60 days are drawn. `filling` is true until 42 days of
+// history exist, because until then CTL is still climbing out of its zero seed and UNDERSTATES.
+const cardioLoadHistory = (days, endKey) => {
+  const keys = Object.keys(days || {}).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k) && k <= endKey).sort();
+  const empty = { rows: [], first: null, spanDays: 0, filling: true, loadDays: 0, ctl: null, atl: null, tsb: null, ramp: null };
+  if (!keys.length) return empty;
+  const first = keys[0];
+  const span = dayNum(endKey) - dayNum(first) + 1;
+  if (!(span > 0)) return empty;
+  const aC = 1 - Math.exp(-1 / CTL_TAU), aA = 1 - Math.exp(-1 / ATL_TAU);
+  let ctl = 0, atl = 0, loadDays = 0, key = first;
+  const rows = [];
+  for (let i = 0; i < span && i < 4000; i++) {
+    const l = dayLoad(cardioDay((days || {})[key]));
+    const load = l == null ? 0 : l;
+    if (l != null && l > 0) loadDays++;
+    const pC = ctl, pA = atl;
+    ctl = pC + (load - pC) * aC;
+    atl = pA + (load - pA) * aA;
+    rows.push({ key, load, ctl, atl, tsb: pC - pA, measured: l != null });
+    key = shiftDate(key, 1);
+  }
+  const last = rows[rows.length - 1];
+  const back = rows.length > 7 ? rows[rows.length - 8] : null;
+  return { rows, first, spanDays: span, filling: span < CTL_TAU, loadDays,
+    ctl: last.ctl, atl: last.atl, tsb: last.tsb, ramp: back ? last.ctl - back.ctl : null };
+};
+
+// Foster's monotony: the week's mean daily load ÷ its standard deviation, rest days counted as the
+// zeroes they are. Reported here as EVENNESS and nothing else. Foster pairs it with a "strain"
+// score (load × monotony) used as an injury-risk signal; this app does not compute that, for the
+// same reason it does not compute ACWR.
+const loadMonotony = (loads) => {
+  const v = (loads || []).filter((x) => typeof x === "number" && isFinite(x));
+  if (v.length < 7) return null;
+  const mean = v.reduce((a, b) => a + b, 0) / v.length;
+  const sd = Math.sqrt(v.reduce((a, b) => a + (b - mean) ** 2, 0) / v.length);
+  if (!(sd > 0) || !(mean > 0)) return null;
+  return { mean, sd, monotony: mean / sd, days: v.length };
+};
+
+// ── Least squares, with an interval that widens honestly ───────────────────────────────────
+// Two-sided 95% critical values of Student's t, by degrees of freedom. Small-n is the whole point:
+// at n = 3 (df 1) t is 12.7, so a projection from three points comes back with a range so wide it
+// visibly refuses to be a prediction. That is the correct output, not a failure of the method.
+const T95 = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179,
+  2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086, 2.080, 2.074, 2.069, 2.064, 2.060, 2.056,
+  2.052, 2.048, 2.045, 2.042];
+const tCrit = (df) => (df <= 0 ? null : df <= 30 ? T95[df - 1] : df <= 40 ? 2.021 : df <= 60 ? 2.0 : df <= 120 ? 1.98 : 1.96);
+
+// Ordinary least squares over [{x, y}]. Returns null under three points — two points define a line
+// with no residual and therefore no uncertainty, which would be the most dishonest chart on the tab.
+// `ci(x)` is the confidence band on the MEAN response (what a projection crosses); `pi(x)` is the
+// wider prediction band for a single future day. Both widen with distance from the data's centre.
+const linFit = (pts) => {
+  const p = (pts || []).filter((q) => q && isFinite(q.x) && isFinite(q.y));
+  const n = p.length;
+  if (n < 3) return null;
+  const mx = p.reduce((a, q) => a + q.x, 0) / n, my = p.reduce((a, q) => a + q.y, 0) / n;
+  const sxx = p.reduce((a, q) => a + (q.x - mx) ** 2, 0);
+  if (!(sxx > 0)) return null;                                  // every reading on one day is not a trajectory
+  const sxy = p.reduce((a, q) => a + (q.x - mx) * (q.y - my), 0);
+  const slope = sxy / sxx, intercept = my - slope * mx;
+  const resid = p.reduce((a, q) => a + (q.y - (intercept + slope * q.x)) ** 2, 0);
+  const syy = p.reduce((a, q) => a + (q.y - my) ** 2, 0);
+  const df = n - 2, se2 = resid / df, sigma = Math.sqrt(se2), t = tCrit(df);
+  const seSlope = Math.sqrt(se2 / sxx);
+  const at = (x) => intercept + slope * x;
+  const ci = (x) => t * sigma * Math.sqrt(1 / n + (x - mx) ** 2 / sxx);
+  const pi = (x) => t * sigma * Math.sqrt(1 + 1 / n + (x - mx) ** 2 / sxx);
+  return { n, df, mx, sxx, slope, intercept, sigma, seSlope, t, at, ci, pi,
+    slopeLo: slope - t * seSlope, slopeHi: slope + t * seSlope,
+    // A slope whose interval straddles zero is not distinguishable from flat, whatever its sign.
+    signif: sigma > 0 && (slope - t * seSlope) * (slope + t * seSlope) > 0,
+    degenerate: !(sigma > 0),
+    r2: syy > 0 ? Math.max(0, 1 - resid / syy) : null };
+};
+
+// When does the fitted line reach `target`, and what is the earliest / latest date the data is
+// consistent with? Scans forward day by day and reports where the fit, its upper confidence bound
+// and its lower confidence bound each cross. `latest === null` means the data is also consistent
+// with never getting there at this rate — which is said in those words rather than hidden.
+const projectCross = (fit, target, x0, maxDays = 1826) => {
+  if (!fit || !isFinite(target)) return null;
+  const up = target > fit.at(x0);
+  const reach = (v) => (up ? v >= target : v <= target);
+  let central = null, earliest = null, latest = null;
+  for (let d = 0; d <= maxDays; d++) {
+    const x = x0 + d, f = fit.at(x), w = fit.ci(x);
+    if (central == null && reach(f)) central = d;
+    if (earliest == null && reach(up ? f + w : f - w)) earliest = d;
+    if (latest == null && reach(up ? f - w : f + w)) latest = d;
+    if (central != null && earliest != null && latest != null) break;
+  }
+  return { central, earliest, latest, horizonDays: maxDays, up,
+    never: central == null, latestUnbounded: latest == null };
+};
+
+// One projection, display-ready. NOTHING here is a fact: `ok` is false until the series clears the
+// app's existing reading floor (PadCoach's TrendDataFloor rule — five or fewer readings is not a
+// trend, already the gate the 28-vs-28 rows use), and even when it is true the card prints the
+// number of readings, the days they span, and the interval rather than the date.
+const cardioProjection = (pts, opts) => {
+  const o = opts || {};
+  const target = o.target;
+  const p = (pts || []).slice().sort((a, b) => a.x - b.x);
+  const n = p.length;
+  const spanDays = n >= 2 ? p[n - 1].x - p[0].x + 1 : n;
+  const base = { id: o.id || null, label: o.label || null, unit: o.unit || "", dp: o.dp == null ? 2 : o.dp,
+    betterUp: o.betterUp !== false, n, spanDays, floor: TREND_FLOOR, target: target == null ? null : target,
+    latest: n ? p[n - 1].y : null, first: n ? p[0].y : null, points: p, fit: null, cross: null, ok: false, reason: null };
+  if (n < TREND_FLOOR)
+    return { ...base, reason: `needs ${TREND_FLOOR}+ readings to fit a line — ${n} so far` };
+  const fit = linFit(p);
+  if (!fit) return { ...base, reason: "every reading lands on the same day, so there is no trajectory to fit yet" };
+  if (fit.degenerate)
+    return { ...base, fit, reason: "the readings fall exactly on a line, so this data cannot estimate its own uncertainty — treat the slope as arithmetic, not as a projection" };
+  const x0 = p[n - 1].x;
+  const cross = target == null ? null : projectCross(fit, target, x0, o.maxDays || 1826);
+  const per = o.per == null ? 30 : o.per;                       // slope is reported per 30 days by default
+  return { ...base, fit, cross, ok: true, per,
+    slopePer: fit.slope * per, slopeLoPer: fit.slopeLo * per, slopeHiPer: fit.slopeHi * per,
+    r2: fit.r2, signif: fit.signif,
+    reason: fit.signif ? null : "the 95% interval on this slope includes zero — the direction is not yet distinguishable from flat" };
+};
+
+// A fitted line plus its confidence band, sampled for a chart: measured points to `endKey`, then
+// `ahead` days of projection. Deliberately three separate keys so the chart can draw the fit and
+// its bounds as dashed lines and the measurements as dots — no new chart primitive needed.
+const cardioFitSeries = (pr, endKey, ahead = 60, step = 3) => {
+  if (!pr || !pr.ok || !pr.fit) return [];
+  const fit = pr.fit, pts = pr.points, x0 = pts[0].x, xN = pts[pts.length - 1].x;
+  const byX = new Map(pts.map((q) => [q.x, q.y]));
+  const out = [];
+  const yr = xN + ahead - x0 > 300;                  // long enough to cross a year boundary
+  const add = (x) => { if (out.some((r) => r.x === x)) return; const w = fit.ci(x);
+    out.push({ x, d: cardioFitLabel(x, yr), v: byX.has(x) ? Math.round(byX.get(x) * 1000) / 1000 : null,
+      fit: Math.round(fit.at(x) * 1000) / 1000, lo: Math.round((fit.at(x) - w) * 1000) / 1000, hi: Math.round((fit.at(x) + w) * 1000) / 1000 }); };
+  for (let x = x0; x <= xN + ahead; x += step) add(x);
+  add(xN + ahead);                                  // the horizon itself, whatever the step lands on
+  pts.forEach((q) => add(q.x));                     // every measured reading, even between samples
+  return out.sort((a, b) => a.x - b.x);
+};
+// A projection that runs past a year has to say WHICH year: "11/8" after "8/29" reads as going
+// backwards on an axis that is actually going forwards.
+const cardioFitLabel = (x, withYear) => { const dt = new Date(x * 86400000);
+  return `${dt.getUTCMonth() + 1}/${dt.getUTCDate()}` + (withYear ? `/${String(dt.getUTCFullYear()).slice(2)}` : ""); };
+
+// ── Series builders ────────────────────────────────────────────────────────────────────────
+// One point per SESSION (efficiency, decoupling, speed are session-level facts) or per DAY
+// (resting HR, volume). `n` limits the window in days; null means the whole history.
+const cardioSessionPoints = (days, endKey, n, pick) => {
+  const from = n ? shiftDate(endKey, -(n - 1)) : null;
+  const out = [];
+  Object.keys(days || {}).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k) && k <= endKey && (!from || k >= from)).sort()
+    .forEach((k) => { const st = cardioDay(days[k]); if (!st) return;
+      st.sessions.forEach((s) => { const y = pick(s, st); if (y != null && isFinite(y)) out.push({ key: k, x: dayNum(k), y }); }); });
+  return out;
+};
+const cardioDayPoints = (days, endKey, n, pick) => {
+  const from = n ? shiftDate(endKey, -(n - 1)) : null;
+  const out = [];
+  Object.keys(days || {}).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k) && k <= endKey && (!from || k >= from)).sort()
+    .forEach((k) => { const st = cardioDay(days[k]); if (!st) return;
+      const y = pick(st, k); if (y != null && isFinite(y)) out.push({ key: k, x: dayNum(k), y }); });
+  return out;
+};
+
+// Week over week, as DESCRIPTION. The survey is explicit that a load ratio is not defensible as an
+// injury-risk signal, so this is never coloured as danger and never called a ratio — it is the
+// change in a number he can already see, stated as a number.
+const cardioWeekOverWeek = (weeks) => {
+  const done = (weeks || []).filter((w) => !w.partial);
+  if (done.length < 2) return null;
+  const a = done[done.length - 2], b = done[done.length - 1];
+  const pct = a.zone2Min > 0 ? ((b.zone2Min - a.zone2Min) / a.zone2Min) * 100 : null;
+  return { prev: a, last: b, pct, deadband: TREND_DEADBAND * 100 };
+};
+
+// ── "Am I getting fitter?" ─────────────────────────────────────────────────────────────────
+// One honest top line, assembled from the signals that actually bear on fitness, each of which
+// reports its own state and — when it is not ready — exactly what is missing.
+//
+// Volume is deliberately NOT a fitness signal. Walking more is doing more, not being fitter, and
+// conflating the two would let the one number he controls directly answer the question for him.
+const cardioFitnessVerdict = (days, an, endKey) => {
+  const sig = [];
+  // `state` is the verdict (better/worse/flat); `moved` is which way the NUMBER actually went.
+  // They differ wherever down is good — resting HR, decoupling — and rendering one arrow from the
+  // verdict alone would print "↑ better" beside a falling resting heart rate.
+  const push = (id, label, state, detail, need, moved) => sig.push({ id, label, state, detail: detail || null, need: need || null, moved: moved || null });
+
+  // 1. PadCoach's own efficiency trend, when it sends one AND its own confidence says it may count.
+  const eff = an && an.efficiency ? an.efficiency : null;
+  if (eff && eff.direction && eff.direction !== "unknown" && confOk(eff.confidence))
+    push("padEff", "PadCoach efficiency trend",
+      eff.direction === "improving" ? "better" : eff.direction === "declining" ? "worse" : "flat",
+      `${eff.direction} across ${eff.readings.length} matched-effort session${eff.readings.length === 1 ? "" : "s"}`,
+      null, eff.direction === "improving" ? "up" : eff.direction === "declining" ? "down" : "flat");
+  else if (eff)
+    push("padEff", "PadCoach efficiency trend", "waiting", null,
+      (eff.confidence && eff.confidence.reason) || `${eff.readings.length} reading${eff.readings.length === 1 ? "" : "s"} so far`);
+
+  // 2. Speed at his own band — the coach-side answer, computed from fields the export has always sent.
+  const spd = cardioProjection(cardioSessionPoints(days, endKey, null, (s) => (inBandSession(s) ? s.avgSpeedKmh : null)),
+    { id: "speed", label: `Speed at ${Z2_MID} bpm`, unit: " km/h", dp: 2, betterUp: true });
+  push("speed", `Speed at ${Z2_MID} bpm`,
+    !spd.ok || !spd.signif ? "waiting" : spd.fit.slope > 0 ? "better" : "worse",
+    spd.ok && spd.signif ? `${spd.slopePer > 0 ? "+" : ""}${spd.slopePer.toFixed(2)} km/h per 30 days` : null,
+    spd.reason, spd.ok && spd.signif ? (spd.fit.slope > 0 ? "up" : "down") : null);
+
+  // 3. Efficiency Factor, computed coach-side from speed ÷ HR — the metric neither Garmin nor Strava shows.
+  const efp = cardioProjection(cardioSessionPoints(days, endKey, null, sessionEF),
+    { id: "ef", label: "Efficiency Factor", unit: "", dp: 3, betterUp: true });
+  push("ef", "Efficiency Factor",
+    !efp.ok || !efp.signif ? "waiting" : efp.fit.slope > 0 ? "better" : "worse",
+    efp.ok && efp.signif ? `${efp.slopePer > 0 ? "+" : ""}${efp.slopePer.toFixed(3)} per 30 days` : null, efp.reason,
+    efp.ok && efp.signif ? (efp.fit.slope > 0 ? "up" : "down") : null);
+
+  // 4. Resting heart rate — down is better. Only appears once something actually sends one.
+  const rhrPts = cardioDayPoints(days, endKey, null, (st) => st.restingBPM);
+  if (rhrPts.length) {
+    const r = cardioProjection(rhrPts, { id: "rhr", label: "Resting HR", unit: " bpm", dp: 0, betterUp: false });
+    push("rhr", "Resting HR", !r.ok || !r.signif ? "waiting" : r.fit.slope < 0 ? "better" : "worse",
+      r.ok && r.signif ? `${r.slopePer > 0 ? "+" : ""}${r.slopePer.toFixed(1)} bpm per 30 days` : null, r.reason,
+      r.ok && r.signif ? (r.fit.slope > 0 ? "up" : "down") : null);
+  }
+
+  // 5. Aerobic durability — does decoupling shrink over months? Only when PadCoach sends decoupling.
+  const decPts = cardioSessionPoints(days, endKey, null, (s) => { const d = sessionDecoupling(s); return d && !d.tooShort ? d.pct : null; });
+  if (decPts.length) {
+    const dproj = cardioProjection(decPts, { id: "dec", label: "Aerobic decoupling", unit: "%", dp: 1, betterUp: false });
+    push("dec", "Aerobic decoupling", !dproj.ok || !dproj.signif ? "waiting" : dproj.fit.slope < 0 ? "better" : "worse",
+      dproj.ok && dproj.signif ? `${dproj.slopePer > 0 ? "+" : ""}${dproj.slopePer.toFixed(1)}% per 30 days` : null, dproj.reason,
+      dproj.ok && dproj.signif ? (dproj.fit.slope > 0 ? "up" : "down") : null);
+  }
+
+  const better = sig.filter((s) => s.state === "better").length;
+  const worse = sig.filter((s) => s.state === "worse").length;
+  const flat = sig.filter((s) => s.state === "flat").length;
+  const ready = better + worse + flat;
+  const headline = !ready
+    ? "Not yet — no fitness signal has enough behind it to answer."
+    : worse === 0 && better > 0 ? "Yes — every signal with enough data behind it says so."
+    : better > 0 && worse > 0 ? "Mixed — the signals disagree, which usually means it is still too early."
+    : worse > 0 ? "Not on these signals — and one reading is not a verdict, so read this over months."
+    : "Holding steady — measured, not guessed at, and not the same thing as no data.";
+  return { headline, signals: sig, ready, better, worse, flat, speed: spd, ef: efp };
 };
 const DEFAULT_FOOD_IDS = ["chicken300", "rice200", "eggs3", "whites200", "whey1"];   // original staples — never pruned
 // keep all favs + default staples; cap other foods to the n most-recently-used (by lastUsedT).
@@ -3196,6 +3589,56 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
     : padEff.readings.length ? padEff.readings[padEff.readings.length - 1].v : null;
   const padRest = an && an.restingHeartRate && an.restingHeartRate.latestRollingBPM != null ? an.restingHeartRate : null;
   const padHrv = an && an.hrv && an.hrv.latestShortMs != null ? an.hrv : null;
+  // ── Task 60 — the deep layer. Every one of these is a pure selector from the block above
+  //    "deep cardio analytics", so the maths is pinned by tests and this component only draws it.
+  const [projTab, setProjTab] = useState("volume");
+  const [methodOpen, setMethodOpen] = useState(false);
+  const [loadDetail, setLoadDetail] = useState(false);
+  // His stated goal is 4–5 hours a day in zone. PadCoach's own goal wins when it sends one.
+  const goalMin = (an && an.volume && an.volume.goalMinutes) || GOAL_MIN_FALLBACK;
+  const verdict = useMemo(() => cardioFitnessVerdict(days, an, today), [days, an, today]);
+  const loadHist = useMemo(() => cardioLoadHistory(days, today), [days, today]);
+  const loadRows = useMemo(() => loadHist.rows.slice(-60).map((r) => { const [, mm, dd] = r.key.split("-");
+    return { d: `${+mm}/${+dd}`, load: Math.round(r.load), ctl: Math.round(r.ctl * 10) / 10, atl: Math.round(r.atl * 10) / 10 }; }), [loadHist]);
+  const mono = useMemo(() => loadMonotony(loadHist.rows.slice(-7).map((r) => r.load)), [loadHist]);
+  const efPts = useMemo(() => cardioSessionPoints(days, today, null, sessionEF), [days, today]);
+  const efChart = useMemo(() => efPts.map((p) => { const [, mm, dd] = p.key.split("-");
+    return { d: `${+mm}/${+dd}`, v: Math.round(p.y * 1000) / 1000 }; }), [efPts]);
+  // The most recent sessions that produced a decoupling reading, newest first.
+  const decRows = useMemo(() => {
+    const out = [];
+    Object.keys(days).filter((x) => x <= today).sort().reverse().forEach((key) => {
+      if (out.length >= 6) return;
+      const d = cardioDay(days[key]); if (!d) return;
+      d.sessions.forEach((s) => { const dc = sessionDecoupling(s); if (dc && !dc.tooShort && out.length < 6) out.push({ key, s, dc }); });
+    });
+    return out;
+  }, [days, today]);
+  const projVolume = useMemo(() => cardioProjection(cardioDayPoints(days, today, null, (s) => s.zone2Min),
+    { id: "volume", label: "Zone-2 minutes a day", unit: " min", dp: 0, target: goalMin, betterUp: true }), [days, today, goalMin]);
+  const projRhr = useMemo(() => cardioProjection(cardioDayPoints(days, today, null, (s) => s.restingBPM),
+    { id: "rhr", label: "Resting HR", unit: " bpm", dp: 0, betterUp: false }), [days, today]);
+  const projSpeed = verdict.speed, projEF = verdict.ef;
+  const PROJ = [
+    { id: "volume", label: "Volume", pr: projVolume, what: "zone-2 minutes on the days PadCoach measured", target: goalMin, targetLabel: `${Math.round(goalMin)} min/day` },
+    { id: "speed", label: `km/h @ ${Z2_MID}`, pr: projSpeed, what: "average belt speed on sessions whose own average heart rate landed in the band", target: null },
+    { id: "ef", label: "Efficiency", pr: projEF, what: "Efficiency Factor — metres per minute, per heartbeat", target: null },
+    { id: "rhr", label: "Resting HR", pr: projRhr, what: "the seated pre-walk baseline PadCoach records", target: null },
+  ].filter((x) => x.pr && x.pr.n > 0);
+  const projSel = PROJ.find((x) => x.id === projTab) || PROJ[0] || null;
+  // The horizon follows the projection: a crossing 14 months out that is drawn on a 90-day chart
+  // is a chart that contradicts the sentence under it. Capped so a barely-rising line does not
+  // draw ten years of nothing.
+  const projAhead = useMemo(() => { const c = projSel && projSel.pr.cross; if (!c) return 90;
+    const want = c.latestUnbounded ? c.central : Math.max(c.central || 0, c.latest || 0);
+    return Math.min(900, Math.max(90, Math.round((want || 90) * 1.1))); }, [projSel]);
+  const projSeries = useMemo(() => (projSel ? cardioFitSeries(projSel.pr, today, projAhead, Math.max(3, Math.round(projAhead / 40))) : []), [projSel, today, projAhead]);
+  const aheadKey = (n) => (n == null ? null : shiftDate(today, Math.min(n, 3650)));
+  const monthsish = (n) => (n == null ? "" : n < 60 ? `${Math.round(n)} days` : n < 730 ? `${Math.round(n / 30.4)} months` : `${(n / 365).toFixed(1)} years`);
+  const stateCol = (s) => (s === "better" ? C.sage : s === "worse" ? C.rust : s === "flat" ? C.ash : C.ashDim);
+  // A slope always gets one more decimal than the value it is a slope of, so a resting-HR trend of
+  // −0.64 bpm/30 days never prints as "−1 · 95% range −1 to −1" — a range with no width.
+  const slopeDp = projSel ? Math.max(projSel.pr.dp, 1) : 1;
 
   const arrow = { up: "↑", down: "↓", flat: "→" };
   const dirCol = (r) => (!r.ready || !r.better ? C.ash : r.dir === "flat" ? C.ash : (r.dir === r.better ? C.sage : C.rust));
@@ -3212,6 +3655,9 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
   const doneWeeks = liveWeeks.length;
   const wkAvg = doneWeeks ? liveWeeks.reduce((a, w) => a + w.zone2Min, 0) / doneWeeks : null;
   const thisWeek = weeks8[weeks8.length - 1];
+  // Only weeks that overlap the history he actually has — comparing two weeks that both pre-date
+  // his first logged walk would print "0 min against 0", which is a fact about the calendar.
+  const wow = useMemo(() => cardioWeekOverWeek(liveWeeks), [liveWeeks]);
 
   return (
     <>
@@ -3280,10 +3726,37 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
            scaffold of zero-height bars would be a worse answer than saying so. */
         <div className={card} style={{ background: C.card, borderColor: C.edge }}>
           <span className={hdr} style={{ color: C.ash }}><TrendingUp size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Progress</span>
-          <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>No walks have reached this app yet. Your trend, consistency calendar, weekly volume and records all appear here after the first one — PadCoach syncs on its own, or add a walk by hand below.</p>
+          <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>No walks have reached this app yet. Everything else on this tab — the trend, the consistency calendar, efficiency and decoupling, training load, weekly volume, records, and the projections — appears after the first one. PadCoach syncs on its own, or add a walk by hand below. The Method card at the bottom already explains what each of those will mean, and which famous metrics this app deliberately will not compute.</p>
         </div>
       ) : (
         <>
+          {/* ── Task 60 · the top line ── One question, answered honestly or not at all. Each row is a
+              separate measurement rather than a blended score, so nothing can average a strong signal
+              together with a signal that has no data behind it. */}
+          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+            <span className={hdr} style={{ color: C.ash }}><Sparkles size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Are you getting fitter?</span>
+            <p className="mt-2 text-[13px] leading-relaxed" style={{ color: verdict.ready ? C.bone : C.ash }}>{verdict.headline}</p>
+            <div className="mt-3 flex flex-col gap-1.5">
+              {verdict.signals.map((s) => (
+                <div key={s.id} className="flex items-baseline justify-between gap-3 font-mono text-[11px]">
+                  <span className="shrink-0" style={{ color: s.state === "waiting" ? C.ashDim : C.bone }}>{s.label}</span>
+                  {s.state === "waiting" ? (
+                    <span className="text-right" style={{ color: C.ashDim }}>{s.need || "not enough data yet"}</span>
+                  ) : (
+                    <span className="text-right" style={{ color: stateCol(s.state) }}>
+                      {(s.moved === "up" ? "↑ " : s.moved === "down" ? "↓ " : "→ ")}{s.state === "better" ? "better" : s.state === "worse" ? "worse" : "steady"}
+                      {s.detail ? <span className="ml-2" style={{ color: C.ashDim }}>{s.detail}</span> : null}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <p className={cap} style={{ color: C.ashDim }}>
+              a row only takes a side when its own 95% interval excludes zero, so “waiting” means the data genuinely cannot yet tell the difference — it is not a hidden zero.
+              minutes walked is deliberately not one of these rows: walking more is doing <em>more</em>, not being fitter, and it is the one number you set directly.
+            </p>
+          </div>
+
           {/* ── 3. Trend ── the Diet tab's chart, pointed at cardio. Same numbers, two zoom levels. */}
           <div className={card} style={{ background: C.card, borderColor: C.edge }}>
             <div className="flex items-center justify-between gap-2">
@@ -3438,6 +3911,269 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
             )}
           </div>
 
+          {/* ── Task 60 · Efficiency Factor & aerobic durability ── The two metrics the platform survey
+              found are the best fit for long steady work, and that NEITHER Garmin nor Strava exposes.
+              EF is speed ÷ HR (never pace, which inverts the direction); decoupling is Friel's. */}
+          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+            <span className={hdr} style={{ color: C.ash }}><Leaf size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Efficiency &amp; durability</span>
+            <div className="mt-3 flex items-end justify-between gap-3">
+              <div>
+                <p className={sub} style={{ color: C.ashDim }}>efficiency factor</p>
+                <p className="font-mono text-2xl font-bold" style={{ color: efPts.length ? C.bone : C.ashDim }}>{efPts.length ? efPts[efPts.length - 1].y.toFixed(3) : "—"}</p>
+                <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>metres per minute, per bpm</p>
+              </div>
+              <div className="text-right">
+                <p className={sub} style={{ color: C.ashDim }}>trend</p>
+                <p className="font-mono text-[12px]" style={{ color: projEF.ok && projEF.signif ? (projEF.fit.slope > 0 ? C.sage : C.rust) : C.ash }}>
+                  {projEF.ok && projEF.signif ? `${projEF.slopePer > 0 ? "+" : ""}${projEF.slopePer.toFixed(3)} / 30 days` : "not yet"}
+                </p>
+                <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>{efPts.length} steady session{efPts.length === 1 ? "" : "s"}</p>
+              </div>
+            </div>
+            {efChart.length >= 2 ? (
+              <div className="mt-3" style={{ height: 110, width: "100%" }}>
+                <ResponsiveContainer>
+                  <LineChart data={efChart} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                    <CartesianGrid stroke="#221E15" vertical={false} />
+                    <XAxis dataKey="d" tick={{ fill: C.ashDim, fontSize: 8, fontFamily: "monospace" }} stroke="#2A2418" interval="preserveStartEnd" />
+                    <YAxis tick={{ fill: C.ashDim, fontSize: 9, fontFamily: "monospace" }} stroke="#2A2418" width={44} domain={["auto", "auto"]} />
+                    <Tooltip contentStyle={{ background: "#15120A", border: `1px solid ${C.edge}`, borderRadius: 8, fontFamily: "monospace", fontSize: 11 }} labelStyle={{ color: C.ash }} itemStyle={{ color: C.bone }} formatter={(v) => [v, "EF (m/min per bpm)"]} />
+                    <Line type="monotone" dataKey="v" stroke={C.gold} strokeWidth={2} dot={{ r: 2, fill: C.gold }} connectNulls isAnimationActive={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>{efPts.length === 0
+                ? `No walk of ${Math.round(STEADY_MIN_SEC / 60)} minutes or more with a heart rate has arrived yet, so there is no efficiency factor to compute. TrainingPeaks treats anything shorter as warm-up rather than steady state, and so does this.`
+                : "One steady session so far — the line starts at two."}</p>
+            )}
+            <p className={cap} style={{ color: C.ashDim }}>
+              EF = speed in metres per minute ÷ average heart rate, TrainingPeaks' own definition for walking. It uses <em>speed</em>, never pace: pace falls as you get fitter, so a pace-based ratio would draw an improvement as a decline.
+              It is not grade-adjusted — your incline is a fixed manual setting, so it cancels out while it is unchanged and breaks the comparison the day you move it.
+              Sessions under {Math.round(STEADY_MIN_SEC / 60)} minutes are excluded entirely.
+            </p>
+
+            {/* Aerobic decoupling — Friel's bands, shown as where the reading SITS rather than as a
+                pass/fail badge. The number straddles the 5% line depending on a grade value that may
+                not even have been recorded, so a badge would flip its verdict on a missing field. */}
+            <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
+              <p className={sub} style={{ color: C.ashDim }}>aerobic decoupling · Friel's bands</p>
+              <div className="mt-2 flex gap-1">
+                {DECOUPLE_BANDS.map((b, i) => (
+                  <div key={b.id} className="flex-1">
+                    <div className="rounded-[3px]" style={{ height: 5, background: i === 0 ? C.sage : i === 1 ? C.gold : C.rust, opacity: decRows.length && decRows[0].dc.band.id === b.id ? 1 : 0.28 }} />
+                    <p className="mt-1 font-mono text-[8px] uppercase tracking-wider" style={{ color: decRows.length && decRows[0].dc.band.id === b.id ? C.bone : C.ashDim }}>{b.label}</p>
+                  </div>
+                ))}
+              </div>
+              {decRows.length ? (
+                <>
+                  <p className="mt-2 font-mono text-[11px]" style={{ color: C.bone }}>
+                    latest {decRows[0].dc.pct > 0 ? "" : "−"}{Math.abs(decRows[0].dc.pct).toFixed(1)}% <span style={{ color: C.ash }}>· {decRows[0].dc.band.meaning}</span>
+                  </p>
+                  <div className="mt-2 flex flex-col gap-1">
+                    {decRows.map((r, i) => (
+                      <div key={r.key + "-" + i} className="flex items-baseline justify-between gap-2 font-mono text-[10px]" style={{ color: C.ashDim }}>
+                        <span>{dLbl(r.key)} · {Math.round(r.s.movingSec / 60)} min</span>
+                        <span style={{ color: C.ash }}>{r.dc.pct > 0 ? "" : "−"}{Math.abs(r.dc.pct).toFixed(1)}% · {r.dc.band.label}{r.dc.assumedSign ? " *" : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {decRows[0].dc.confidence && <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>{decRows[0].dc.confidence.reason || `confidence: ${decRows[0].dc.confidence.grade}`}</p>}
+                  {decRows.some((r) => r.dc.assumedSign) && <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>* PadCoach sent a decoupling percentage without both halves, so the sign was inferred from its own convention rather than recomputed. Sending first/second-half speed <em>and</em> heart rate removes the inference.</p>}
+                </>
+              ) : (
+                <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>PadCoach computes this per session but is not sending it in this payload yet, so there is nothing here to band. It fills in by itself once it does — nothing on this card is estimating it in the meantime.</p>
+              )}
+              <p className={cap} style={{ color: C.ashDim }}>
+                decoupling = (efficiency in the first half − efficiency in the second) ÷ the first, as a percentage. Friel: under 5% and your aerobic endurance is sound; 5–10% is a moderate limitation; over 10% means the effort was above your aerobic threshold.
+                There is no pass/fail badge here on purpose — the figure moves across the 5% line depending on the treadmill's grade, which is not always recorded. TrainingPeaks treats anything under 20 minutes as invalid, and so does this.
+              </p>
+            </div>
+          </div>
+
+          {/* ── Task 60 · Training load ── Deliberately NOT Garmin's. Firstbeat's own papers say EPOC
+              stops accumulating below ~75% VO2max, so every Garmin load metric would score a 96-minute
+              zone-2 walk about the same as a 40-minute one. This one is linear in duration by
+              construction, which is the only property that matters for someone whose plan is hours. */}
+          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+            <span className={hdr} style={{ color: C.ash }}><Gauge size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Training load · fitness, fatigue, form</span>
+            {loadHist.loadDays === 0 ? (
+              <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>No walk with a heart rate has reached this app yet, so there is no load to accumulate. Manual entries are deliberately left out — a manual walk has no zone time to weight, and padding it with a guess is the one thing this tab has never done.</p>
+            ) : (
+              <>
+                <div className="mt-3 flex flex-wrap gap-x-6 gap-y-3">
+                  {[["fitness · ctl", loadHist.ctl, "42-day"], ["fatigue · atl", loadHist.atl, "7-day"], ["form · tsb", loadHist.tsb, "ctl − atl"]].map(([lab, v, note]) => (
+                    <div key={lab}>
+                      <p className={sub} style={{ color: C.ashDim }}>{lab}</p>
+                      <p className="font-mono text-lg font-bold" style={{ color: C.bone }}>{v == null ? "—" : (v > 0 ? "" : v < 0 ? "−" : "") + Math.abs(Math.round(v))}</p>
+                      <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>{note}</p>
+                    </div>
+                  ))}
+                  {loadHist.ramp != null && (
+                    <div>
+                      <p className={sub} style={{ color: C.ashDim }}>ctl ramp</p>
+                      <p className="font-mono text-lg font-bold" style={{ color: C.bone }}>{loadHist.ramp > 0 ? "+" : ""}{Math.round(loadHist.ramp)}</p>
+                      <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>last 7 days</p>
+                    </div>
+                  )}
+                </div>
+                {loadHist.filling && (
+                  <p className="mt-2 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>
+                    CTL is still filling. It is a 42-day average seeded at zero, so with {loadHist.spanDays} day{loadHist.spanDays === 1 ? "" : "s"} of history it <em>understates</em> your fitness and will keep climbing on its own even if nothing changes. Read the shape, not the number, until about {CTL_TAU} days in.
+                  </p>
+                )}
+                {loadRows.length >= 7 && (
+                  <div className="mt-3" style={{ height: 120, width: "100%" }}>
+                    <ResponsiveContainer>
+                      <LineChart data={loadRows} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                        <CartesianGrid stroke="#221E15" vertical={false} />
+                        <XAxis dataKey="d" tick={{ fill: C.ashDim, fontSize: 8, fontFamily: "monospace" }} stroke="#2A2418" interval="preserveStartEnd" />
+                        <YAxis tick={{ fill: C.ashDim, fontSize: 9, fontFamily: "monospace" }} stroke="#2A2418" width={40} domain={[0, "auto"]} />
+                        <Tooltip contentStyle={{ background: "#15120A", border: `1px solid ${C.edge}`, borderRadius: 8, fontFamily: "monospace", fontSize: 11 }} labelStyle={{ color: C.ash }} itemStyle={{ color: C.bone }} />
+                        <Line type="monotone" dataKey="ctl" name="fitness (42d)" stroke={C.gold} strokeWidth={2} dot={false} isAnimationActive={false} />
+                        <Line type="monotone" dataKey="atl" name="fatigue (7d)" stroke={C.goldDim} strokeWidth={1.5} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+                <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>{loadRows.length >= 7
+                  ? <>solid = fitness (42-day average) · dashed = fatigue (7-day). last {loadRows.length} days, rest days included as the zeroes they are.</>
+                  : <>the fitness and fatigue lines start at a week of history — {loadRows.length} day{loadRows.length === 1 ? "" : "s"} so far. The numbers above are already correct; a two-point line just isn't a shape.</>}</p>
+                <p className={cap} style={{ color: C.ashDim }}>
+                  TrainingPeaks' own caveat, worth keeping in front of the number: form (TSB) is <em>“not a predictor of performance but a measure of how adapted an athlete is to their training load.”</em> You are not tapering for a race, so a negative form figure here is a description of a week you trained more than usual — not a warning, and never drawn in red.
+                </p>
+                {/* Description, not risk. The survey is decisive that a load RATIO is indefensible as an
+                    injury signal, so this is the plain week-over-week change instead — the same
+                    information, in a unit that is already on this page. */}
+                {(wow || mono) && (
+                  <div className="mt-3 border-t pt-3" style={{ borderColor: C.edge }}>
+                    {wow && (
+                      <p className="font-mono text-[11px]" style={{ color: C.ash }}>
+                        last finished week <span style={{ color: C.bone }}>{Math.round(wow.last.zone2Min)}</span> min in zone, against <span style={{ color: C.bone }}>{Math.round(wow.prev.zone2Min)}</span> the week before
+                        {wow.pct != null && <span className="ml-2" style={{ color: C.ashDim }}>({wow.pct > 0 ? "+" : ""}{Math.round(wow.pct)}%)</span>}
+                      </p>
+                    )}
+                    {mono && (
+                      <p className="mt-1 font-mono text-[11px]" style={{ color: C.ash }}>
+                        this week's load spread <span style={{ color: C.bone }}>{mono.monotony.toFixed(1)}</span> <span style={{ color: C.ashDim }}>· Foster's monotony, mean ÷ SD of daily load</span>
+                      </p>
+                    )}
+                    <p className={cap} style={{ color: C.ashDim }}>
+                      both of these are descriptions, not risk scores, and neither is colour-coded. There is no acute:chronic ratio on this page — a simulation built to contain no relationship between that ratio and injury still reproduced the published “sweet spot”, and replacing chronic load with random numbers gives the same odds. Foster's monotony is shown as evenness only; the “strain” score usually paired with it is not computed here for the same reason.
+                    </p>
+                  </div>
+                )}
+                <button onClick={() => setLoadDetail((v) => !v)} className={`mt-3 ${sub}`} style={{ color: C.goldDim }}>{loadDetail ? "▾ hide" : "▸ show"} how this load is calculated</button>
+                {loadDetail && (
+                  <div className="mt-2 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>
+                    <p>load = minutes × a weight for the zone those minutes were in:</p>
+                    <p className="mt-1" style={{ color: C.ash }}>inside your band × {ZONE_W_IN} &nbsp;·&nbsp; outside it × {ZONE_W_OUT} &nbsp;·&nbsp; above the band's top × {ZONE_W_ABOVE}</p>
+                    <p className="mt-2">That is Edwards' shape — zone time × zone weight — but not Edwards' numbers. His five weights are fractions of your <em>maximum</em> heart rate, and you have never done a maximal test; nothing in this app or in PadCoach's export carries an HRmax, and guessing one from 220 − age puts the whole scale on a population curve that a 15 bpm miss moves by about 9%. So the weights ride the one zone structure your data really contains: the band PadCoach recorded as active for that session.</p>
+                    <p className="mt-2">Because you train at one intensity, this number is close to proportional to minutes walked — and that is the point. Banister's TRIMP applies an exponential heart-rate weighting written, in his own words, “to avoid giving too much emphasis to low-intensity exercise of long duration”. That is a description of your training plan, so it is not used here.</p>
+                    <p className="mt-2">CTL and ATL are exponentially-weighted moving averages on TrainingPeaks' own {CTL_TAU}-day and {ATL_TAU}-day constants; TSB is yesterday's CTL minus yesterday's ATL.</p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* ── Task 60 · Projections ── The part he asked for that did not exist. Nothing here is ever
+              a date: it is a fitted line, its 95% confidence band, and the range of dates that band is
+              consistent with — including "never", said in those words when the data allows it. A
+              projection from four sessions has to LOOK like a projection from four sessions. */}
+          {PROJ.length > 0 && projSel && (
+            <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+              <div className="flex items-center justify-between gap-2">
+                <span className={hdr} style={{ color: C.ash }}><Target size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Where this is heading</span>
+              </div>
+              <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+                {PROJ.map((x) => (
+                  <button key={x.id} onClick={() => setProjTab(x.id)} className="shrink-0 rounded-full border px-3 py-1.5 font-mono text-[11px] whitespace-nowrap"
+                    style={{ borderColor: projTab === x.id ? C.goldDim : C.edge, background: projTab === x.id ? "#241F12" : "transparent", color: projTab === x.id ? C.gold : C.ash }}>{x.label}</button>
+                ))}
+              </div>
+              {!projSel.pr.ok ? (
+                <>
+                  <p className="mt-3 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>{projSel.pr.reason}.</p>
+                  <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>
+                    {projSel.pr.n} reading{projSel.pr.n === 1 ? "" : "s"} so far, from {projSel.what}.
+                    {projSel.pr.n >= 2 ? ` They span ${projSel.pr.spanDays} day${projSel.pr.spanDays === 1 ? "" : "s"}.` : ""}
+                    {projSel.pr.latest != null ? ` Most recent: ${projSel.pr.latest.toFixed(projSel.pr.dp)}${projSel.pr.unit}.` : ""}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="mt-3 flex items-end justify-between gap-3">
+                    <div>
+                      <p className={sub} style={{ color: C.ashDim }}>now</p>
+                      <p className="font-mono text-2xl font-bold" style={{ color: C.bone }}>{projSel.pr.latest.toFixed(projSel.pr.dp)}<span className="ml-1 font-mono text-[13px] font-normal" style={{ color: C.ash }}>{projSel.pr.unit.trim()}</span></p>
+                    </div>
+                    <div className="text-right">
+                      <p className={sub} style={{ color: C.ashDim }}>per 30 days</p>
+                      <p className="font-mono text-[13px] font-bold" style={{ color: projSel.pr.signif ? ((projSel.pr.fit.slope > 0) === projSel.pr.betterUp ? C.sage : C.rust) : C.ash }}>
+                        {projSel.pr.slopePer > 0 ? "+" : ""}{projSel.pr.slopePer.toFixed(slopeDp)}{projSel.pr.unit}
+                      </p>
+                      <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>95% range {projSel.pr.slopeLoPer > 0 ? "+" : ""}{projSel.pr.slopeLoPer.toFixed(slopeDp)} to {projSel.pr.slopeHiPer > 0 ? "+" : ""}{projSel.pr.slopeHiPer.toFixed(slopeDp)}</p>
+                    </div>
+                  </div>
+                  {/* The evidence, before the projection — how many readings, over how long, how tight. */}
+                  <p className="mt-2 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>
+                    fitted to <span style={{ color: C.ash }}>{projSel.pr.n} reading{projSel.pr.n === 1 ? "" : "s"}</span> over <span style={{ color: C.ash }}>{projSel.pr.spanDays} days</span>
+                    {projSel.pr.r2 != null ? <> · the line explains <span style={{ color: C.ash }}>{Math.round(projSel.pr.r2 * 100)}%</span> of the scatter</> : null}
+                    {" "}· {projSel.what}
+                  </p>
+                  {!projSel.pr.signif && <p className="mt-1 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>{projSel.pr.reason}. The line below is still drawn, because the shape is real information — but it is not yet a direction.</p>}
+                  {projSeries.length >= 2 && (
+                    <div className="mt-3" style={{ height: 150, width: "100%" }}>
+                      <ResponsiveContainer>
+                        <LineChart data={projSeries} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                          <CartesianGrid stroke="#221E15" vertical={false} />
+                          <XAxis dataKey="d" tick={{ fill: C.ashDim, fontSize: 8, fontFamily: "monospace" }} stroke="#2A2418" interval="preserveStartEnd" />
+                          <YAxis tick={{ fill: C.ashDim, fontSize: 9, fontFamily: "monospace" }} stroke="#2A2418" width={44} domain={["auto", "auto"]} />
+                          <Tooltip contentStyle={{ background: "#15120A", border: `1px solid ${C.edge}`, borderRadius: 8, fontFamily: "monospace", fontSize: 11 }} labelStyle={{ color: C.ash }} itemStyle={{ color: C.bone }} />
+                          {projSel.target ? <ReferenceLine y={projSel.target} stroke={C.goldDim} strokeDasharray="2 4" ifOverflow="extendDomain" /> : null}
+                          <Line type="monotone" dataKey="hi" name="95% upper" stroke={C.goldDim} strokeWidth={1} strokeDasharray="2 4" dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="lo" name="95% lower" stroke={C.goldDim} strokeWidth={1} strokeDasharray="2 4" dot={false} isAnimationActive={false} />
+                          <Line type="monotone" dataKey="fit" name="trend" stroke={C.ash} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                          <Line dataKey="v" name="measured" stroke="transparent" strokeWidth={0} dot={{ r: 2.5, fill: C.gold }} connectNulls={false} isAnimationActive={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                  <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>gold dots = what you actually did · solid = the fitted line · dashed pair = the 95% band, which widens the further it goes past your last reading{projSel.target ? ` · the flat dashed line is ${projSel.targetLabel}` : ""}.</p>
+                  {projSel.pr.cross && (
+                    <div className="mt-3 border-t pt-3" style={{ borderColor: C.edge }}>
+                      <p className={sub} style={{ color: C.ashDim }}>reaching {projSel.targetLabel}</p>
+                      {projSel.pr.cross.never ? (
+                        <p className="mt-1 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>At this trajectory the line does not reach {projSel.targetLabel} within {monthsish(projSel.pr.cross.horizonDays)}. That is a statement about the last {projSel.pr.spanDays} days, not about you — the fit has {projSel.pr.n} readings behind it.</p>
+                      ) : (
+                        <>
+                          <p className="mt-1 font-mono text-[13px]" style={{ color: C.bone }}>
+                            around <span style={{ color: C.gold }}>{aheadKey(projSel.pr.cross.central)}</span> <span className="font-mono text-[11px]" style={{ color: C.ash }}>· {monthsish(projSel.pr.cross.central)} away</span>
+                          </p>
+                          <p className="mt-1 font-mono text-[11px]" style={{ color: C.ash }}>
+                            the data is consistent with anywhere from <span style={{ color: C.bone }}>{aheadKey(projSel.pr.cross.earliest)}</span> to {projSel.pr.cross.latestUnbounded
+                              ? <span style={{ color: C.bone }}>never, at this rate</span>
+                              : <span style={{ color: C.bone }}>{aheadKey(projSel.pr.cross.latest)}</span>}
+                          </p>
+                        </>
+                      )}
+                      {projSel.id === "volume" && target && target.projectedDaysToGoal != null && (
+                        <p className="mt-2 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>
+                          PadCoach's own projection, computed upstream from your adaptive target rather than from a straight line: ~{Math.round(target.projectedDaysToGoal)} days{target.projectedDate ? ` · ${target.projectedDate}` : ""}. It ramps at a fixed rate from your recent median, so it will disagree with the line above whenever your recent days differ from your longer trend. Neither is a promise.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+              <p className={cap} style={{ color: C.ashDim }}>
+                a straight line fitted by least squares, with Student's-t 95% intervals. Nothing here is a prediction of what you <em>will</em> do — it is the range of futures this much data cannot rule out, and it narrows only as readings accumulate. It assumes the last stretch keeps going, which is exactly the assumption a projection is.
+              </p>
+            </div>
+          )}
+
           {/* ── 6. This week ── weekly minutes in zone against the WHO line, plus how much of it held. */}
           <div className={card} style={{ background: C.card, borderColor: C.edge }}>
             <span className={hdr} style={{ color: C.ash }}><Flame size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Weekly volume</span>
@@ -3503,6 +4239,9 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
           <div className="mt-3 flex flex-col gap-2">
             {st.sessions.map((s, i) => {
               const key = s.id || String(i), open = openSess === key;
+              // Task 60 — the two session-level metrics the survey says actually fit long steady work.
+              // Both are null rather than 0 when the session cannot support them (no HR, under 20 min).
+              const ef = sessionEF(s), dc = sessionDecoupling(s);
               // Wire key is `speedDriftPercent` — the PadCoach-inverted drift signal (falling required
               // speed at pinned heart rate), which is the number worth showing him in words.
               const drift = s.decoupling && s.decoupling.speedDriftPercent;
@@ -3531,7 +4270,9 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
                     {/* never rendered as bare fact: an "assumed"/"unverified" grade says so inline. */}
                     {s.gradePercent != null && <span>{s.gradePercent.toFixed(2)}% grade{s.gradeSource && s.gradeSource !== "measured" ? ` (${s.gradeSource})` : ""}</span>}
                     {s.cadenceStepsPerMin != null && <span>{Math.round(s.cadenceStepsPerMin)} steps/min</span>}
-                    {s.efficiencyRatio != null && <span style={{ color: C.ashDim }}>eff {s.efficiencyRatio.toFixed(3)}</span>}
+                    {ef != null && <span style={{ color: C.ashDim }}>EF {ef.toFixed(3)}</span>}
+                    {s.efficiencyRatio != null && <span style={{ color: C.ashDim }}>VO₂÷HR {s.efficiencyRatio.toFixed(3)}</span>}
+                    {ef != null && <span style={{ color: C.ashDim }}>load {Math.round(sessionLoad(s))}</span>}
                     {s.calorie && <span>≈{Math.round(s.calorie.kcal)} kcal ({Math.round(s.calorie.lowKcal)}–{Math.round(s.calorie.highKcal)})</span>}
                   </div>
                   {/* Speed drift, in words. PadCoach pins heart rate, so aerobic drift shows up as the belt
@@ -3542,7 +4283,8 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
                     <div className="font-mono text-[10px]" style={{ color: C.ash }}>
                       {drift < -0.5 ? `the belt slowed ${Math.abs(drift).toFixed(1)}% across the walk to hold your heart rate` : drift > 0.5 ? `the belt sped up ${drift.toFixed(1)}% across the walk at the same heart rate` : "belt speed held steady across the walk"}
                       {halves ? <span style={{ color: C.ashDim }}> ({halves})</span> : null}
-                      {s.decoupling.percent != null && <span style={{ color: C.ashDim }}> · decoupling {s.decoupling.percent.toFixed(1)}%</span>}
+                      {dc && !dc.tooShort && dc.pct != null && <span style={{ color: C.ashDim }}> · decoupling {dc.pct > 0 ? "" : "−"}{Math.abs(dc.pct).toFixed(1)}% ({dc.band.label}{dc.assumedSign ? ", sign inferred" : ""})</span>}
+                      {dc && dc.tooShort && <span style={{ color: C.ashDim }}> · too short for a valid decoupling reading (under 20 min)</span>}
                       {s.decoupling.confidence && <span className="block" style={{ color: C.ashDim }}>{s.decoupling.confidence.reason || `confidence: ${s.decoupling.confidence.grade}`}</span>}
                     </div>
                   )}
@@ -3571,6 +4313,43 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
           {st.sessions.some((s) => s.speedSource === "derived") && <p className={cap} style={{ color: C.ashDim }}>* average speed derived from distance ÷ moving time — PadCoach doesn't send a measured belt-speed average yet.</p>}
         </div>
       )}
+
+      {/* ── Task 60 · Method ── Every metric on this tab, in one place, plus the famous ones this app
+          deliberately does NOT compute and the reason for each. An omission you cannot see is
+          indistinguishable from an oversight, so the refusals are on screen rather than in a spec. */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <span className={hdr} style={{ color: C.ash }}><Info size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Method</span>
+        <button onClick={() => setMethodOpen((v) => !v)} className={`mt-2 ${sub} block text-left`} style={{ color: C.goldDim }}>{methodOpen ? "▾ hide" : "▸ what every number here means, and what this app refuses to compute"}</button>
+        {methodOpen && (
+          <div className="mt-3">
+            <p className={sub} style={{ color: C.ashDim }}>what is computed, and from what</p>
+            <div className="mt-2 flex flex-col gap-2 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>
+              {[
+                ["Minutes in zone", "Seconds PadCoach measured inside the band that was actually active for that session — your own 125–135 bpm, not an age-guessed 220 − age curve. This is the unit your goal is stated in, so it is the unit everything else is compared against."],
+                ["% in zone", "Time in band ÷ moving time. An adherence figure: it says the controller held you where you asked, not that you got fitter. It should sit near a ceiling and is interesting when it drops."],
+                [`Speed at ${Z2_MID} bpm`, "Average belt speed across sessions whose own average heart rate landed inside the band. No adjustment, no rescaling — a walk that averaged 118 bpm is left out rather than stretched to pretend it was a zone-2 walk. If the belt runs faster at the same heart rate, you are fitter."],
+                ["Efficiency Factor", "Speed in metres per minute ÷ average heart rate — TrainingPeaks' own definition for walking. Speed, never pace. 20-minute steady-state floor. Not grade-adjusted."],
+                ["Aerobic decoupling", "How much efficiency fell between the first and second half of a walk. Friel's bands: under 5% sound, 5–10% a moderate limitation, over 10% above your aerobic threshold. Under 20 minutes it is not valid and is not shown."],
+                ["Training load", `Minutes × a zone weight (in band × ${ZONE_W_IN}, outside × ${ZONE_W_OUT}, above × ${ZONE_W_ABOVE}). Linear in duration on purpose.`],
+                ["Fitness / fatigue / form", `Exponentially-weighted moving averages of that load on TrainingPeaks' ${CTL_TAU}-day and ${ATL_TAU}-day constants. Form is yesterday's fitness minus yesterday's fatigue, and per TrainingPeaks measures how adapted you are — not how you will perform.`],
+                ["Projections", "A straight line fitted by least squares with Student's-t 95% intervals, which widen with distance from your data and with fewer readings. They report a range of dates, never a date."],
+                ["Calories", "PadCoach's ACSM estimate with a Keytel heart-rate cross-check, always shown as a band. Every other app shows a bare integer it cannot justify."],
+              ].map(([k, v]) => (
+                <p key={k}><span style={{ color: C.bone }}>{k}</span> — {v}</p>
+              ))}
+            </div>
+            <p className={`mt-4 ${sub}`} style={{ color: C.ashDim }}>what this app will not compute, and why</p>
+            <div className="mt-2 flex flex-col gap-2 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>
+              {CARDIO_NOT_COMPUTED.map((x) => (
+                <p key={x.id}><span style={{ color: C.ash }}>{x.what}</span> — {x.why}</p>
+              ))}
+            </div>
+            <p className={cap} style={{ color: C.ashDim }}>
+              Sources for all of the above: <span style={{ color: C.ash }}>docs/superpowers/specs/2026-09-10-platform-metrics-survey.md</span>, a primary-source read of Garmin's, Whoop's, Apple's and TrainingPeaks' own documentation. Where two vendors contradict each other, the spec says so rather than picking one quietly.
+            </p>
+          </div>
+        )}
+      </div>
 
       {/* ── 9. Manual entries — an activity PadCoach never saw. Always tagged, never merged into the
           measured sessions above, so the two sources can't be mistaken for one another. */}
