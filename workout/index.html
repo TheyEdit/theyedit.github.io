@@ -211,7 +211,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0910-1833";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0910-1924";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -232,6 +232,25 @@ const CARDIO_DAY_CAP = 1095;
 // replacing each day's PadCoach fields wholesale (PadCoach always sends a full recompute, never a
 // partial one) while preserving any `manual` entries already there (PadCoach knows nothing about those).
 // Both are pure — no fetch, no updateMem — so both are covered directly by tests/run-tests.mjs.
+//
+// Task 63 — one calorie block on the wire, normalized in one place. `CoachExportCalorie` really carries
+// { kcal, lowKcal, highKcal, model? } and nothing else today (verified against CoachExport.swift), and
+// the version this app shipped before Task 63 dropped `model` on the floor. The other four names below
+// exist on PadCoach's own `CalorieEstimate` but are NOT on the wire yet; they are read here so that the
+// day PadCoach widens the payload, the cards fill in by themselves rather than needing another edit.
+// Nothing downstream may assume any of them arrived — that is the whole reason they are optional.
+const cleanCal = (c) => {
+  if (!c || typeof c !== "object") return null;
+  const out = { kcal: +c.kcal || 0, lowKcal: +c.lowKcal || 0, highKcal: +c.highKcal || 0 };
+  const n = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+  if (typeof c.model === "string" && c.model) out.model = c.model;
+  if (n(c.grossKcal) != null && c.grossKcal > 0) out.grossKcal = c.grossKcal;
+  if (n(c.restingKcal) != null && c.restingKcal >= 0) out.restingKcal = c.restingKcal;
+  if (n(c.hrCrossCheckKcal) != null && c.hrCrossCheckKcal > 0) out.hrCrossCheckKcal = c.hrCrossCheckKcal;
+  if (c.belowValidatedSpeedFloor === true) out.belowValidatedSpeedFloor = true;
+  if (n(c.supportReductionFraction) != null && c.supportReductionFraction > 0) out.supportReductionFraction = c.supportReductionFraction;
+  return out;
+};
 const cleanCardioDays = (json) => {
   if (!json || typeof json !== "object" || json.source !== "padcoach" || !json.days || typeof json.days !== "object")
     throw new Error("not a PadCoach export");
@@ -245,8 +264,7 @@ const cleanCardioDays = (json) => {
       distanceKm: +d.distanceKm || 0,
       movingTimeSec: +d.movingTimeSec || 0,
       zone2Min: +d.zone2Min || 0,
-      calorie: (d.calorie && typeof d.calorie === "object")
-        ? { kcal: +d.calorie.kcal || 0, lowKcal: +d.calorie.lowKcal || 0, highKcal: +d.calorie.highKcal || 0 } : null,
+      calorie: cleanCal(d.calorie),
       sessions: Array.isArray(d.sessions) ? d.sessions : [],
     };
     // Task 59 — the day-level fields a schema-2 PadCoach export MAY carry, under the names
@@ -267,6 +285,15 @@ const cleanCardioDays = (json) => {
     if (pos(d.restingBPM)) clean[k].restingBPM = d.restingBPM;
     if (typeof d.restingSource === "string" && d.restingSource) clean[k].restingSource = d.restingSource;
     if (d.hrv && typeof d.hrv === "object") clean[k].hrv = d.hrv;
+    // Task 63 — a day whose calorie figure is PARTIAL says so on the wire (schema 3). A ride contributes
+    // working minutes and no calories, because PadCoach refuses to run the walking equations against it;
+    // `calorieOmittedReason` is a finished sentence written to be shown. Carried through so the Energy
+    // card can never present a partial day's total as a complete one.
+    if (Array.isArray(d.calorieOmittedModalities)) {
+      const mo = d.calorieOmittedModalities.filter((x) => typeof x === "string" && x);
+      if (mo.length) clean[k].calorieOmittedModalities = mo;
+    }
+    if (typeof d.calorieOmittedReason === "string" && d.calorieOmittedReason) clean[k].calorieOmittedReason = d.calorieOmittedReason;
   });
   if (!Object.keys(clean).length) throw new Error("no valid days found in file");
   return clean;
@@ -369,6 +396,52 @@ const cConf = (c) => {
 };
 const confOk = (c) => !!c && c.trendworthy === true;   // PadCoach's own gate; insufficient/low never earn a verdict
 
+/* ───────────────── calories (Task 63) ─────────────────
+   One normalizer, and three facts about this number that every card below is built around.
+
+   1. `kcal` IS ACTIVE ENERGY, NOT GROSS. PadCoach's Task 58 subtracted the resting term that both
+      underlying equations carry (ACSM's leading 3.5, Pandolf's leading 1.5·W) — about 148 kcal of a
+      95-minute walk, a fifth of the gross figure, and a fifth he spends sitting at the same desk doing
+      nothing. It did so *because this number leaves the app*: added to a day that already accounts for
+      basal expenditure, a gross figure double-counts silently. So every surface here says "active",
+      and gross is never reconstructed from a resting rate this app does not have (see
+      CARDIO_NOT_COMPUTED). If PadCoach ever sends `grossKcal`/`restingKcal`, they are read and shown
+      as their own figures — labelled, never swapped in for the active one.
+
+   2. THE BAND IS PART OF THE NUMBER. PadCoach builds it from a ±20% model error (±35% under 3 km/h,
+      its own validated floor) combined in quadrature with the uncertainty of the upper-body-support
+      correction — which rests on two studies of n = 10 and n = 13, one of them not statistically
+      significant. That lands around ±23% for his desk walking. A point value drawn alone would
+      misrepresent what is known, so nothing here renders kcal without its band. The percentage is
+      RECOVERED from the two bounds rather than assumed, because the fraction PadCoach used depends on
+      speed and on the support setting and is not on the wire.
+
+   3. ABSENT IS NULL, NEVER ZERO. A manual entry has no heart rate and therefore no calorie model at
+      all; a session missing grade or body weight gets nothing from PadCoach on purpose; and his older
+      synced days carry none until PadCoach re-exports them. All three are gaps, and a gap that renders
+      as 0 is a lie that also sinks every average it touches. */
+const cardioCalorie = (c) => {
+  if (!c || typeof c !== "object") return null;
+  const kcal = cPos(c.kcal);
+  if (kcal == null) return null;                       // 0 kcal is not an estimate, it is an absent one
+  const lo = cPos(c.lowKcal), hi = cPos(c.highKcal);
+  const banded = lo != null && hi != null && hi > lo;
+  const resting = cNum(c.restingKcal);
+  const gross = cPos(c.grossKcal) != null ? cPos(c.grossKcal) : resting != null && resting >= 0 ? kcal + resting : null;
+  return {
+    kcal, lowKcal: banded ? lo : kcal, highKcal: banded ? hi : kcal, banded,
+    // ±% of the point value. Half the band width, so "±23%" means the same thing it means upstream.
+    bandPct: banded ? ((hi - lo) / 2 / kcal) * 100 : null,
+    model: typeof c.model === "string" && c.model ? c.model : null,
+    // NOT SENT YET, all four — present on PadCoach's own CalorieEstimate but absent from
+    // CoachExportCalorie. Read anyway so the card lights up by itself the day they cross the wire.
+    grossKcal: gross, restingKcal: resting != null && resting >= 0 ? resting : null,
+    hrCrossCheckKcal: cPos(c.hrCrossCheckKcal),
+    belowValidatedSpeedFloor: c.belowValidatedSpeedFloor === true,
+    supportReductionFraction: cPos(c.supportReductionFraction),
+  };
+};
+
 // One PadCoach session, normalized. avgSpeedKmh is the interesting one: PadCoach's own figure when the
 // export carries it, otherwise derived from distance ÷ moving time — two fields it has always sent. The
 // source is kept so the UI can say "derived" rather than imply a measured belt-speed average.
@@ -418,6 +491,12 @@ const cardioSession = (s) => {
     cadenceStepsPerMin: cadSteps != null ? cadSteps : cadStrides != null ? cadStrides * 2 : null,
     bandName: s.bandName || null, bandLow: cPos(s.bandLowerBPM), bandHigh: cPos(s.bandUpperBPM),
     calorie: s.calorie && typeof s.calorie === "object" ? s.calorie : null,
+    // Task 63 — the same block, normalized: band recovered, active/gross kept apart, 0 read as absent.
+    cal: cardioCalorie(s.calorie),
+    // Why this session has no calorie BECAUSE OF WHAT IT IS rather than because an input was missing —
+    // PadCoach attaches this to a ride (the walking equations do not apply) and never to a walk. Shown
+    // verbatim, so "no estimate" can say which kind of no.
+    calUnavailableReason: typeof s.calorieUnavailableReason === "string" && s.calorieUnavailableReason ? s.calorieUnavailableReason : null,
     context: ctx,
     // NOT SENT YET: PadCoach records no RPE. Kept so the row fills itself in if it ever does.
     effort: cPos(s.perceivedEffort), hrHistogram: hist && hist.length ? hist : null,
@@ -456,11 +535,33 @@ const cardioDay = (d) => {
   const inZoneSec = sessions.reduce((a, s) => a + s.inZoneSec, 0);
   const hrW = sessions.filter((s) => s.avgHr != null && s.movingSec > 0);
   const bandS = sessions.filter(inBandSession);
+  // Task 63 — the day's calorie figure is PadCoach's own (CoachExportDay.calorie), which is what its
+  // dashboard shows; taking it verbatim is what stops this app quietly disagreeing with PadCoach for
+  // the same day. The MOVING TIME AND DISTANCE BEHIND IT, though, come from the sessions that actually
+  // produced an estimate — not from the whole day. A day that mixes a measured walk with a manual
+  // entry would otherwise divide real calories by an hour that never had a calorie model applied to
+  // it, and report a kcal/h that is simply too low.
+  const cal = cardioCalorie(d.calorie);
+  const calS = sessions.filter((s) => s.cal);
+  const calSec = calS.reduce((a, s) => a + s.movingSec, 0);
+  const calKm = calS.reduce((a, s) => a + s.distanceKm, 0);
+  const sessKm = sessions.reduce((a, s) => a + s.distanceKm, 0);
   return {
     steps, distanceKm, movingSec, measuredSec, inZoneSec, sessions, manual,
     zone2Min: cPos(d.zone2Min),                                     // PadCoach only — null, not 0, when it sent none
-    kcal: d.calorie && typeof d.calorie === "object" ? cPos(d.calorie.kcal) : null,
+    kcal: cal ? cal.kcal : null,
     calorie: d.calorie && typeof d.calorie === "object" ? d.calorie : null,
+    cal,                                                            // normalized: band, model, active/gross kept apart
+    // Seconds and km behind the estimate — see the note above. 0 when there is no estimate at all, so a
+    // rate divides by nothing rather than by a denominator with no numerator.
+    calSec: cal ? (calSec > 0 ? calSec : measuredSec) : 0,
+    calKm: cal ? (calKm > 0 ? calKm : sessKm) : 0,
+    calSessions: calS.length,
+    calMissingSessions: sessions.filter((s) => !s.cal).length,
+    // A PARTIAL day: PadCoach counted working minutes it has no calorie model for (a ride). The day's
+    // total is then an undercount and must never be drawn as a complete one.
+    calOmitted: Array.isArray(d.calorieOmittedModalities) && d.calorieOmittedModalities.length
+      ? { modalities: d.calorieOmittedModalities, reason: typeof d.calorieOmittedReason === "string" && d.calorieOmittedReason ? d.calorieOmittedReason : null } : null,
     // PadCoach's OWN day figure wins when it sends one (CoachExportDay.avgHeartRate/maxHeartRate) — it is
     // time-weighted across the day upstream, so taking it verbatim is what stops this app quietly
     // disagreeing with PadCoach's dashboard for the same day. Falls back to the session-weighted average
@@ -498,10 +599,26 @@ const cardioAgg = (win) => {
   const sum = (f) => st.reduce((a, s) => a + (f(s) || 0), 0);
   const hrD = st.filter((s) => s.avgHr != null), bandD = st.filter((s) => s.speedAtZone != null), restD = st.filter((s) => s.restingBPM != null);
   const measuredSec = sum((s) => s.measuredSec), inZoneSec = sum((s) => s.inZoneSec);
+  // Task 63 — calories aggregate over the days that HAVE an estimate, and count the ones that don't
+  // rather than absorbing them as zeroes. `kcal` keeps the name it has always had and the same value
+  // (a day without an estimate contributed 0 to the old sum too); what is new is that `kcalDays` and
+  // `kcalGapDays` travel with it, so no consumer can divide by the wrong denominator by accident.
+  //
+  // THE BANDS ARE SUMMED LINEARLY, NOT IN QUADRATURE, and that is a deliberate call: the dominant term
+  // in PadCoach's error bar is a SYSTEMATIC model error — the same ACSM equation and the same
+  // upper-body-support correction applied to every walk — so it does not average out across days the
+  // way independent noise would. Adding the bounds treats the errors as perfectly correlated, which is
+  // the conservative reading and the honest one here. Quadrature would narrow a 28-day band by roughly
+  // a factor of five and imply an independence this data does not have.
+  const calD = st.filter((s) => s.cal);
   return {
     days: win.length, walkedDays: st.length,
     zone2Min: sum((s) => s.zone2Min), movingSec: sum((s) => s.movingSec), distanceKm: sum((s) => s.distanceKm),
     steps: sum((s) => s.steps), kcal: sum((s) => s.kcal), measuredSec, inZoneSec,
+    kcalLow: calD.reduce((a, s) => a + s.cal.lowKcal, 0), kcalHigh: calD.reduce((a, s) => a + s.cal.highKcal, 0),
+    kcalDays: calD.length, kcalGapDays: st.length - calD.length,
+    kcalSec: calD.reduce((a, s) => a + s.calSec, 0), kcalKm: calD.reduce((a, s) => a + s.calKm, 0),
+    kcalPartialDays: calD.filter((s) => s.calOmitted || s.calMissingSessions > 0).length,
     sessions: sum((s) => s.sessions.length),
     inZonePct: measuredSec > 0 && inZoneSec > 0 ? (inZoneSec / measuredSec) * 100 : null,
     avgHr: hrD.length ? hrD.reduce((a, s) => a + s.avgHr, 0) / hrD.length : null, hrDays: hrD.length,
@@ -536,6 +653,18 @@ const cardioTrendRows = (days, endKey, n = 28) => {
   ];
   // Resting HR only appears once PadCoach is actually sending it — a permanently blank row would be noise.
   if (prev.restDays || cur.restDays) rows.push(row("resting", "Resting HR", prev.restingBPM, cur.restingBPM, " bpm", "down", prev.restDays, cur.restDays));
+  // Task 63 — calories, on the days that carried an estimate. BOTH ROWS ARE NEUTRAL (`better: null`),
+  // for the same class of reason avg HR is: a rise can be more walking, or it can be one turn of the
+  // incline knob. Colouring it green would encode an achievement the data cannot support, and the
+  // "what drives this" block on the Calories card exists precisely to tell those two apart.
+  // The denominator is days WITH an estimate, never all walked days — a blank day must not be able to
+  // halve a per-day average by pretending it was a zero-calorie walk.
+  if (prev.kcalDays || cur.kcalDays) {
+    rows.push(row("kcal", "Active kcal/day", prev.kcalDays ? prev.kcal / prev.kcalDays : null,
+      cur.kcalDays ? cur.kcal / cur.kcalDays : null, " kcal", null, prev.kcalDays, cur.kcalDays));
+    rows.push(row("kcalHr", "Active kcal/hour", prev.kcalSec > 0 ? prev.kcal / (prev.kcalSec / 3600) : null,
+      cur.kcalSec > 0 ? cur.kcal / (cur.kcalSec / 3600) : null, " kcal/h", null, prev.kcalDays, cur.kcalDays));
+  }
   return { rows, cur, prev, n };
 };
 
@@ -583,6 +712,179 @@ const cardioRecords = (days, endKey) => {
   return { session, day, week: wk ? { min: wk.zone2Min, start: wk.start } : null,
     longestSessionMin: keys.reduce((a, k) => { const st = cardioDay(days[k]); return st ? st.sessions.reduce((b, s) => Math.max(b, s.movingSec / 60), a) : a; }, 0) };
 };
+/* ───────────────── calorie statistics (Task 63) ─────────────────
+   > "I checked coach ap and there is NO CALORIES ANYWHERE, we need stats for calories too"
+
+   There has been one calorie figure on this tab since Task 57 — a dim line in the Today card and a chip
+   on the trend chart. He sees none because his own payload carries none: a PadCoach bug recomputed
+   every replayed session without his body settings, and the export builder never passed the
+   upper-body-support setting. Both are fixed upstream, so the work here is to make calories a
+   first-class statistic instead of one number, and to be exact about the days that will stay blank.
+
+   Four rules, stated once:
+
+   • NEVER A ZERO FOR A MISSING ESTIMATE. Three different things produce "no calories" and only one of
+     them is a zero: a day he did not walk (genuinely zero active energy), a manual entry (no heart
+     rate was measured, so no model applies at all), and a synced day PadCoach could not estimate or
+     has not re-exported since the fix. The last two are gaps and are counted, named and rendered as
+     gaps — and never allowed into a denominator.
+   • NOTHING IS ESTIMATED HERE. This app has never had a calorie model and does not gain one now.
+     Everything below is arithmetic over what PadCoach sent. A session missing grade or body weight
+     gets nothing from PadCoach on purpose, and gets nothing here for the same reason.
+   • ACTIVE, ALWAYS SAID OUT LOUD. See `cardioCalorie` above.
+   • EVERY TOTAL CARRIES ITS BAND, and the band is summed linearly — see the note in `cardioAgg`. */
+
+// Totals, rates and coverage over a window. `n` in days; null means the whole history.
+const cardioCalorieStats = (days, endKey, n) => {
+  const from = n ? shiftDate(endKey, -(n - 1)) : null;
+  const keys = Object.keys(days || {}).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k) && k <= endKey && (!from || k >= from)).sort();
+  let kcal = 0, lo = 0, hi = 0, sec = 0, km = 0, gross = 0, grossDays = 0, resting = 0, restDays = 0;
+  let unbanded = 0, belowFloor = 0, best = null;
+  const est = [], gap = [], partial = [], models = new Map();
+  keys.forEach((k) => {
+    const st = cardioDay(days[k]);
+    if (!st || !st.walked) return;                       // a day with no activity is not a gap, it is a rest day
+    if (!st.cal) {
+      // WHY there is no estimate, kept apart. "manual only" is structural and permanent for that day;
+      // a measured day with no estimate is the one that fills in when PadCoach re-exports.
+      gap.push({ key: k, movingSec: st.movingSec,
+        manualOnly: st.sessions.length === 0 && st.manual.length > 0,
+        reason: st.sessions.map((s) => s.calUnavailableReason).find(Boolean) || null });
+      return;
+    }
+    est.push(k);
+    kcal += st.cal.kcal; lo += st.cal.lowKcal; hi += st.cal.highKcal;
+    sec += st.calSec; km += st.calKm;
+    if (!st.cal.banded) unbanded++;
+    if (st.cal.belowValidatedSpeedFloor) belowFloor++;
+    if (st.cal.grossKcal != null) { gross += st.cal.grossKcal; grossDays++; }
+    if (st.cal.restingKcal != null) { resting += st.cal.restingKcal; restDays++; }
+    if (st.cal.model) models.set(st.cal.model, (models.get(st.cal.model) || 0) + 1);
+    if (st.calOmitted || st.calMissingSessions > 0) partial.push(k);
+    if (!best || st.cal.kcal > best.kcal) best = { key: k, kcal: st.cal.kcal, lowKcal: st.cal.lowKcal, highKcal: st.cal.highKcal };
+  });
+  const hours = sec / 3600;
+  const per = (d) => (d > 0 ? { v: kcal / d, lo: lo / d, hi: hi / d } : { v: null, lo: null, hi: null });
+  const walkedDays = est.length + gap.length;
+  // Where the blanks sit decides the sentence the card shows. His case is `olderMissing`: everything
+  // before PadCoach's fix has no estimate, everything after it does — which is a fact about the export,
+  // not about him, and reads as a bug unless it is said.
+  const shape = !walkedDays ? "empty" : !est.length ? "none" : !gap.length ? "complete"
+    : gap[gap.length - 1].key < est[0] ? "olderMissing"
+    : gap[0].key > est[est.length - 1] ? "newerMissing" : "scattered";
+  return {
+    n: n || null, firstKey: keys.length ? keys[0] : null, lastKey: keys.length ? keys[keys.length - 1] : null,
+    walkedDays, estDays: est.length, gapDays: gap.length, gap, estKeys: est, shape,
+    gapManualOnly: gap.filter((g) => g.manualOnly).length,
+    gapMeasured: gap.filter((g) => !g.manualOnly).length,
+    firstEstKey: est.length ? est[0] : null, lastEstKey: est.length ? est[est.length - 1] : null,
+    kcal: est.length ? kcal : null, lowKcal: est.length ? lo : null, highKcal: est.length ? hi : null,
+    bandPct: kcal > 0 && hi > lo ? ((hi - lo) / 2 / kcal) * 100 : null,
+    sec, km, hours, partialDays: partial.length, unbandedDays: unbanded, belowFloorDays: belowFloor,
+    perDay: per(est.length), perHour: per(hours), perKm: per(km),
+    models: [...models.entries()].map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count),
+    best,
+    // NOT SENT YET — both stay null on every real payload today, and the card says so rather than
+    // deriving a gross figure from a resting rate this app does not have.
+    grossKcal: grossDays ? gross : null, grossDays, restingKcal: restDays ? resting : null, restingDays: restDays,
+  };
+};
+
+// One point per calendar day, oldest → newest. `cumulative` turns it into the running total that makes
+// a long run of walking visible — and a day with no estimate FLATTENS that line rather than guessing at
+// it, which is why the caption says so. In the daily view a walked day with no estimate is `null` (a
+// visible gap) while a day he did not walk is a true 0.
+const cardioCalorieSeries = (days, endKey, n, cumulative) => {
+  let c = 0, cl = 0, ch = 0;
+  return cardioWindow(days, endKey, n).map(({ key, st }) => {
+    const walked = !!(st && st.walked);
+    const cal = st && st.cal ? st.cal : null;
+    if (cal) { c += cal.kcal; cl += cal.lowKcal; ch += cal.highKcal; }
+    const [, mm, dd] = key.split("-");
+    const gap = walked && !cal;
+    const r = Math.round;
+    return { key, d: `${+mm}/${+dd}`, gap,
+      v: cumulative ? r(c) : gap ? null : cal ? r(cal.kcal) : 0,
+      lo: cumulative ? r(cl) : gap ? null : cal ? r(cal.lowKcal) : 0,
+      hi: cumulative ? r(ch) : gap ? null : cal ? r(cal.highKcal) : 0 };
+  });
+};
+
+// What actually drives the number, from the fields the export carries: the treadmill grade, which model
+// ran (ACSM unloaded vs Pandolf with a vest), and the upper-body-support reduction. Sessions are grouped
+// by that triple, so a jump in the daily figure caused by one turn of the incline knob reads as a change
+// of setting rather than as a change in him. Body weight is NOT on the wire, so it cannot appear here —
+// the card says that instead of implying weight is constant.
+const CAL_MODEL_LABEL = { acsm: "ACSM walking equation", pandolf: "Pandolf load carriage" };
+const cardioCalorieDrivers = (days, endKey, n) => {
+  const from = n ? shiftDate(endKey, -(n - 1)) : null;
+  const rows = [];
+  Object.keys(days || {}).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k) && k <= endKey && (!from || k >= from)).sort().forEach((k) => {
+    const st = cardioDay(days[k]); if (!st) return;
+    st.sessions.forEach((s) => {
+      if (!s.cal || !(s.movingSec > 0)) return;
+      rows.push({ key: k, min: s.movingSec / 60, kcal: s.cal.kcal, kcalPerHour: s.cal.kcal / (s.movingSec / 3600),
+        kcalPerKm: s.distanceKm > 0 ? s.cal.kcal / s.distanceKm : null,
+        grade: s.gradePercent, gradeSource: s.gradeSource, model: s.cal.model,
+        support: s.cal.supportReductionFraction, speed: s.avgSpeedKmh, hr: s.avgHr });
+    });
+  });
+  if (!rows.length) return null;
+  const gid = (r) => `${r.grade == null ? "?" : r.grade.toFixed(2)}|${r.model || "?"}|${r.support == null ? "?" : r.support.toFixed(3)}`;
+  const map = new Map();
+  rows.forEach((r) => {
+    const id = gid(r);
+    if (!map.has(id)) map.set(id, { id, grade: r.grade, gradeSource: r.gradeSource, model: r.model, support: r.support, rows: [] });
+    map.get(id).rows.push(r);
+  });
+  const groups = [...map.values()].map((g) => {
+    const minutes = g.rows.reduce((a, r) => a + r.min, 0);
+    // Time-weighted, never a plain mean of session rates: a 96-minute walk and a 21-minute one are not
+    // two equal votes on what an hour of walking costs.
+    const wm = (f) => { const ok = g.rows.filter((r) => f(r) != null); const t = ok.reduce((a, r) => a + r.min, 0);
+      return t > 0 ? ok.reduce((a, r) => a + f(r) * r.min, 0) / t : null; };
+    return { ...g, n: g.rows.length, minutes, from: g.rows[0].key, to: g.rows[g.rows.length - 1].key,
+      kcal: g.rows.reduce((a, r) => a + r.kcal, 0),
+      kcalPerHour: minutes > 0 ? g.rows.reduce((a, r) => a + r.kcal, 0) / (minutes / 60) : null,
+      kcalPerKm: wm((r) => r.kcalPerKm), speed: wm((r) => r.speed), hr: wm((r) => r.hr) };
+  }).sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0));
+  // The one change worth naming: the newest session's group, against the group of the newest session
+  // before it that belonged to a different one. Three rules keep this from over-claiming:
+  //
+  //  • A DIMENSION UNKNOWN ON EITHER SIDE IS NOT A CHANGE. A session with no recorded grade beside one
+  //    with 8.75% does not mean the incline moved — it means one of the two was never written down.
+  //    Saying "what changed was the grade" there would be an inference the data cannot support.
+  //  • IF NOTHING NAMEABLE DIFFERS, THERE IS NO SENTENCE. `change` stays null and the group table alone
+  //    is shown, rather than a sentence that cannot finish itself.
+  //  • A MOVE UNDER THE APP'S OWN 3% DEADBAND IS NOT A JUMP, and this card exists to explain jumps.
+  //
+  // `sinceKey` is the date the new setting first applied — the first session after the old one — not
+  // the group's first-ever appearance, which can be months earlier if a setting was used, dropped and
+  // picked up again.
+  const last = rows[rows.length - 1], lastId = gid(last);
+  let prevRow = null, prevIdx = -1;
+  for (let i = rows.length - 2; i >= 0; i--) { if (gid(rows[i]) !== lastId) { prevRow = rows[i]; prevIdx = i; break; } }
+  const gOf = (id) => groups.find((g) => g.id === id) || null;
+  let change = null;
+  if (prevRow) {
+    const a = gOf(gid(prevRow)), b = gOf(lastId);
+    if (a && b && a.kcalPerHour != null && b.kcalPerHour != null && a.kcalPerHour > 0) {
+      const what = [];
+      const known = (x, y) => x != null && y != null;
+      if (known(a.grade, b.grade) && a.grade.toFixed(2) !== b.grade.toFixed(2)) what.push("grade");
+      if (known(a.model, b.model) && a.model !== b.model) what.push("model");
+      if (known(a.support, b.support) && a.support.toFixed(3) !== b.support.toFixed(3)) what.push("support setting");
+      const pct = ((b.kcalPerHour - a.kcalPerHour) / a.kcalPerHour) * 100;
+      if (what.length && Math.abs(pct) >= TREND_DEADBAND * 100)
+        change = { from: a, to: b, sinceKey: rows[prevIdx + 1].key, what, pct };
+    }
+  }
+  return { rows, groups, change, sessions: rows.length,
+    gradeKnown: rows.some((r) => r.grade != null),
+    modelKnown: rows.some((r) => r.model != null),
+    supportKnown: rows.some((r) => r.support != null) };
+};
+
 /* ───────────────── deep cardio analytics (Task 60) ─────────────────
    The Cardio tab's foundation (Task 57/59) answers "what did I do". This layer answers
    "is it working, and where is it going" — and it is deliberately NOT a copy of what Garmin,
@@ -639,6 +941,14 @@ const CARDIO_NOT_COMPUTED = [
     why: "Published as a shape, never as a formula. Reimplementing the shape without the calibration produces a number that looks like Whoop's and isn't." },
   { id: "pace", what: "Pace personal records, best efforts, segments, grade-adjusted pace",
     why: "The belt speed is set by a controller holding your heart rate. A fastest-5k record would be a record set by PadCoach, not by you. The records card tracks time in zone instead, which is the unit of your actual goal." },
+  // Task 63 — three calorie refusals, because the tempting thing to do with a calorie number is exactly
+  // the thing that would make it wrong.
+  { id: "grosskcal", what: "Gross calories, or a total daily energy expenditure",
+    why: "Every calorie figure here is ACTIVE — what the walk cost on top of simply being alive. Reconstructing the gross number needs the resting term the ACSM and Pandolf equations carry, which needs your body weight, and body weight is not on the wire at all. It would also be the wrong number to publish: added to a day that already accounts for basal expenditure, gross double-counts about a fifth of it silently. PadCoach subtracted that term on purpose before sending this. If it ever sends the gross and resting figures too, they appear here as their own labelled numbers — never in place of the active one." },
+  { id: "manualkcal", what: "Calories for a manual entry, or for any session PadCoach declined to estimate",
+    why: "A manual walk has no heart rate, no belt speed and no grade — there is nothing to run a model against, and inventing one would put a fabricated number beside measured ones with no way to tell them apart. PadCoach returns nothing for a session missing grade or body weight for the same reason. Those days are counted as blanks on the Calories card and named, never filled in." },
+  { id: "kcalproj", what: "A projection of future calories",
+    why: "The projections card fits volume, speed, efficiency and resting heart rate — things that move with fitness. Calories move with how long you walk and how steep the belt is, both of which you set directly, so a fitted line through them would forecast your own decisions and dress them up as a trend." },
 ];
 
 // Day key ↔ integer day, used only as a regression x-axis. Both ends go through the same function,
@@ -3499,6 +3809,8 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
   const resetForm = () => setForm({ type: "walk", durationMin: 0, distanceKm: 0, steps: 0 });
   const [metric, setMetric] = useState("zone2");
   const [range, setRange] = useState("14d");         // 14d | 8w — same numbers, two zoom levels
+  const [calRange, setCalRange] = useState("14d");   // 14d | 8w | all — the Calories card's own zoom
+  const [calMethod, setCalMethod] = useState(false);
   const [openSess, setOpenSess] = useState(null);
   const [syncOpen, setSyncOpen] = useState(false);
   const card = "mt-4 rounded-2xl border p-5";
@@ -3550,7 +3862,17 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
     { id: "moving", label: "Moving", suffix: " min", dp: 0, day: (s) => (s ? s.movingSec / 60 : 0), week: (w) => w.movingSec / 60 },
     { id: "distance", label: "Distance", suffix: " km", dp: 1, day: (s) => (s ? s.distanceKm : 0), week: (w) => w.distanceKm },
     { id: "steps", label: "Steps", suffix: "", dp: 0, day: (s) => (s ? s.steps : 0), week: (w) => w.steps },
-    { id: "kcal", label: "Calories", suffix: " kcal", dp: 0, day: (s) => (s ? s.kcal || 0 : 0), week: (w) => w.kcal },
+    // Task 63 — calories are a volume with holes in it, and the two cases must not look alike. A day he
+    // did not walk really is 0 active kcal; a day he DID walk that produced no estimate is a null, drawn
+    // as a break in the line. `gap` turns off connectNulls for exactly this series so the break shows.
+    { id: "kcal", label: "Calories", suffix: " kcal", dp: 0, gap: true,
+      day: (s) => (!s || !s.walked ? 0 : s.kcal != null ? s.kcal : null),
+      week: (w) => (w.walkedDays === 0 ? 0 : w.kcalDays > 0 ? w.kcal : null) },
+    // A RATE, so a blank week is blank rather than zero. The denominator is the time behind the
+    // estimate, never the whole day — see cardioDay's own note.
+    { id: "kcalHr", label: "kcal/h", suffix: " kcal/h", dp: 0, rate: true,
+      day: (s) => (s && s.cal && s.calSec > 0 ? s.cal.kcal / (s.calSec / 3600) : null),
+      week: (w) => (w.kcalSec > 0 ? w.kcal / (w.kcalSec / 3600) : null) },
     { id: "avgHr", label: "Avg HR", suffix: " bpm", dp: 0, rate: true, day: (s) => (s ? s.avgHr : null), week: (w) => w.avgHr },
     { id: "inZone", label: "% in zone", suffix: "%", dp: 0, rate: true, day: (s) => (s ? s.inZonePct : null), week: (w) => w.inZonePct },
     { id: "speed", label: `km/h @ ${Z2_MID}`, suffix: " km/h", dp: 2, rate: true, day: (s) => (s ? s.speedAtZone : null), week: (w) => w.speedAtZone },
@@ -3659,6 +3981,40 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
   // his first logged walk would print "0 min against 0", which is a fact about the calendar.
   const wow = useMemo(() => cardioWeekOverWeek(liveWeeks), [liveWeeks]);
 
+  // ── Task 63 · Energy ── Three windows of the same statistic, never three different statistics.
+  // Every one of these is a pure selector pinned by tests/run-tests.mjs; this component only draws them.
+  const cal14 = useMemo(() => cardioCalorieStats(days, today, 14), [days, today]);
+  const cal56 = useMemo(() => cardioCalorieStats(days, today, 56), [days, today]);
+  const calAll = useMemo(() => cardioCalorieStats(days, today, null), [days, today]);
+  const calDrv = useMemo(() => cardioCalorieDrivers(days, today, null), [days, today]);
+  // The cumulative view runs from his first logged day, capped at the retention cap so a long history
+  // cannot draw a chart with three thousand points in it.
+  const calSpan = useMemo(() => (allDays.length ? Math.min(CARDIO_DAY_CAP, dayNum(today) - dayNum(allDays[0].key) + 1) : 1), [allDays, today]);
+  const calDaily = useMemo(() => cardioCalorieSeries(days, today, 14, false), [days, today]);
+  const calCum = useMemo(() => cardioCalorieSeries(days, today, calSpan, true), [days, today, calSpan]);
+  // Weekly totals carry the same band, and a week he walked with no estimate anywhere in it is a null
+  // rather than a zero bar — the same rule as the daily view, one zoom level out.
+  const calWeekly = useMemo(() => weeks8.map((w) => ({ d: w.lbl,
+    v: w.walkedDays === 0 ? 0 : w.kcalDays > 0 ? Math.round(w.kcal) : null,
+    lo: w.walkedDays === 0 ? 0 : w.kcalDays > 0 ? Math.round(w.kcalLow) : null,
+    hi: w.walkedDays === 0 ? 0 : w.kcalDays > 0 ? Math.round(w.kcalHigh) : null,
+    gap: w.walkedDays > 0 && w.kcalDays === 0, partial: w.kcalGapDays > 0 })), [weeks8]);
+  const cs = calRange === "14d" ? cal14 : calRange === "8w" ? cal56 : calAll;
+  const calSeries = calRange === "14d" ? calDaily : calRange === "8w" ? calWeekly : calCum;
+  const calWindowLabel = calRange === "14d" ? "last 14 days" : calRange === "8w" ? "last 8 weeks" : "all time";
+  const calCumulative = calRange === "all";
+  // The blanks, said in the shape they actually have. `olderMissing` is his real case and reads as a
+  // bug unless it is named: everything before PadCoach's calorie fix carries no estimate at all.
+  const calShapeLine = {
+    none: "That is a fact about the export, not about your walking. A calorie figure needs the treadmill grade and your body weight, and a session replayed without your body settings loses it — so the estimate never reached this app even though the walk did. PadCoach recomputes the whole payload on every sync, so the figures appear here on their own the moment it sends them. Nothing on this card is filling the gap in with a guess in the meantime.",
+    complete: "Every walked day in this window carries an estimate.",
+    olderMissing: "Your older days carry no estimate and the recent ones do. PadCoach used to recompute a replayed session without your body settings, which dropped the figure; days exported since carry it. The blank stretch fills in on a full re-export — nothing here is guessing at it in the meantime.",
+    newerMissing: "Your most recent days carry no estimate while older ones do — usually a session that finished without a grade or body weight recorded.",
+    scattered: "The blanks are scattered rather than in one stretch, which usually means individual sessions were missing an input rather than a whole run of exports being stale.",
+    empty: "",
+  }[cs.shape] || "";
+  const calFmt = (v) => (v == null ? "—" : Math.round(v).toLocaleString());
+
   return (
     <>
       <div className="mt-6 flex items-center justify-between">
@@ -3708,13 +4064,30 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
             <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[10px]" style={{ color: C.ashDim }}>
               {st.inZonePct != null && <span><span style={{ color: C.sage }}>{Math.round(st.inZonePct)}%</span> of measured walking inside the band</span>}
               {st.avgHr != null && <span>avg {Math.round(st.avgHr)} bpm{st.maxHr ? ` · max ${Math.round(st.maxHr)}` : ""}</span>}
-              {st.calorie && <span>≈{Math.round(st.calorie.kcal)} kcal ({Math.round(st.calorie.lowKcal)}–{Math.round(st.calorie.highKcal)})</span>}
+              {/* Task 63 — "active" is not decoration. Comparing this against a treadmill console
+                  (gross) or a food label (also effectively gross) without that word compares two
+                  different quantities. The band travels with it, always. */}
+              {st.cal && <span style={{ color: C.bone }}>≈{Math.round(st.cal.kcal)} kcal active <span style={{ color: C.ashDim }}>({Math.round(st.cal.lowKcal)}–{Math.round(st.cal.highKcal)}{st.cal.bandPct != null ? `, ±${Math.round(st.cal.bandPct)}%` : ""})</span></span>}
+              {st.cal && st.calSec > 0 && <span>{Math.round(st.cal.kcal / (st.calSec / 3600))} kcal/h{st.calKm > 0 ? ` · ${Math.round(st.cal.kcal / st.calKm)} kcal/km` : ""}</span>}
               {/* resting HR is from the seated pre-walk baseline, never from the walk — `restingSource`
                   says whether it was measured, typed in by hand, or a mix of both that day. */}
               {st.restingBPM != null && <span>resting {Math.round(st.restingBPM)} bpm{st.restingSource ? ` (${st.restingSource})` : ""}</span>}
               {st.hrv && st.hrv.rmssdMs != null && <span>HRV {Math.round(st.hrv.rmssdMs)} ms rmssd{st.hrv.quality === "usableWithCaveat" ? " (usable, with a caveat)" : ""}</span>}
             </div>
             {st.sessions.length === 0 && manual.length > 0 && <p className={cap} style={{ color: C.ashDim }}>manual entry only — no heart rate was measured, so there are no zone-2 minutes or calories for this day.</p>}
+            {/* Task 63 — a measured day with NO calorie figure has to say which kind of nothing it is,
+                rather than quietly omitting the line and reading as "zero calories". */}
+            {!st.cal && st.sessions.length > 0 && (
+              <p className={cap} style={{ color: C.ashDim }}>
+                no calorie estimate for this day{st.sessions.map((s) => s.calUnavailableReason).find(Boolean)
+                  ? ` — ${st.sessions.map((s) => s.calUnavailableReason).find(Boolean)}`
+                  : " — PadCoach returns nothing for a session missing the treadmill grade or your body weight, and this app has never invented one. It fills in by itself if PadCoach re-exports the day."}
+              </p>
+            )}
+            {/* A PARTIAL day: minutes were worked that the walking equations do not apply to. */}
+            {st.cal && st.calOmitted && (
+              <p className={cap} style={{ color: C.ashDim }}>{st.calOmitted.reason || `this figure leaves out ${st.calOmitted.modalities.join(", ")} — PadCoach has no calorie model for it, so the day's total is an undercount rather than a complete number.`}</p>
+            )}
           </>
         ) : (
           <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>nothing recorded for this day yet</p>
@@ -3726,7 +4099,7 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
            scaffold of zero-height bars would be a worse answer than saying so. */
         <div className={card} style={{ background: C.card, borderColor: C.edge }}>
           <span className={hdr} style={{ color: C.ash }}><TrendingUp size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Progress</span>
-          <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>No walks have reached this app yet. Everything else on this tab — the trend, the consistency calendar, efficiency and decoupling, training load, weekly volume, records, and the projections — appears after the first one. PadCoach syncs on its own, or add a walk by hand below. The Method card at the bottom already explains what each of those will mean, and which famous metrics this app deliberately will not compute.</p>
+          <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>No walks have reached this app yet. Everything else on this tab — the trend, active calories, the consistency calendar, efficiency and decoupling, training load, weekly volume, records, and the projections — appears after the first one. PadCoach syncs on its own, or add a walk by hand below. The Method card at the bottom already explains what each of those will mean, and which famous metrics this app deliberately will not compute.</p>
         </div>
       ) : (
         <>
@@ -3784,17 +4157,197 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
                   <YAxis tick={{ fill: C.ashDim, fontSize: 9, fontFamily: "monospace" }} stroke="#2A2418" width={40} domain={m.rate ? ["auto", "auto"] : [0, chartGoal ? (mx) => niceCeil(Math.max(mx * 1.02, chartGoal * 1.05)) : "auto"]} />
                   <Tooltip contentStyle={{ background: "#15120A", border: `1px solid ${C.edge}`, borderRadius: 8, fontFamily: "monospace", fontSize: 11 }} labelStyle={{ color: C.ash }} itemStyle={{ color: C.bone }} formatter={(v) => [`${v}${m.suffix}`, m.label]} />
                   {chartGoal ? <ReferenceLine y={chartGoal} stroke={C.goldDim} strokeDasharray="2 4" /> : null}
-                  <Line type="monotone" dataKey="v" stroke={C.gold} strokeWidth={2} dot={{ r: 2, fill: C.gold }} connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey="v" stroke={C.gold} strokeWidth={2} dot={{ r: 2, fill: C.gold }} connectNulls={!m.gap} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
             <p className={cap} style={{ color: C.ashDim }}>
-              {m.rate
+              {m.id === "kcal"
+                ? `${range === "8w" ? "weeks" : "days"} you didn't walk count as zero, because they are — but a ${range === "8w" ? "week" : "day"} you DID walk that produced no estimate breaks the line instead, because a missing calorie figure is not a zero one. the Calories card below says how many, and why.`
+                : m.id === "kcalHr"
+                ? `active kcal ÷ the hours that actually produced an estimate, never the whole ${range === "8w" ? "week" : "day"}. this is the figure that doesn't just restate how long you walked — but it also moves when you change the incline, so read it beside the Calories card rather than as a fitness signal.`
+                : m.rate
                 ? `a ${range === "8w" ? "week" : "day"} with no measured heart rate leaves a gap rather than a zero — you didn't walk at 0 bpm.`
                 : `${range === "8w" ? "weeks" : "days"} you didn't walk count as zero, because they are.`}
               {chartGoal ? ` dashed line = ${range === "8w" ? weekGoalNote : "PadCoach's adaptive target for the day"}.` : ""}
               {sVals.length < 3 ? " the line needs a few more days before its shape means anything." : ""}
             </p>
+          </div>
+
+          {/* ── Task 63 · Energy ── The answer to "there is NO CALORIES ANYWHERE". Everything on this
+              card is arithmetic over what PadCoach sent; nothing here estimates a calorie, and the days
+              that genuinely have none are counted and named rather than drawn as zeroes. */}
+          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+            <div className="flex items-center justify-between gap-2">
+              <span className={hdr} style={{ color: C.ash }}><Flame size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Calories</span>
+              <div className="flex gap-1.5">
+                {[["14d", "14 days"], ["8w", "8 weeks"], ["all", "all time"]].map(([id, lab]) => (
+                  <button key={id} onClick={() => setCalRange(id)} className="rounded-full border px-3 py-1 font-mono text-[10px]" style={{ borderColor: calRange === id ? C.goldDim : C.edge, background: calRange === id ? "#241F12" : "transparent", color: calRange === id ? C.gold : C.ash }}>{lab}</button>
+                ))}
+              </div>
+            </div>
+
+            {cs.estDays === 0 ? (
+              /* The state he is actually in today. Deliberately a paragraph and not an empty chart:
+                 a scaffold of zero-height bars would answer "where are my calories" with a picture of
+                 zero calories, which is the one answer that is false. */
+              <>
+                <p className="mt-3 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>
+                  {cs.walkedDays === 0
+                    ? "No walking in this window, so there is no energy to total."
+                    : cs.walkedDays === 1
+                    ? <>The one day you walked here — {fmtHM(cs.gap[0].movingSec / 3600)} of it — carries no calorie estimate.</>
+                    : <>None of the {cs.walkedDays} days you walked here carries a calorie estimate, across {fmtHM(cs.gap.reduce((a, g) => a + g.movingSec, 0) / 3600)} of walking.</>}
+                </p>
+                {calShapeLine && <p className="mt-2 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>{calShapeLine}</p>}
+                {cs.gapManualOnly > 0 && (
+                  <p className="mt-2 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>
+                    {cs.gapManualOnly} of them {cs.gapManualOnly === 1 ? "is" : "are"} a manual entry — no heart rate, no belt speed and no grade were measured, so there is nothing to run a model against. Those stay blank permanently, and that is correct.
+                  </p>
+                )}
+                {calAll.estDays > 0 && calRange !== "all" && (
+                  <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>your whole history does carry {calAll.estDays} day{calAll.estDays === 1 ? "" : "s"} with an estimate — switch to “all time”.</p>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="mt-3 flex items-end justify-between gap-3">
+                  <div>
+                    <p className={sub} style={{ color: C.ashDim }}>{calWindowLabel} · active</p>
+                    <p className="font-mono text-2xl font-bold" style={{ color: C.bone }}>{calFmt(cs.kcal)}<span className="ml-1 font-mono text-[13px] font-normal" style={{ color: C.ash }}>kcal</span></p>
+                    <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>{calFmt(cs.lowKcal)}–{calFmt(cs.highKcal)}{cs.bandPct != null ? ` · ±${Math.round(cs.bandPct)}%` : ""}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className={sub} style={{ color: C.ashDim }}>per day</p>
+                    <p className="font-mono text-xl font-bold" style={{ color: C.gold }}>{calFmt(cs.perDay.v)}<span className="ml-1 font-mono text-[12px] font-normal" style={{ color: C.ash }}>kcal</span></p>
+                    {/* Never "per day" over the window — over the days that carried an estimate, and the
+                        label says which, because that is the difference between an average and a lie. */}
+                    <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>{calFmt(cs.perDay.lo)}–{calFmt(cs.perDay.hi)} · over {cs.estDays} day{cs.estDays === 1 ? "" : "s"}</p>
+                  </div>
+                </div>
+
+                {/* Coverage before the chart, not after it: the total above means one thing if it covers
+                    every walked day and quite another if it covers half of them. */}
+                <p className="mt-3 font-mono text-[11px]" style={{ color: C.ash }}>
+                  <span style={{ color: C.bone }}>{cs.estDays}</span> of {cs.walkedDays} walked day{cs.walkedDays === 1 ? "" : "s"} carr{cs.estDays === 1 ? "ies" : "y"} an estimate
+                  {cs.gapDays > 0 && <span className="ml-2" style={{ color: C.ashDim }}>· {cs.gapDays} blank{cs.gapMeasured > 0 && cs.gapManualOnly > 0 ? ` (${cs.gapMeasured} measured, ${cs.gapManualOnly} manual)` : cs.gapManualOnly > 0 ? " (manual entries)" : ""}</span>}
+                </p>
+                {cs.gapDays > 0 && calShapeLine && <p className="mt-1 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>{calShapeLine}</p>}
+                {cs.partialDays > 0 && (
+                  <p className="mt-1 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>
+                    {cs.partialDays} day{cs.partialDays === 1 ? " is" : "s are"} PARTIAL — minutes were worked that PadCoach has no calorie model for, so the total above is an undercount rather than a complete figure.
+                  </p>
+                )}
+
+                <div className="mt-3" style={{ height: 130, width: "100%" }}>
+                  <ResponsiveContainer>
+                    <LineChart data={calSeries} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                      <CartesianGrid stroke="#221E15" vertical={false} />
+                      <XAxis dataKey="d" tick={{ fill: C.ashDim, fontSize: 8, fontFamily: "monospace" }} stroke="#2A2418" interval={calRange === "8w" ? 0 : "preserveStartEnd"} />
+                      <YAxis tick={{ fill: C.ashDim, fontSize: 9, fontFamily: "monospace" }} stroke="#2A2418" width={46} domain={[0, "auto"]} />
+                      <Tooltip contentStyle={{ background: "#15120A", border: `1px solid ${C.edge}`, borderRadius: 8, fontFamily: "monospace", fontSize: 11 }} labelStyle={{ color: C.ash }} itemStyle={{ color: C.bone }}
+                        formatter={(v, nm) => [`${Number(v).toLocaleString()} kcal`, nm]} />
+                      {/* The band is drawn as two dashed lines rather than a shaded area — the same
+                          choice Task 60 made for its projection band, and for the same reason: an
+                          <Area> would need a different chart component and a new import. */}
+                      <Line type="monotone" dataKey="lo" name="low" stroke={C.goldDim} strokeWidth={1} strokeDasharray="3 3" dot={false} connectNulls={false} isAnimationActive={false} />
+                      <Line type="monotone" dataKey="hi" name="high" stroke={C.goldDim} strokeWidth={1} strokeDasharray="3 3" dot={false} connectNulls={false} isAnimationActive={false} />
+                      <Line type="monotone" dataKey="v" name={calCumulative ? "cumulative" : "active"} stroke={C.gold} strokeWidth={2} dot={calRange === "all" ? false : { r: 2, fill: C.gold }} connectNulls={false} isAnimationActive={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                <p className={cap} style={{ color: C.ashDim }}>
+                  {calCumulative
+                    ? <>running total since your first logged walk, {calSpan} day{calSpan === 1 ? "" : "s"} ago. it only rises on days that produced an estimate, so a blank day flattens the line rather than being guessed at — and the two dashed lines are the band, which widens with every day added because the same model error applies to all of them.</>
+                    : <>solid = the estimate, dashed = the band it carries. a {calRange === "8w" ? "week" : "day"} you didn't walk sits at zero <em>with a dot</em>, because it really is zero; a {calRange === "8w" ? "week" : "day"} you walked with no estimate breaks all three lines and gets <em>no dot at all</em>, because a missing figure is not a zero one.</>}
+                </p>
+
+                {/* ── Rates ── For someone who walks for hours, a rate is usually more meaningful than
+                    a total: it is the part that does not just restate how long he walked. */}
+                <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
+                  <p className={sub} style={{ color: C.ashDim }}>rates · what an hour and a kilometre cost</p>
+                  <div className="mt-2 flex flex-wrap gap-x-8 gap-y-3">
+                    {[["kcal per hour", cs.perHour, "kcal/h"], ["kcal per km", cs.perKm, "kcal/km"]].map(([lab, r, unit]) => (
+                      <div key={lab}>
+                        <p className={sub} style={{ color: C.ashDim }}>{lab}</p>
+                        <p className="font-mono text-lg font-bold" style={{ color: r.v != null ? C.bone : C.ashDim }}>{calFmt(r.v)}<span className="ml-1 font-mono text-[10px] font-normal" style={{ color: C.ash }}>{unit}</span></p>
+                        <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>{r.v != null ? `${calFmt(r.lo)}–${calFmt(r.hi)}` : "no estimate yet"}</p>
+                      </div>
+                    ))}
+                    {cs.best && (
+                      <div>
+                        <p className={sub} style={{ color: C.ashDim }}>biggest day</p>
+                        <p className="font-mono text-lg font-bold" style={{ color: C.gold }}>{calFmt(cs.best.kcal)}<span className="ml-1 font-mono text-[10px] font-normal" style={{ color: C.ash }}>kcal</span></p>
+                        <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>{dLbl(cs.best.key)} · {calFmt(cs.best.lowKcal)}–{calFmt(cs.best.highKcal)}</p>
+                      </div>
+                    )}
+                  </div>
+                  <p className={cap} style={{ color: C.ashDim }}>
+                    both rates divide by the walking that actually produced an estimate — {fmtHM(cs.hours)} and {cs.km.toFixed(1)} km of it — never by the whole day. a manual entry's hour is not in that denominator, because it has no calories in the numerator either.
+                    you walk for hours, so kcal per hour is usually the figure worth watching: a total mostly restates how long you walked, while the rate says what an hour of it costs.
+                  </p>
+                </div>
+
+                {/* ── What drives it ── The requirement this card exists for: a jump because he moved
+                    the incline must read as an incline change, not as a fitness change. */}
+                <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
+                  <p className={sub} style={{ color: C.ashDim }}>what drives this number</p>
+                  {calDrv && calDrv.groups.length > 1 ? (
+                    <>
+                      {/* Stacked rather than two columns: at 375 px a grade label and a rate collide,
+                          and the setting has to be readable before the number it produced. */}
+                      <div className="mt-2 flex flex-col gap-2">
+                        {calDrv.groups.map((g) => (
+                          <div key={g.id} className="font-mono text-[10px]" style={{ color: C.ashDim }}>
+                            <p style={{ color: C.ash }}>
+                              {g.grade != null ? `${g.grade.toFixed(2)}% grade` : "grade not recorded"}
+                              {g.gradeSource && g.gradeSource !== "measured" ? ` (${g.gradeSource})` : ""}
+                              {g.model ? ` · ${CAL_MODEL_LABEL[g.model] || g.model}` : ""}
+                              {g.support != null ? ` · support −${Math.round(g.support * 100)}%` : ""}
+                            </p>
+                            <p>
+                              <span style={{ color: C.bone }}>{calFmt(g.kcalPerHour)} kcal/h</span>
+                              {` · ${g.n} session${g.n === 1 ? "" : "s"}`}
+                              {g.speed != null ? ` · ${g.speed.toFixed(2)} km/h` : ""}
+                              {g.hr != null ? ` · ${Math.round(g.hr)} bpm` : ""}
+                              {` · ${dLbl(g.from)}${g.from === g.to ? "" : `–${dLbl(g.to)}`}`}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                      {calDrv.change && (
+                        <p className="mt-2 font-mono text-[11px] leading-relaxed" style={{ color: C.ash }}>
+                          from {dLbl(calDrv.change.sinceKey)} your cost per hour went <span style={{ color: C.bone }}>{calFmt(calDrv.change.from.kcalPerHour)} → {calFmt(calDrv.change.to.kcalPerHour)} kcal/h</span> ({calDrv.change.pct > 0 ? "+" : ""}{Math.round(calDrv.change.pct)}%) — and what changed was the <span style={{ color: C.gold }}>{calDrv.change.what.join(" and ")}</span>, not you.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="mt-2 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>
+                      {!calDrv ? "No session carries both a calorie figure and moving time yet, so there is nothing to attribute."
+                        : !calDrv.gradeKnown ? "Every one of your sessions was estimated under the same recorded settings — and the treadmill grade is not in this payload at all, so if you had moved the incline, this card could not tell you. PadCoach records it; two fields would make an incline change readable here instead of showing up as an unexplained jump."
+                        : "Every session so far was walked at the same grade with the same model, so there is nothing here to attribute a change to yet."}
+                    </p>
+                  )}
+                  <p className={cap} style={{ color: C.ashDim }}>
+                    calories rise with grade, speed, body weight and how much of your weight the desk takes — and fall as you get more efficient. Only the first two and the support correction are on the wire, so this block groups sessions by those. <span style={{ color: C.ash }}>Body weight is not exported at all</span>, so a change in it would move every figure on this card silently; that is a real gap, not an omission from this list.
+                  </p>
+                </div>
+
+                <button onClick={() => setCalMethod((v) => !v)} className={`mt-3 ${sub}`} style={{ color: C.goldDim }}>{calMethod ? "▾ hide" : "▸ show"} what this number is, and what it is not</button>
+                {calMethod && (
+                  <div className="mt-2 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>
+                    <p><span style={{ color: C.bone }}>Active, not gross.</span> This is what the walking cost on top of simply being alive. Both equations PadCoach uses are gross — ACSM's leading 3.5 and Pandolf's leading 1.5·W are resting metabolism, roughly a fifth of a 95-minute walk's raw figure, which you spend sitting at the same desk doing nothing. PadCoach subtracts it before sending, precisely because this number leaves the app: added to a day that already accounts for basal expenditure, a gross figure double-counts silently. A treadmill console and a food label are both effectively gross, so those numbers will read higher than these.</p>
+                    <p className="mt-2"><span style={{ color: C.bone }}>The band is the number.</span> {cs.bandPct != null ? `±${Math.round(cs.bandPct)}%` : "The band"} comes from a ±20% error on the equation itself — ±35% below 3 km/h, its own validated floor — combined in quadrature with the uncertainty of the upper-body-support correction, which rests on two studies of n = 10 and n = 13, one of them not statistically significant. That second term applies to the grade part of the cost, so the band is narrowest on the flat and widens as you raise the incline. This percentage is read back off the figure's own bounds, not assumed. Nothing on this card shows a calorie figure without it.</p>
+                    <p className="mt-2"><span style={{ color: C.bone }}>Bands add, they do not shrink.</span> A window's low and high are the sum of each day's low and high. That treats the error as perfectly correlated across days, which it is: it is the same equation and the same correction applied every time, not independent noise that averages out. Combining them in quadrature would narrow a month's band by about five times and imply an independence this estimate does not have.</p>
+                    <p className="mt-2"><span style={{ color: C.bone }}>Nothing here is estimated by this app.</span> Every figure is arithmetic over what PadCoach sent. A session missing grade or body weight gets no estimate from PadCoach on purpose, and gets none here for the same reason.</p>
+                    {cs.models.length > 0 && <p className="mt-2"><span style={{ color: C.bone }}>Model.</span> {cs.models.map((m2) => `${CAL_MODEL_LABEL[m2.id] || m2.id} on ${m2.count} day${m2.count === 1 ? "" : "s"}`).join(" · ")}.</p>}
+                    {cs.belowFloorDays > 0 && <p className="mt-2"><span style={{ color: C.rust }}>Below the validated floor.</span> {cs.belowFloorDays} day{cs.belowFloorDays === 1 ? "" : "s"} were walked under 3 km/h, where the equation was never validated. PadCoach widens the band to ±35% for those rather than pretending the usual error applies.</p>}
+                    {cs.unbandedDays > 0 && <p className="mt-2"><span style={{ color: C.rust }}>{cs.unbandedDays} day{cs.unbandedDays === 1 ? "" : "s"} arrived with no band at all</span> — the point value is shown as its own low and high rather than widened by a guess.</p>}
+                    <p className="mt-2"><span style={{ color: C.bone }}>Gross and resting are not on the wire.</span> {cs.grossKcal != null ? `PadCoach is now sending them: ${calFmt(cs.grossKcal)} kcal gross over this window, of which ${calFmt(cs.restingKcal)} is the resting share.` : "PadCoach's own estimate carries a gross and a resting figure; the export does not. They are read here the day it sends them, and shown as their own labelled numbers — never in place of the active one. This app will not reconstruct them, because doing so needs your body weight, which is not exported either."}</p>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           {/* ── 4. Consistency ── the training variable that actually is his goal. Never a red cell. */}
@@ -3896,7 +4449,7 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
                   </div>
                 ))}
               </div>
-              <p className={cap} style={{ color: C.ashDim }}>a change under 3% is called flat, not an arrow. avg HR is shown without a verdict on purpose — PadCoach pins your heart rate and lets the belt float, so that number is the setpoint, not a result.</p>
+              <p className={cap} style={{ color: C.ashDim }}>a change under 3% is called flat, not an arrow. avg HR is shown without a verdict on purpose — PadCoach pins your heart rate and lets the belt float, so that number is the setpoint, not a result. the two calorie rows are neutral for a related reason: a rise can be more walking or one turn of the incline knob, and the Calories card is where those get told apart. their denominator is days that carried an estimate, so a blank day can never halve the average.</p>
             </div>
 
             {missing.length > 0 && (
@@ -4273,8 +4826,12 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
                     {ef != null && <span style={{ color: C.ashDim }}>EF {ef.toFixed(3)}</span>}
                     {s.efficiencyRatio != null && <span style={{ color: C.ashDim }}>VO₂÷HR {s.efficiencyRatio.toFixed(3)}</span>}
                     {ef != null && <span style={{ color: C.ashDim }}>load {Math.round(sessionLoad(s))}</span>}
-                    {s.calorie && <span>≈{Math.round(s.calorie.kcal)} kcal ({Math.round(s.calorie.lowKcal)}–{Math.round(s.calorie.highKcal)})</span>}
+                    {/* Task 63 — "active" travels with every calorie figure on this tab, and so does
+                        the band. A session with no estimate says why instead of showing nothing. */}
+                    {s.cal && <span>≈{Math.round(s.cal.kcal)} kcal active ({Math.round(s.cal.lowKcal)}–{Math.round(s.cal.highKcal)}){s.movingSec > 0 ? ` · ${Math.round(s.cal.kcal / (s.movingSec / 3600))} kcal/h` : ""}</span>}
+                    {!s.cal && <span style={{ color: C.ashDim }}>no calorie estimate{s.calUnavailableReason ? "" : " (missing grade or body weight)"}</span>}
                   </div>
+                  {!s.cal && s.calUnavailableReason && <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>{s.calUnavailableReason}</p>}
                   {/* Speed drift, in words. PadCoach pins heart rate, so aerobic drift shows up as the belt
                       slowing down — that sentence needs no threshold. The decoupling % is kept beside it as
                       a secondary figure with its own confidence, and deliberately gets no pass/fail badge:
@@ -4333,7 +4890,7 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
                 ["Training load", `Minutes × a zone weight (in band × ${ZONE_W_IN}, outside × ${ZONE_W_OUT}, above × ${ZONE_W_ABOVE}). Linear in duration on purpose.`],
                 ["Fitness / fatigue / form", `Exponentially-weighted moving averages of that load on TrainingPeaks' ${CTL_TAU}-day and ${ATL_TAU}-day constants. Form is yesterday's fitness minus yesterday's fatigue, and per TrainingPeaks measures how adapted you are — not how you will perform.`],
                 ["Projections", "A straight line fitted by least squares with Student's-t 95% intervals, which widen with distance from your data and with fewer readings. They report a range of dates, never a date."],
-                ["Calories", "PadCoach's ACSM estimate with a Keytel heart-rate cross-check, always shown as a band. Every other app shows a bare integer it cannot justify."],
+                ["Calories", "ACTIVE energy — what the walk cost on top of simply being alive — from PadCoach's ACSM equation (Pandolf when a vest is carried), with a Keytel heart-rate cross-check. Always shown as a band. ±20% on the equation itself, widened in quadrature by the uncertainty of the upper-body-support correction — which rests on two studies of n = 10 and n = 13, and which grows with grade because it applies to the grade term: ±20% on the flat, about ±23% at your 8.75%. The Calories card reads the real fraction back off each figure's own bounds rather than assuming it. Every other app shows a bare integer it cannot justify. A day PadCoach could not estimate is counted as a blank on the Calories card and never rendered as zero."],
               ].map(([k, v]) => (
                 <p key={k}><span style={{ color: C.bone }}>{k}</span> — {v}</p>
               ))}
