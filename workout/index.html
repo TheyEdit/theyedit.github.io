@@ -32,7 +32,7 @@
 <script type="text/babel" data-type="module" data-presets="react">
 const _b = document.getElementById("boot"); if (_b) _b.remove();
 import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
-import { Dumbbell, Clock, ArrowLeftRight, Play, Pause, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package, Camera, Sparkles, ScanBarcode, Unlink, Link2, List, Activity, Gauge, Target } from "lucide-react";
+import { Dumbbell, Clock, ArrowLeftRight, Play, Pause, Check, SkipForward, ChevronRight, ChevronLeft, Minus, Plus, Save, RotateCcw, RefreshCw, TrendingUp, TrendingDown, Info, X, Undo2, Apple, Flame, Footprints, Droplet, Moon, CalendarDays, Search, Star, Leaf, Package, Camera, Sparkles, ScanBarcode, Unlink, Link2, List, Activity, Gauge, Target, Layers } from "lucide-react";
 import { createRoot } from "react-dom/client";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { readBarcodes } from "zxing-wasm";
@@ -96,6 +96,9 @@ function buildOrder(cues, recentIdx) {
 
 /* ─────────────── persistent storage (artifact memory) ─────────────── */
 const KEY = "gg:v1", LIVE = "gg:live", TSKEY = "gg:ts", SYNCKEY = "gg:sync", SYNCEDKEY = "gg:synced";
+// Task 71 — which Cardio sections he leaves open. Per device, never synced: it is a fact about how he
+// likes to read the page, not a fact about his training.
+const SECKEY = "gg:cardioSecs";
 
 /* ─────────────── sync debug log (observable, on-screen) ─────────────── */
 // A small ring buffer that every pull/push/decision writes to, mirrored into the
@@ -211,7 +214,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0911-0107";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0911-1359";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -240,6 +243,162 @@ const CARDIO_DAY_CAP = 1095;
 // CoachExport.swift — so the readers Task 63 wrote speculatively are now live. They stay OPTIONAL
 // regardless: an older payload still in `cardio.days` carries none of them, and nothing downstream may
 // assume any one of them arrived.
+/* ─────────────── Task 71 · all five zones, with zone 2 left alone ───────────────
+   Schema 5 puts per-zone seconds on the wire. EVERY field is optional, so a schema-4 payload has to
+   render exactly as it did yesterday: every reader below returns null rather than a zeroed skeleton
+   when the block is absent, because "0 seconds in zone 4" and "PadCoach never told us about zone 4"
+   are different facts and a stacked bar drawn from the second would be an invention.
+
+   What this layer deliberately does NOT touch: `zone2Min`, `inZonePct`, `speedAtZone`, `timeInZoneSec`,
+   the volume target, Efficiency Factor and the zone-weighted load. Those are zone-2 figures computed
+   the way Tasks 57–67 established them, and they keep their names, their numbers and their maths.
+   This is a DISTRIBUTION shown beside them, never a replacement for them.
+
+   The one genuinely new distinction: `selectedZone` is the zone PadCoach was asked to hold for THAT
+   session. It is 2 today for every session on record, so "time in the zone you aimed for" and "time in
+   zone 2" are the same number — but they are not the same statement, and the day a bike session aims
+   at zone 4 they diverge. Both are computed; the card says which it is showing. */
+const CARDIO_ZONES = [1, 2, 3, 4, 5];
+const CARDIO_ZONE_DEFAULT_NAMES = { 1: "recovery", 2: "aerobic base", 3: "tempo", 4: "threshold", 5: "VO₂max" };
+// SECONDS, and only seconds. `zone2Min` stays MINUTES — it is PadCoach's own field under its own name
+// and nothing here touches it — so every reader below is named `…Sec` and every consumer divides by 60
+// itself. A negative or non-finite value is not a duration; 0 IS a reading and survives.
+const cZSec = (v) => (typeof v === "number" && isFinite(v) && v >= 0 ? v : null);
+// `{ "1": 321.548, "2": 4707.537, … }` — the wire uses STRING keys because it is JSON, and schema 5
+// always sends all five with an unvisited zone as 0. Numeric keys are read too, because a producer that
+// hands those back means the same thing. Returns null when not one zone carried a number, which is how
+// a schema-4 payload stays schema-4.
+const cardioZoneTimes = (raw) => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out = {}; let any = false;
+  CARDIO_ZONES.forEach((z) => {
+    const v = cZSec(raw[String(z)]) != null ? cZSec(raw[String(z)]) : cZSec(raw[z]);
+    if (v != null) { out[z] = v; any = true; }
+  });
+  return any ? out : null;
+};
+// `zoneBands` — the bpm edges each zone number means. Optional at both levels: a session sends its own
+// only when it was recorded against something other than the current setting, and `null` there means
+// "the same bands analytics carries". `cardioBandsFor` is the resolver, and it is the only place that
+// precedence lives.
+const cardioZoneBands = (raw) => {
+  if (!Array.isArray(raw)) return null;
+  const out = raw.map((b) => {
+    if (!b || typeof b !== "object") return null;
+    const z = cZSec(b.zone);
+    if (z == null || !CARDIO_ZONES.includes(Math.round(z))) return null;
+    return { zone: Math.round(z),
+      name: typeof b.name === "string" && b.name ? b.name : null,
+      lowerBPM: cZSec(b.lowerBPM), upperBPM: cZSec(b.upperBPM) };
+  }).filter(Boolean).sort((a, b) => a.zone - b.zone);
+  return out.length ? out : null;
+};
+const cardioBandsFor = (src, fallback) => (src && src.zoneBands) || fallback || null;
+/* What the band ladder does at its own seams, said out loud rather than smoothed over. His defaults do
+   BOTH of the two things a ladder can do wrong, and neither is a bug in this app or in PadCoach:
+     • a GAP — zone 1 ends at 114 and zone 2 starts at 124, so 115–123 bpm is in no band at all. That is
+       what `betweenBandsSec` is for, and it is why that time is its own bucket here instead of being
+       rounded into whichever zone is nearest. Roughly seven minutes of his 96-minute walk lives there.
+     • an OVERLAP — zone 2's ceiling is 135 and zone 3's floor is 134, so 134 and 135 bpm belong to two
+       zones at once. PadCoach resolves it by letting the LOWER zone win. This app does not re-resolve
+       it; it says which rule produced the number.
+   Both are computed from the bands themselves rather than hard-coded, so an edited ladder is described
+   as it actually is. */
+const cardioZoneBandSeams = (bands) => {
+  if (!Array.isArray(bands) || bands.length < 2) return null;
+  const gaps = [], overlaps = [];
+  for (let i = 0; i < bands.length - 1; i++) {
+    const a = bands[i], b = bands[i + 1];
+    if (a.upperBPM == null || b.lowerBPM == null) continue;
+    if (b.lowerBPM > a.upperBPM + 1) gaps.push({ from: a.upperBPM + 1, to: b.lowerBPM - 1, zones: [a.zone, b.zone] });
+    if (b.lowerBPM <= a.upperBPM) overlaps.push({ from: b.lowerBPM, to: a.upperBPM, zones: [a.zone, b.zone] });
+  }
+  return gaps.length || overlaps.length ? { gaps, overlaps } : null;
+};
+// One source of zone time — a session, a day, or a summed window — turned into the thing a stacked bar
+// needs. Four rules that are the whole point of this function:
+//   1. `below`, `above` and `between` are their OWN buckets. The warm-up before your heart rate reaches
+//      zone 1 is not zone-1 work, and the seven minutes spent in the 115–123 hole are not zone-1 work
+//      either. Folding any of the three into a neighbour would invent time in a zone he was not in.
+//   2. The denominator is `zoneAccountedSec` — the STRAP's clock — never `movingTimeSec`. On his real
+//      walk those are 5805.307 and 5707: a bar drawn against moving time would be 98 seconds of
+//      percentages that do not add up, and the error would look like rounding.
+//   3. If the buckets do not add up to that clock, the shortfall is reported rather than normalised
+//      away. A bar that always sums to 100% cannot tell you when it is missing something.
+//   4. `selectedZone` is the zone PadCoach was ASKED to hold. It is 2 today, so "time in the zone you
+//      aimed for" and "time in zone 2" are the same number — and they are not the same statement.
+const cardioZoneDist = (src) => {
+  if (!src || typeof src !== "object") return null;
+  const z = cardioZoneTimes(src.timeInZonesSec);
+  const below = cZSec(src.belowZone1Sec), above = cZSec(src.aboveZone5Sec), between = cZSec(src.betweenBandsSec);
+  if (!z && below == null && above == null && between == null) return null;
+  const buckets = [];
+  if (below != null) buckets.push({ id: "below", zone: null, sec: below, label: "below zone 1" });
+  CARDIO_ZONES.forEach((n) => { if (z && z[n] != null) buckets.push({ id: String(n), zone: n, sec: z[n], label: `zone ${n}` }); });
+  if (above != null) buckets.push({ id: "above", zone: null, sec: above, label: "above zone 5" });
+  // Last, and deliberately not on the intensity ramp: this is time at heart rates the ladder has no
+  // band for, so it has no place in an ordering by intensity.
+  if (between != null) buckets.push({ id: "between", zone: null, sec: between, label: "between bands" });
+  const bucketSec = buckets.reduce((a, b) => a + b.sec, 0);
+  const accountedSec = cZSec(src.zoneAccountedSec);
+  const totalSec = accountedSec != null ? accountedSec : bucketSec;
+  buckets.forEach((b) => { b.pct = totalSec > 0 ? (b.sec / totalSec) * 100 : 0; });
+  const unaccountedSec = accountedSec != null ? accountedSec - bucketSec : 0;
+  const sel = cZSec(src.selectedZone);
+  const selectedZone = sel != null && CARDIO_ZONES.includes(Math.round(sel)) ? Math.round(sel) : null;
+  const selB = selectedZone != null ? buckets.find((b) => b.zone === selectedZone) : null;
+  return { buckets, totalSec, bucketSec, accountedSec, selectedZone,
+    // More than a second apart is a real disagreement worth printing; less is float noise from summing
+    // sub-second samples, and printing that would be noise about noise.
+    unaccountedSec: Math.abs(unaccountedSec) > 1 ? unaccountedSec : 0,
+    selectedSec: selB ? selB.sec : null,
+    selectedPct: selB ? selB.pct : null,
+    zonesKnown: buckets.filter((b) => b.zone != null).map((b) => b.zone),
+    hasBelow: below != null, hasAbove: above != null, hasBetween: between != null,
+    // Whether the ladder these seconds were measured against was one he actually set. `false` is a real
+    // answer (PadCoach's defaults); absent is a different one (an export that never said).
+    bandsRecorded: typeof src.zoneBandsRecorded === "boolean" ? src.zoneBandsRecorded : null,
+    zoneBands: cardioZoneBands(src.zoneBands) };
+};
+// Several sources summed into one distribution — a day from its sessions, a window from its days. A
+// zone absent everywhere stays absent; a zone present anywhere is summed over the sources that carry
+// it, and `sources`/`covered` say how many of each there were so a card can name its own denominator.
+const cardioZoneSum = (list) => {
+  const src = (Array.isArray(list) ? list : []).filter((x) => x && typeof x === "object");
+  if (!src.length) return null;
+  const acc = {}; let below = null, above = null, between = null, accounted = null, covered = 0;
+  const selCount = {}; let recorded = null;
+  src.forEach((x) => {
+    // Either a raw wire source or a distribution already built from one — a day sums its sessions'
+    // `zones`, a window sums its days'. Detecting the built shape here is what keeps both callers from
+    // having to hold on to the raw block just to add it up later.
+    const d = Array.isArray(x.buckets) ? x : cardioZoneDist(x);
+    if (!d) return;
+    covered++;
+    d.buckets.forEach((b) => {
+      if (b.id === "below") below = (below || 0) + b.sec;
+      else if (b.id === "above") above = (above || 0) + b.sec;
+      else if (b.id === "between") between = (between || 0) + b.sec;
+      else acc[b.zone] = (acc[b.zone] || 0) + b.sec;
+    });
+    if (d.accountedSec != null) accounted = (accounted || 0) + d.accountedSec;
+    if (d.selectedZone != null) selCount[d.selectedZone] = (selCount[d.selectedZone] || 0) + 1;
+    if (d.bandsRecorded === true) recorded = true;
+    else if (d.bandsRecorded === false && recorded == null) recorded = false;
+  });
+  if (!covered) return null;
+  const sel = Object.keys(selCount).map(Number);
+  const out = cardioZoneDist({ timeInZonesSec: Object.keys(acc).length ? acc : null,
+    belowZone1Sec: below, aboveZone5Sec: above, betweenBandsSec: between, zoneAccountedSec: accounted,
+    // A window that aimed at one zone throughout can say so; a mixed one says nothing rather than
+    // picking the most common and implying it was the only one.
+    selectedZone: sel.length === 1 ? sel[0] : null });
+  if (!out) return null;
+  out.sources = src.length; out.covered = covered;
+  out.selectedZones = sel.sort((a, b) => a - b);
+  out.bandsRecorded = recorded;
+  return out;
+};
 const cleanCal = (c) => {
   if (!c || typeof c !== "object") return null;
   const out = { kcal: +c.kcal || 0, lowKcal: +c.lowKcal || 0, highKcal: +c.highKcal || 0 };
@@ -295,6 +454,16 @@ const cleanCardioDays = (json) => {
       if (mo.length) clean[k].calorieOmittedModalities = mo;
     }
     if (typeof d.calorieOmittedReason === "string" && d.calorieOmittedReason) clean[k].calorieOmittedReason = d.calorieOmittedReason;
+    // Task 71 — schema 5's day-level zone block. Carried only when PadCoach actually sent one, so a
+    // schema-4 day keeps the key absent rather than gaining a fabricated all-zeroes distribution.
+    // `sessions` already passes through whole, so the per-session zone fields need nothing here.
+    const dz = cardioZoneTimes(d.timeInZonesSec);
+    if (dz) clean[k].timeInZonesSec = dz;
+    ["belowZone1Sec", "aboveZone5Sec", "betweenBandsSec", "zoneAccountedSec"].forEach((f) => {
+      if (cZSec(d[f]) != null) clean[k][f] = cZSec(d[f]);
+    });
+    if (cZSec(d.selectedZone) != null && CARDIO_ZONES.includes(Math.round(d.selectedZone))) clean[k].selectedZone = Math.round(d.selectedZone);
+    if (typeof d.zoneBandsRecorded === "boolean") clean[k].zoneBandsRecorded = d.zoneBandsRecorded;
   });
   if (!Object.keys(clean).length) throw new Error("no valid days found in file");
   return clean;
@@ -339,6 +508,13 @@ const cleanCardioAnalytics = (json) => {
   const eff = sub("efficiency"), hrv = sub("hrv"), rhr = sub("restingHeartRate"), tiz = sub("timeInZone"), vol = sub("volume");
   return {
     zoneName: str(a.zoneName),
+    // Task 71 — what each zone number MEANS in heart rates. Optional: the distribution is readable
+    // without it, and this only lets the card say "zone 3 · 146–157 bpm" instead of "zone 3".
+    zoneBands: cardioZoneBands(a.zoneBands),
+    // "default" | "edited" | "garmin" — whether the ladder above is one he set, one Garmin gave him, or
+    // the app's own starting point. It changes how much weight a zone-3 figure deserves, so it is shown
+    // rather than assumed; absent stays absent rather than defaulting to "default".
+    zoneBandsSource: str(a.zoneBandsSource),
     efficiency: eff ? { readings: series(eff.readings, "ratio"), rolling: series(eff.rolling, "average"),
       direction: str(eff.direction), confidence: cConf(eff.confidence) } : null,
     hrv: hrv ? { readings: series(hrv.readings, "rmssdMs"), rollingShort: series(hrv.rollingShort, "average"),
@@ -514,6 +690,10 @@ const cardioSession = (s) => {
     providesPower: typeof s.providesPower === "boolean" ? s.providesPower : null,
     cadenceStepsPerMin: cadSteps != null ? cadSteps : cadStrides != null ? cadStrides * 2 : null,
     bandName: s.bandName || null, bandLow: cPos(s.bandLowerBPM), bandHigh: cPos(s.bandUpperBPM),
+    // Task 71 — the whole zone distribution, when schema 5 sent one; null otherwise. `inZoneSec` and
+    // `inZonePct` above are untouched either way — they are PadCoach's zone-2 figures, computed at
+    // native sample resolution upstream, and nothing here recomputes them out of these buckets.
+    zones: cardioZoneDist(s),
     calorie: s.calorie && typeof s.calorie === "object" ? s.calorie : null,
     // Task 63 — the same block, normalized: band recovered, active/gross kept apart, 0 read as absent.
     cal: cardioCalorie(s.calorie),
@@ -578,6 +758,11 @@ const cardioDay = (d) => {
   return {
     steps, distanceKm, movingSec, measuredSec, inZoneSec, sessions, manual,
     zone2Min: cPos(d.zone2Min),                                     // PadCoach only — null, not 0, when it sent none
+    // Task 71 — the day's zone distribution. PadCoach's OWN day block wins when it sends one (same rule
+    // avgHr already follows, and for the same reason: taking its figure verbatim is what stops this app
+    // quietly disagreeing with PadCoach's dashboard). Otherwise it is summed from the sessions that
+    // carried one — and it is null, not an all-zeroes bar, when nothing carried one at all.
+    zones: cardioZoneDist(d) || cardioZoneSum(sessions.map((x) => x.zones).filter(Boolean)),
     kcal: cal ? cal.kcal : null,
     calorie: d.calorie && typeof d.calorie === "object" ? d.calorie : null,
     cal,                                                            // normalized: band, model, active/gross kept apart
@@ -717,6 +902,83 @@ const cardioCalendar = (days, endKey, weeks = 8) => cardioWeeks(days, endKey, we
   start: w.start,
   cells: [...Array(7)].map((_, j) => { const key = shiftDate(w.start, j); return { key, st: cardioDay((days || {})[key]), future: key > endKey }; }),
 }));
+
+/* ─────────────── Task 71 · the month, as the place day detail lives ───────────────
+   The 8×7 consistency strip above is a SHAPE — "have I been walking" — and it stays exactly what it
+   was. This is a different thing: a real month you can point at, so a specific day's sessions and
+   their in-session charts have somewhere to be other than a wall of rows on one page.
+   Monday-anchored, like every other week in this app (`weekStartKey`), so the two calendars cannot
+   disagree about which column a Sunday is in. */
+// Brightness for a day cell: minutes in zone — or moving time, on a day with no heart rate — against a
+// two-hour ceiling, floored at 0.18 so a short walk still reads as a walk rather than as a rest day.
+// ONE definition, used by the 8x7 consistency strip and by the month grid, so the two calendars on this
+// tab cannot disagree about what a bright cell means.
+const cardioCellAlpha = (st) => (!st || !st.walked ? 0
+  : Math.max(0.18, Math.min(1, (st.zone2Min != null ? st.zone2Min : st.movingSec / 60) / 120)));
+const monthKeyOf = (key) => (typeof key === "string" ? key.slice(0, 7) : null);
+const monthShift = (mk, n) => {
+  const [y, m] = mk.split("-").map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
+const monthLabel = (mk, thisYear) => {
+  const [y, m] = mk.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-US", String(y) === String(thisYear)
+    ? { month: "long" } : { month: "long", year: "numeric" });
+};
+// The grid: whole weeks, Monday first, padded at both ends with the neighbouring months' days so the
+// columns line up. A padded cell is marked `inMonth: false` and never carries data — showing late
+// September inside October's grid would double-count it by eye.
+// `future` is the same idea the consistency strip uses: a day that has not happened is not a miss.
+const cardioMonthGrid = (days, monthKey, endKey) => {
+  const [y, m] = monthKey.split("-").map(Number);
+  const first = new Date(y, m - 1, 1), last = new Date(y, m, 0);
+  const gridStart = new Date(first); gridStart.setDate(1 - ((first.getDay() + 6) % 7));
+  const cells = [];
+  for (let i = 0; ; i++) {
+    const dt = new Date(gridStart); dt.setDate(gridStart.getDate() + i);
+    const key = dt.toLocaleDateString("en-CA");
+    const inMonth = dt.getMonth() === m - 1 && dt.getFullYear() === y;
+    cells.push({ key, inMonth, future: key > endKey, st: inMonth ? cardioDay((days || {})[key]) : null });
+    if (i >= 6 && dt >= last && (dt.getDay() + 6) % 7 === 6) break;
+    if (i > 41) break;                                              // six weeks is the most a month can span
+  }
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  return { monthKey, weeks, cells, firstKey: first.toLocaleDateString("en-CA"), lastKey: last.toLocaleDateString("en-CA") };
+};
+// The month's own totals, through the same `cardioAgg` every other window on the tab uses — so the
+// footer under the grid cannot disagree with the cards above it about what a month contained.
+const cardioMonthStats = (days, monthKey, endKey) => {
+  const g = cardioMonthGrid(days, monthKey, endKey);
+  const win = g.cells.filter((c) => c.inMonth && !c.future).map((c) => ({ key: c.key, st: c.st }));
+  const a = cardioAgg(win);
+  return { ...a, sessions: win.reduce((n, x) => n + (x.st ? x.st.sessions.length : 0), 0),
+    daysElapsed: win.length };
+};
+// Which months have anything in them, oldest → newest. Drives the ‹ › arrows: stepping past the ends
+// of the history lands on an empty month, and an arrow that does that is a dead control.
+const cardioMonthsWithData = (days) => {
+  const set = new Set();
+  Object.keys(days || {}).forEach((k) => { const st = cardioDay(days[k]); if (st && st.walked) set.add(k.slice(0, 7)); });
+  return [...set].sort();
+};
+// A window of days as one zone distribution. Days first (PadCoach's own day block when it sent one),
+// falling back per day to that day's sessions — `cardioDay` already settled that precedence.
+const cardioZoneWindow = (days, endKey, n) =>
+  cardioZoneSum(cardioWindow(days, endKey, n).map((x) => (x.st ? x.st.zones : null)).filter(Boolean));
+
+/* ─────────────── Task 71 · the session list, capped ───────────────
+   "just make sure that sessions node doesnt drown me in workouts logs it currently just shows them in
+   rows so after 400 there will just be 400 lines by default."
+   The full list is not paged any more, it is GONE from the overall stats: every session lives under
+   the day it happened on, in the calendar. What stays in the Sessions section is a short preview of
+   the newest few, because "what did I just do" is an overall question and the calendar would make you
+   hunt for today to answer it. The cap is a constant rather than a literal so the test can pin the
+   same number the JSX renders. */
+const CARDIO_SESSION_PREVIEW = 5;
+const cardioSessionPreview = (rows, n = CARDIO_SESSION_PREVIEW) =>
+  (Array.isArray(rows) ? rows : []).slice(0, Math.max(0, n));
 
 // Consecutive days walked, counted back from today — and if today hasn't happened yet the count starts at
 // yesterday rather than breaking. A streak is a nudge, not a punishment (Strava's own streak is weekly for
@@ -4840,6 +5102,187 @@ function SessionSeries({ s, policy, sub, cap }) {
 //   2. Nothing may be rendered as fact that the data cannot support. Trend directions stay behind
 //      PadCoach's own TrendDataFloor and print how far short they are; a figure PadCoach hasn't sent
 //      says so by name instead of appearing as a zero. If the treadmill isn't moving, it says so.
+/* ─────────────── Task 71 · the zone distribution ───────────────
+   "overall app is laser focused on zone 2 right now, we need to make it non exclusive with data
+   available on all zones as well but current zone 2 stats should stay untouched."
+
+   So: nothing above this component changed. Zone-2 minutes, % in zone, speed at 130, the volume
+   target, Efficiency Factor and the training load are all still zone-2 figures computed exactly as
+   Tasks 57–67 built them. This draws the OTHER four zones beside them, and it draws nothing at all
+   when PadCoach did not send them — there is no all-zeroes bar, because a bar of zeroes is a claim.
+
+   Colour is INTENSITY, not judgement. Zone 2 keeps the sage the tab has used for "inside the band"
+   since Task 57, the ramp warms upward from there, and the caption says in words that there is no
+   good zone and no bad one here. The zone he actually aimed at is marked by a ring in the legend
+   rather than by changing its colour, so the ramp stays readable as a ramp. */
+// Colour is intensity, warming upward — except `between`, which is deliberately OFF the ramp in a flat
+// neutral, because time at a heart rate the ladder has no band for has no place on an intensity scale.
+const CARDIO_ZONE_COLOR = { below: "#2E2A20", 1: "#4C5B4A", 2: "#7E9A6E", 3: "#C9A227", 4: "#B0803A", 5: "#B06A3A", above: "#7A3A22", between: "#463F33" };
+function ZoneBar({ dist, bands, height, showLegend }) {
+  if (!dist || !dist.totalSec) return null;
+  const bandOf = (z) => (bands || []).find((b) => b.zone === z) || null;
+  // The holes in the ladder, named in bpm rather than described in the abstract — computed from the
+  // bands themselves, so an edited ladder is described as it actually is.
+  const seams = cardioZoneBandSeams(bands);
+  const gapText = seams && seams.gaps.length
+    ? `${seams.gaps.map((g) => `${Math.round(g.from)}–${Math.round(g.to)} bpm`).join(", ")} — in no band at all, so it is counted here rather than rounded into a zone you were not in`
+    : null;
+  const hm = (sec) => (sec >= 3600 ? `${Math.floor(sec / 3600)}h ${Math.round((sec % 3600) / 60)}m` : `${Math.round(sec / 60)}m`);
+  return (
+    <>
+      <div className="flex w-full overflow-hidden rounded-[4px]" style={{ height: height || 14, background: C.edge }}>
+        {dist.buckets.map((b) => (
+          // A bucket of literally zero seconds is a reading, and it gets no width — drawing it a sliver
+          // would make "he spent no time in zone 5" look like "he spent a little time in zone 5".
+          b.pct > 0 ? <div key={b.id} title={`${b.label} · ${hm(b.sec)} · ${Math.round(b.pct)}%`}
+            style={{ width: `${b.pct}%`, background: CARDIO_ZONE_COLOR[b.id] || C.ash }} /> : null
+        ))}
+      </div>
+      {showLegend && (
+        <div className="mt-2 flex flex-col gap-1">
+          {dist.buckets.map((b) => {
+            const bd = b.zone != null ? bandOf(b.zone) : null;
+            const aimed = b.zone != null && b.zone === dist.selectedZone;
+            // Two lines, not one: at 390 px a label, a band name, a duration, a percentage, a bpm range
+            // and the words "aimed for" on one row wraps into a three-line tangle. The numbers that get
+            // compared between zones stay right-aligned on the first line; the description sits under it.
+            return (
+              <div key={b.id} className="font-mono text-[10px]">
+                <div className="flex items-baseline gap-2">
+                  <span className="h-2.5 w-2.5 shrink-0 self-center rounded-[2px]"
+                    style={{ background: CARDIO_ZONE_COLOR[b.id] || C.ash, boxShadow: aimed ? `0 0 0 1.5px ${C.gold}` : "none" }} />
+                  <span className="flex-1 truncate" style={{ color: b.sec > 0 ? C.bone : C.ashDim }}>{b.label}</span>
+                  <span style={{ color: b.sec > 0 ? C.ash : C.ashDim }}>{hm(b.sec)}</span>
+                  <span className="text-right" style={{ color: C.ashDim, minWidth: 30 }}>
+                    {b.pct > 0 && b.pct < 0.5 ? "<1%" : `${Math.round(b.pct)}%`}
+                  </span>
+                </div>
+                {(bd || aimed || b.id === "between") && (
+                  <p className="ml-[18px] text-[9px] leading-snug" style={{ color: C.ashDim }}>
+                    {b.id === "between"
+                      ? (gapText || "heart rates your band ladder has no band for — counted apart rather than rounded into a zone you were not in")
+                      : <>
+                          {bd && bd.name ? bd.name : ""}
+                          {bd && bd.lowerBPM != null ? `${bd && bd.name ? " · " : ""}${Math.round(bd.lowerBPM)}–${bd.upperBPM != null ? Math.round(bd.upperBPM) : ""} bpm` : ""}
+                          {aimed ? <span style={{ color: C.goldDim }}>{bd ? " · " : ""}the zone you aimed for</span> : null}
+                        </>}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ─────────────── Task 71 · one stat, one line, until you ask for more ───────────────
+   "I can look at every stat in detail IF I WANT not just wall of data on a very long page that I need
+   to scroll for ages."
+
+   The contract of this component is the CLOSED line, not the open body. A disclosure that says nothing
+   until you open it just moves the wall behind a row of chevrons — you would have to open all thirteen
+   to find out which one had news. So every caller passes a `line` that is true in the sparse case as
+   well as the rich one, and where a card is still waiting for data the line says what it is waiting
+   for, in the same words the card itself uses when open. Nothing is HIDDEN here; it is folded.
+
+   `line` disappears when the section is open, because the card's own hero then says it better and two
+   copies of the same number one above the other is how a reader learns to stop trusting both. */
+function Sec({ id, icon: Ico, title, line, tone, open, onToggle, children }) {
+  return (
+    <div className="mt-3 rounded-2xl border" style={{ background: C.card, borderColor: open ? C.activeEdge : C.edge }}>
+      <button onClick={() => onToggle(id)} aria-expanded={open} aria-controls={`sec-${id}`}
+        className="flex w-full items-start justify-between gap-3 px-5 py-3.5 text-left">
+        <span className="min-w-0 flex-1">
+          <span className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.ash }}>
+            <Ico size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />{title}
+          </span>
+          {!open && line && <span className="mt-1.5 block text-[12px] leading-snug" style={{ color: tone || C.bone }}>{line}</span>}
+        </span>
+        <span className="mt-0.5 shrink-0 font-mono text-[12px]" style={{ color: C.goldDim }}>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && <div id={`sec-${id}`} className="px-5 pb-5">{children}</div>}
+    </div>
+  );
+}
+
+/* ─────────────── Task 71 · the month ───────────────
+   "my actual overall stats should live on those drop down modes BUT detailed session performances and
+   any other specific info should live in a calendar so that I can choose a day and see what that day
+   had."
+
+   Brightness is minutes in zone, on the same `cardioCellAlpha` scale the 8x7 consistency strip has used
+   since Task 57 — deliberately the same scale, so a bright cell means one thing on this tab rather than
+   two. A day that has not happened yet is dashed and empty, never dark: the consistency card has never
+   drawn a missed day in rust and this one does not start.
+   The arrows stop at the ends of the history rather than walking into empty months forever. */
+function CardioMonth({ days, monthKey, onMonth, viewDate, onPick, today, cellBg }) {
+  const grid = useMemo(() => cardioMonthGrid(days, monthKey, today), [days, monthKey, today]);
+  const stats = useMemo(() => cardioMonthStats(days, monthKey, today), [days, monthKey, today]);
+  const span = useMemo(() => cardioMonthsWithData(days), [days]);
+  const thisMonth = monthKeyOf(today);
+  const floor = span.length && span[0] < thisMonth ? span[0] : thisMonth;
+  const canPrev = monthKey > floor, canNext = monthKey < thisMonth;
+  return (
+    <div className="mt-4 rounded-2xl border p-4" style={{ background: C.card, borderColor: C.edge }}>
+      <div className="flex items-center justify-between">
+        <button onClick={() => canPrev && onMonth(monthShift(monthKey, -1))} disabled={!canPrev} aria-label="previous month"
+          className="flex h-10 w-10 items-center justify-center rounded-full active:scale-90" style={{ color: canPrev ? C.ash : C.edge }}><ChevronLeft size={18} /></button>
+        <button onClick={() => { onMonth(thisMonth); onPick(today); }} className="flex flex-col items-center px-2">
+          <span className="font-mono text-[13px] font-bold" style={{ color: C.bone }}>{monthLabel(monthKey, today.slice(0, 4))}</span>
+          <span className="font-mono text-[9px]" style={{ color: monthKey === thisMonth && viewDate === today ? C.ashDim : C.goldDim }}>
+            {monthKey === thisMonth && viewDate === today ? "today" : "back to today"}
+          </span>
+        </button>
+        <button onClick={() => canNext && onMonth(monthShift(monthKey, 1))} disabled={!canNext} aria-label="next month"
+          className="flex h-10 w-10 items-center justify-center rounded-full active:scale-90" style={{ color: canNext ? C.ash : C.edge }}><ChevronRight size={18} /></button>
+      </div>
+      <div className="mt-2 flex gap-1">
+        {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => <span key={i} className="flex-1 text-center font-mono text-[8px]" style={{ color: C.ashDim }}>{d}</span>)}
+      </div>
+      <div className="mt-1 flex flex-col gap-1">
+        {grid.weeks.map((w, wi) => (
+          <div key={wi} className="flex gap-1">
+            {w.map((c) => {
+              const walked = !!(c.st && c.st.walked);
+              const mn = walked ? Math.round(c.st.zone2Min != null ? c.st.zone2Min : c.st.movingSec / 60) : null;
+              const a = cardioCellAlpha(c.st);
+              const on = c.key === viewDate && c.inMonth;
+              return (
+                <button key={c.key} onClick={() => c.inMonth && onPick(c.key)} disabled={!c.inMonth}
+                  aria-label={`${c.key}${walked ? ` · ${mn} minutes` : " · nothing recorded"}`} aria-pressed={on}
+                  className="flex flex-1 flex-col items-center justify-center rounded-[6px] py-1"
+                  style={{ minHeight: 36, opacity: c.inMonth ? 1 : 0.25,
+                    background: !c.inMonth || c.future ? "transparent" : walked ? cellBg(c.st) : C.edge,
+                    border: on ? `1.5px solid ${C.gold}` : c.future ? `1px dashed ${C.edge}`
+                      : c.key === today ? `1px solid ${C.activeEdge}` : "1.5px solid transparent" }}>
+                  {/* On a bright cell the ink has to flip, or the date vanishes into the gold at the top
+                      of the scale — which is exactly the day he most wants to find. */}
+                  <span className="font-mono text-[10px] leading-none" style={{ color: a > 0.55 ? C.bg : walked ? C.bone : C.ashDim, fontWeight: walked ? 700 : 400 }}>{+c.key.slice(8)}</span>
+                  {walked && <span className="mt-0.5 font-mono text-[7px] leading-none" style={{ color: a > 0.55 ? C.bg : C.ash }}>{mn}</span>}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 font-mono text-[10px]" style={{ color: C.ash }}>
+        {stats.walkedDays > 0 ? (
+          <>
+            <span style={{ color: C.bone }}>{stats.walkedDays}</span> day{stats.walkedDays === 1 ? "" : "s"} walked
+            <span className="ml-3"><span style={{ color: C.bone }}>{Math.round(stats.zone2Min)}</span> min in zone</span>
+            <span className="ml-3" style={{ color: C.ashDim }}>{stats.distanceKm.toFixed(1)} km</span>
+          </>
+        ) : "nothing recorded this month"}
+      </p>
+      <p className="mt-1 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>
+        the number under each date is minutes in zone, and the cell brightens with it. tap a day for its sessions and what happened inside them. dashed days haven't happened yet — they are not misses.
+      </p>
+    </div>
+  );
+}
+
 function CardioView({ mem, importCardioExport, addManualCardio, removeManualCardio }) {
   const cardio = mem.cardio || DEFAULT.cardio;
   const days = cardio.days || {};
@@ -4867,13 +5310,32 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
   const [calMethod, setCalMethod] = useState(false);
   const [openSess, setOpenSess] = useState(null);
   const [syncOpen, setSyncOpen] = useState(false);
-  // Task 65 — the Sessions card's own state. `sessScope` is all-history vs. the day the navigator is
-  // on: the whole point of this card is that the session, not the day, is the unit, so "all" is the
-  // default and the day view is one tap away rather than the only thing on offer.
-  const [sessScope, setSessScope] = useState("all");
+  // Task 71 — the scope chips are gone with the flat list. The Sessions SECTION is an overall stat and
+  // is always whole-history (which is what it defaulted to anyway, so no number on it moves); one day's
+  // sessions are the calendar's job now, which is where he asked for them.
   const [sessMetric, setSessMetric] = useState("speed");
-  const [sessShow, setSessShow] = useState(8);
   const [sessRecon, setSessRecon] = useState(false);
+  // Which month the calendar is showing. Follows the day he picks, so tapping a day in the strip of
+  // last month's padding does not leave him looking at a different month than the one he chose.
+  const [monthKey, setMonthKey] = useState(() => monthKeyOf(todayKey()));
+  // Task 71 — the zone distribution's own zoom, matching the Calories card's three chips rather than
+  // inventing a fourth vocabulary for windows on the same tab.
+  const [zoneRange, setZoneRange] = useState("14d");
+  // Task 71 — which sections are open, remembered per device. Not synced and deliberately not in `mem`:
+  // this is a per-viewer convenience about how he likes to read the page, not data about his training,
+  // and putting it on the wire would make two phones argue about it.
+  const [openSecs, setOpenSecs] = useState(() => {
+    try { const r = JSON.parse(localStorage.getItem(SECKEY) || "null"); if (r && typeof r === "object") return r; } catch (e) {}
+    // The default: the one question the whole tab exists to answer is open, and everything else waits to
+    // be asked for. Closed is not hidden — every closed section still states its own headline.
+    return { verdict: true };
+  });
+  const toggleSec = (id) => setOpenSecs((prev) => {
+    const next = { ...prev, [id]: !prev[id] };
+    try { localStorage.setItem(SECKEY, JSON.stringify(next)); } catch (e) {}
+    return next;
+  });
+  const secOpen = (id) => !!openSecs[id];
   // Task 67 — what THIS export did about per-session detail. Read here rather than inside the row so a
   // session with no series can name the reason (aged out, budget, or a PadCoach that never sent one)
   // instead of rendering an empty chart. null until a schema-4 export arrives.
@@ -4892,6 +5354,13 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
   const recs = useMemo(() => cardioRecords(days, today), [days, today]);
   const trend = useMemo(() => cardioTrendRows(days, today, 28), [days, today]);
   const spd90 = useMemo(() => cardioWindow(days, today, 90), [days, today]);
+  // Task 71 — all five zones, summed over the window. null all the way down on a schema-4 payload,
+  // which is what keeps the section from drawing a bar out of data it was never sent.
+  const zoneWin = useMemo(() => cardioZoneWindow(days, today, zoneRange === "14d" ? 14 : zoneRange === "8w" ? 56 : CARDIO_DAY_CAP), [days, today, zoneRange]);
+  const zoneEver = useMemo(() => cardioZoneWindow(days, today, CARDIO_DAY_CAP), [days, today]);
+  // The gaps and overlaps his own band ladder contains, in bpm. Computed from the bands rather than
+  // hard-coded, so an edited ladder is described as it actually is.
+  const zoneSeams = useMemo(() => cardioZoneBandSeams(cardio.analytics && cardio.analytics.zoneBands), [cardio.analytics]);
   const allDays = useMemo(() => Object.keys(days).sort().map((key) => ({ key, st: cardioDay(days[key]) })).filter((x) => x.st && x.st.walked), [days]);
   const everWalked = allDays.length;
   // Task 59 — PadCoach's whole-history analysis block. TOP-LEVEL, not per-day: these are trends over the
@@ -5029,11 +5498,9 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
 
   const arrow = { up: "↑", down: "↓", flat: "→" };
   const dirCol = (r) => (!r.ready || !r.better ? C.ash : r.dir === "flat" ? C.ash : (r.dir === r.better ? C.sage : C.rust));
-  const cellBg = (s) => {
-    if (!s || !s.walked) return C.edge;
-    const mn = s.zone2Min != null ? s.zone2Min : s.movingSec / 60;      // fall back to moving time when there's no HR
-    return `rgba(201,162,39,${Math.max(0.18, Math.min(1, mn / 120)).toFixed(2)})`;
-  };
+  // Task 71 — the scale itself moved to `cardioCellAlpha` so the month grid can use the same one and
+  // colour its date numbers against it. The colours this produces are byte-identical to before.
+  const cellBg = (s) => (cardioCellAlpha(s) === 0 ? C.edge : `rgba(201,162,39,${cardioCellAlpha(s).toFixed(2)})`);
   // Only weeks that overlap the history he actually has count toward the weekly average — averaging in
   // the weeks before his first logged walk would report "avg 0 min/week" at someone who walked 75 minutes.
   const firstKey = allDays.length ? allDays[0].key : null;
@@ -5059,8 +5526,11 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
   // navigating to an old day would silently redefine what "last" means.
   const sessAll = useMemo(() => cardioSessionList(days, today, null), [days, today]);
   const sessDay = useMemo(() => sessAll.filter((r) => r.key === viewDate), [sessAll, viewDate]);
-  const sessScopeOk = sessScope === "day" && sessDay.length > 0 ? "day" : "all";
-  const sessList = sessScopeOk === "day" ? sessDay : sessAll;
+  // Task 71 — the overall stats are whole-history, always. That was already the default scope, so every
+  // average, era and trend on the Sessions section reports exactly the number it reported yesterday.
+  const sessList = sessAll;
+  // Newest first, for the two places rows are actually drawn: the day you tapped, and the short preview.
+  const sessDayRows = useMemo(() => [...sessDay].reverse(), [sessDay]);
   const sessAvg = useMemo(() => cardioSessionAverages(sessList), [sessList]);
   // The grade eras of the LIST, used to caveat the averages: an average kcal/h taken across a change
   // in the recorded incline is a mean of two different things, and the row has to say so.
@@ -5073,7 +5543,7 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
   const sessRec = useMemo(() => cardioSessionReconcile(days, today, null), [days, today]);
   // Newest first for the list — the order he reads in — while every computation above runs on the
   // oldest-first list the maths needs.
-  const sessRows = useMemo(() => [...sessList].reverse(), [sessList]);
+  const sessNewest = useMemo(() => [...sessAll].reverse(), [sessAll]);
   // One dot per session. The x-axis is session ORDER, so no fitted line is ever drawn here (see
   // cardioSessionTrend); the dot's colour is the only thing that carries the grade era, gold for the
   // grade currently in force and dim for everything recorded under an older one.
@@ -5140,20 +5610,267 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
   }[cs.shape] || "";
   const calFmt = (v) => (v == null ? "—" : Math.round(v).toLocaleString());
 
+  /* ── Task 71 · the closed lines ──────────────────────────────────────────────────────────────────
+     Every section states its own headline while it is shut. This is the whole contract of the layout:
+     a disclosure that says nothing until you open it has only moved the wall behind thirteen chevrons,
+     and he would have to open all of them to find out which one had news.
+
+     Two rules, both of them load-bearing:
+       1. Nothing here computes a number. Every line reads the SAME selector output the open card
+          reads — `verdict.headline`, `cs.kcal`, `loadHist.ctl` — so a closed line and an open card
+          cannot disagree, and a re-housing cannot quietly change a figure.
+       2. Where a card is still waiting for data the line says WHAT IT IS WAITING FOR, in the card's
+          own phrasing, rather than printing a dash. With four sessions on record that is most of
+          them, and it is the difference between a page that is folded and a page that is empty. */
+  const secTone = {};
+  const zNum = (v, dp) => (v == null ? null : v.toFixed(dp));
+  const secLine = {
+    verdict: verdict.headline,
+    trend: sAvg != null
+      ? `${m.label.toLowerCase()} · avg ${fmt(sAvg, m.dp)}${m.suffix} · ${sVals.length} of ${series.length} ${range === "8w" ? "weeks" : "days"} with data`
+      : `${m.label.toLowerCase()} · nothing in the last ${range === "8w" ? "8 weeks" : "14 days"} to average yet`,
+    calories: cs.estDays === 0
+      ? (cs.walkedDays === 0
+          ? `nothing walked in the ${calWindowLabel}, so there is no energy to total`
+          : `${nS(cs.walkedDays, "walked day")} in the ${calWindowLabel}, and not one of them carries a calorie estimate`)
+      : `${calFmt(cs.kcal)} kcal active over the ${calWindowLabel} · ${calFmt(cs.lowKcal)}–${calFmt(cs.highKcal)}${cs.gapDays > 0 ? ` · ${cs.gapDays} walked day${cs.gapDays === 1 ? "" : "s"} blank` : ""}`,
+    consistency: `${agg28.walkedDays} of the last 28 days${streak > 0 ? ` · ${streak}-day streak` : ""} · ${nS(everWalked, "day")} logged in all`,
+    progress: spdNow != null
+      ? `${spdNow.toFixed(2)} km/h at ${Z2_MID} bpm · from ${nS(spdSessions, "session")} whose own average heart rate landed in the band`
+      : "no session yet whose own average heart rate landed inside its band — that is what this number is made of",
+    efficiency: efPts.length
+      ? `EF ${efPts[efPts.length - 1].y.toFixed(3)} · ${projEF && projEF.ok && projEF.signif ? `${projEF.slopePer > 0 ? "+" : ""}${projEF.slopePer.toFixed(3)} per 30 days` : "no direction yet"} · ${nS(efPts.length, "steady session")}`
+      : "no walk long enough to be steady-state has reached this app yet — 20 minutes is the floor",
+    load: loadHist.loadDays === 0
+      ? "no walk with a heart rate has reached this app yet, so there is no load to accumulate"
+      : `fitness ${Math.round(loadHist.ctl)} · fatigue ${Math.round(loadHist.atl)} · form ${loadHist.tsb > 0 ? "+" : loadHist.tsb < 0 ? "−" : ""}${Math.abs(Math.round(loadHist.tsb))}${loadHist.filling ? " · still filling, so it understates" : ""}`,
+    projections: !projSel ? "nothing has enough behind it to fit a line to yet"
+      : !projSel.pr.ok ? `${projSel.label.toLowerCase()}: ${projSel.pr.reason}`
+      : projSel.pr.cross && projSel.pr.cross.never
+      ? `${projSel.label.toLowerCase()} does not reach ${projSel.targetLabel} within ${monthsish(projSel.pr.cross.horizonDays)} at this trajectory`
+      : projSel.pr.cross
+      ? `${projSel.label.toLowerCase()} reaches ${projSel.targetLabel} around ${aheadKey(projSel.pr.cross.central)} — ${monthsish(projSel.pr.cross.central)} away, and it is a range, not a date`
+      : `${projSel.label.toLowerCase()} · ${projSel.pr.slopePer > 0 ? "+" : ""}${projSel.pr.slopePer.toFixed(Math.max(projSel.pr.dp, 1))}${projSel.pr.unit.trim()} per 30 days${projSel.pr.signif ? "" : ", not yet distinguishable from flat"}`,
+    volume: `this week ${Math.round(thisWeek.zone2Min)} min in zone · ${weekGoalLabel} ${Math.round(weekGoal)}`,
+    records: recs.session
+      ? `longest ${Math.round(recs.session.min)} · best day ${Math.round(recs.day.min)} · best week ${Math.round(recs.week.min)} — all minutes in zone`
+      : "no record yet — the first walk sets all three",
+    zones: !zoneEver
+      ? "PadCoach is not sending per-zone time yet, so there is nothing to split"
+      : !zoneWin
+      ? `nothing in the ${zoneRange === "14d" ? "last 14 days" : zoneRange === "8w" ? "last 8 weeks" : "history"} carries a zone split — the days that do are older than that`
+      : zoneWin.selectedSec != null
+      ? `${fmtHM(zoneWin.totalSec / 3600)} measured · ${Math.round(zoneWin.selectedPct)}% of it in zone ${zoneWin.selectedZone}, the zone you aimed for`
+      : `${fmtHM(zoneWin.totalSec / 3600)} measured across ${nS(zoneWin.buckets.length, "band")}`,
+    sessions: sessAll.length === 0
+      ? "no PadCoach session has reached this app yet"
+      : sessCmp && sessCmp.latest
+      ? `${nS(sessAll.length, "session")} · the last one ${dLblY(sessCmp.latest.key)}, ${fmt(sessCmp.latest.min, 0)} min`
+      : `${nS(sessAll.length, "session")}`,
+    method: `every number on this tab defined — and the ${CARDIO_NOT_COMPUTED.length} famous ones this app refuses to compute, with the reason for each`,
+    manual: manual.length > 0
+      ? `${nS(manual.length, "entry")} on ${dLbl(viewDate)}`
+      : "log a walk, run or ride PadCoach never saw",
+    sync: cardio.lastAutoSyncAt
+      ? `last synced ${new Date(cardio.lastAutoSyncAt).toLocaleString()}`
+      : cardio.lastImportAt
+      ? `last imported by hand ${new Date(cardio.lastImportAt).toLocaleString()}`
+      : "nothing has arrived from PadCoach yet",
+  };
+  // The one section that gets a colour on its closed line, because it is the one that carries a verdict.
+  // Everything else stays bone: a headline is a description, and a page of coloured summaries would be
+  // thirteen opinions where the cards themselves are careful to have five.
+  secTone.verdict = verdict.ready ? C.bone : C.ash;
+  secTone.method = C.ash;
+  secTone.manual = C.ash;
+  secTone.sync = C.ash;
+  if (!zoneWin) secTone.zones = C.ash;
+
+  // Task 71 — ONE session row, drawn in two places: under the day you picked on the calendar, and
+  // in the short preview of the newest few. It lived inline in the Sessions card until this task;
+  // pulling it out is what let the flat 400-row list be DELETED rather than duplicated. `where`
+  // only decides the border: on the calendar every row already belongs to the day you tapped, so
+  // marking one as "the selected day" there would be marking all of them.
+  const sessRow = (r, where) => {
+    const s = r.s, open = openSess === r.sid;
+    const drift = s.decoupling && s.decoupling.speedDriftPercent;
+    const halves = s.decoupling && s.decoupling.firstHalfSpeedKmh != null && s.decoupling.secondHalfSpeedKmh != null
+      ? `${s.decoupling.firstHalfSpeedKmh.toFixed(2)} → ${s.decoupling.secondHalfSpeedKmh.toFixed(2)} km/h` : null;
+    const unknowns = open ? cardioSessionUnknowns(r) : null;
+    return (
+      <div key={r.sid} className="flex flex-col gap-1 rounded-lg border px-3 py-2"
+        style={{ borderColor: where === "recent" && r.key === viewDate ? C.activeEdge : C.edge }}>
+        <button onClick={() => setOpenSess(open ? null : r.sid)} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-left">
+          <span className="font-mono text-[11px] font-bold" style={{ color: C.bone }}>
+            <span style={{ color: C.ashDim }}>#{r.seq}</span> {dLblY(r.key)} · {tHM(s.startedAt)}–{tHM(s.endedAt)}
+          </span>
+          <span className="flex items-center gap-2">
+            {r.idle
+              ? <span className={sub} style={{ color: C.ashDim }}>belt never moved</span>
+              : <span className="font-mono text-[11px]" style={{ color: C.gold }}>{fmt(r.min, 0)} min</span>}
+            <span className={sub} style={{ color: C.goldDim }}>{open ? "▾" : "▸"}</span>
+          </span>
+        </button>
+        {!r.idle && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px]" style={{ color: C.ash }}>
+            {r.speed != null && <span>{r.speed.toFixed(2)} km/h{s.speedSource === "derived" ? "*" : ""}</span>}
+            {r.avgHr != null && <span>{Math.round(r.avgHr)}{r.maxHr != null ? `/${Math.round(r.maxHr)}` : ""} bpm{r.inBand ? "" : " (outside band)"}</span>}
+            {r.inZonePct != null && <span style={{ color: C.sage }}>{Math.round(r.inZonePct)}% in zone</span>}
+            <span>{r.km.toFixed(2)} km</span>
+            {r.kcal != null
+              ? <span>{Math.round(r.kcal)} kcal active{s.cal.banded ? ` (${Math.round(s.cal.lowKcal)}–${Math.round(s.cal.highKcal)})` : ""}{r.kcalPerHour != null ? ` · ${Math.round(r.kcalPerHour)} kcal/h` : ""}</span>
+              : <span style={{ color: C.ashDim }}>no calorie estimate</span>}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[9px]" style={{ color: C.ashDim }}>
+          {r.grade != null
+            ? <span>{r.grade.toFixed(2)}% grade{r.gradeSource && r.gradeSource !== "measured" ? ` (${r.gradeSource})` : ""}</span>
+            : <span>no recorded grade</span>}
+          {r.weightKg != null && <span>{r.weightKg.toFixed(1)} kg</span>}
+          {s.context && <span>{s.context.tag}{s.context.source === "standingDefault" ? " (default)" : ""}</span>}
+          {s.modality && s.modality !== "walk" && <span style={{ color: C.rust }}>{s.modality}</span>}
+          {s.presenceUnverified === true && <span style={{ color: C.rust }}>strap dropped out</span>}
+          {r.spansMidnight && <span>crosses midnight</span>}
+        </div>
+
+        {open && (
+          <div className="mt-2 flex flex-col gap-2 border-t pt-2" style={{ borderColor: C.edge }}>
+            {/* Task 67 — WHAT HAPPENED DURING THE WALK, first, because it is the thing every
+                card before it could only summarise. Everything below this block is still a
+                summary; this is the only part that shows the session changing. */}
+            <SessionSeries s={s} policy={seriesPolicy} sub={sub} cap={cap} />
+            {/* Task 71 — where this session's minutes actually went. Beside the charts, not instead of
+                them: the charts show the shape, this shows the total. */}
+            {s.zones && (
+              <div className="mt-1">
+                <p className={sub} style={{ color: C.ashDim }}>time in zones</p>
+                <div className="mt-1.5"><ZoneBar dist={s.zones} bands={cardioBandsFor(s.zones, an && an.zoneBands)} height={12} showLegend /></div>
+              </div>
+            )}
+            <div className="border-t" style={{ borderColor: C.edge }} />
+            {/* Everything known about this one session, grouped the way it was measured. */}
+            {[
+              ["Timing", [
+                `started ${tHM(s.startedAt)}${r.startDay && r.startDay !== r.key ? ` on ${dLblY(r.startDay)}` : ""}`,
+                `ended ${tHM(s.endedAt)}${r.endDay && r.endDay !== r.key ? ` on ${dLblY(r.endDay)}` : ""}`,
+                `${fmt(r.min, 1)} min moving`,
+                r.wallSec != null ? `${fmt(r.wallSec / 60, 1)} min between its own timestamps` : null,
+                r.elapsedAgrees === true ? `${fmt(r.elapsedSec / 60, 1)} min elapsed per PadCoach · ${fmt(Math.max(0, r.elapsedSec - s.movingSec) / 60, 1)} min not moving` : null,
+              ]],
+              ["Belt", [
+                r.speed != null ? `${r.speed.toFixed(2)} km/h average${s.speedSource === "derived" ? " (derived from distance ÷ moving time)" : ""}` : null,
+                r.maxSpeed != null ? `${r.maxSpeed.toFixed(2)} km/h peak` : null,
+                `${r.km.toFixed(2)} km`, `${r.steps.toLocaleString()} steps`,
+                r.grade != null ? `${r.grade.toFixed(2)}% grade${r.gradeSource ? ` (${r.gradeSource})` : ""}` : null,
+              ]],
+              ["Heart", [
+                r.avgHr != null ? `${Math.round(r.avgHr)} bpm average` : null,
+                r.maxHr != null ? `${Math.round(r.maxHr)} bpm peak` : null,
+                s.bandName ? `${s.bandName}${s.bandLow && s.bandHigh ? ` · ${s.bandLow}–${s.bandHigh} bpm` : ""}` : null,
+                r.inZonePct != null ? `${fmt(r.inZoneMin, 1)} min in band · ${Math.round(r.inZonePct)}% of moving time` : null,
+                r.avgHr != null ? (r.inBand ? "this session's own average landed inside its band, so its speed is comparable with the others that did"
+                  : "this session's own average did NOT land inside its band, so it is left out of every speed comparison rather than adjusted to fit") : null,
+              ]],
+              ["Energy", r.kcal == null ? [s.calUnavailableReason || "no estimate — PadCoach returns nothing for a session missing the treadmill grade or your body weight"] : [
+                `${Math.round(s.cal.kcal)} kcal ACTIVE${s.cal.banded ? ` · ${Math.round(s.cal.lowKcal)}–${Math.round(s.cal.highKcal)} (±${s.cal.bandPct.toFixed(0)}%)` : " · no band sent"}`,
+                s.cal.model ? `${CAL_MODEL_LABEL[s.cal.model] || s.cal.model}` : null,
+                `${Math.round(r.kcalPerHour)} kcal/h${r.kcalPerKm != null ? ` · ${Math.round(r.kcalPerKm)} kcal/km` : ""}`,
+                s.cal.grossKcal != null ? `${Math.round(s.cal.grossKcal)} kcal gross, of which ${Math.round(s.cal.restingKcal)} is the resting share you would have spent sitting still` : null,
+                s.cal.hrCrossCheckKcal != null ? `${Math.round(s.cal.hrCrossCheckKcal)} kcal from the heart-rate cross-check — carried so a disagreement is visible, never averaged with the figure above` : null,
+                s.cal.supportReductionFraction != null ? `${(s.cal.supportReductionFraction * 100).toFixed(1)}% taken off the grade term for leaning on the desk` : null,
+                s.cal.belowValidatedSpeedFloor ? "below the speed the walking equation was validated at — still the best available, but extrapolating" : null,
+                r.weightKg != null ? `computed against ${r.weightKg.toFixed(1)} kg` : null,
+              ]],
+              ["Effort", [
+                r.ef != null ? `EF ${r.ef.toFixed(3)} — metres per minute, per heartbeat` : null,
+                s.efficiencyRatio != null ? `VO₂÷HR ${s.efficiencyRatio.toFixed(3)}${s.efficiencyBasis ? ` (${s.efficiencyBasis})` : ""}` : null,
+                r.load != null ? `load ${Math.round(r.load)} — zone-weighted minutes, linear in duration` : null,
+                s.context ? `${s.context.tag}${s.context.source === "standingDefault" ? " — inherited from a standing default, not something you said about this walk" : ""}` : null,
+                s.effort != null ? `perceived effort ${s.effort}/10` : null,
+              ]],
+              ["Provenance", [
+                s.modality ? `${s.modality}${s.modalitySource ? ` (${s.modalitySource})` : ""}` : null,
+                s.presenceUnverified === true ? "the strap was seen disconnected at some point, so nobody-on-the-belt could not be ruled out for part of this"
+                  : s.presenceUnverified === false ? "the strap stayed connected throughout" : null,
+                r.spansMidnight ? `this session crossed local midnight — PadCoach files it whole under ${dLblY(r.key)}, so all of its minutes land in that day's totals even though some of them were the day before` : null,
+                r.filedElsewhere && !r.spansMidnight ? `PadCoach filed this under ${dLblY(r.key)}; by this device's clock it started on ${dLblY(r.startDay)}. That is a statement about two clocks, not about the walk.` : null,
+                s.id ? `id ${String(s.id).slice(0, 8)}` : null,
+              ]],
+            ].map(([g, items]) => { const list = items.filter(Boolean); return !list.length ? null : (
+              <div key={g}>
+                <span className={sub} style={{ color: C.ashDim }}>{g}</span>
+                <div className="mt-0.5 flex flex-col gap-0.5 font-mono text-[10px] leading-relaxed" style={{ color: C.ash }}>
+                  {list.map((x, j) => <span key={j}>{x}</span>)}
+                </div>
+              </div>
+            ); })}
+
+            {/* Drift, in words — PadCoach pins heart rate, so aerobic drift shows up as the
+                belt slowing down, and that sentence needs no threshold. */}
+            {drift != null && (
+              <div className="font-mono text-[10px] leading-relaxed" style={{ color: C.ash }}>
+                <span className={sub} style={{ color: C.ashDim }}>Drift</span><br />
+                {drift < -0.5 ? `the belt slowed ${Math.abs(drift).toFixed(1)}% across the walk to hold your heart rate` : drift > 0.5 ? `the belt sped up ${drift.toFixed(1)}% across the walk at the same heart rate` : "belt speed held steady across the walk"}
+                {halves ? <span style={{ color: C.ashDim }}> ({halves})</span> : null}
+                {r.dec && !r.dec.tooShort && r.dec.pct != null && <span style={{ color: C.ashDim }}> · decoupling {r.dec.pct > 0 ? "" : "−"}{Math.abs(r.dec.pct).toFixed(1)}% ({r.dec.band.label}{r.dec.assumedSign ? ", sign inferred" : ""})</span>}
+                {r.dec && r.dec.tooShort && <span style={{ color: C.ashDim }}> · too short for a valid decoupling reading (under {Math.round(STEADY_MIN_SEC / 60)} min)</span>}
+                {s.decoupling.confidence && <span className="block" style={{ color: C.ashDim }}>{s.decoupling.confidence.reason || `confidence: ${s.decoupling.confidence.grade}`}</span>}
+              </div>
+            )}
+
+            {s.hrHistogram && (
+              <div>
+                <span className={sub} style={{ color: C.ashDim }}>Heart-rate histogram</span>
+                <div className="mt-1 flex flex-col gap-0.5">
+                  {(() => { const mx = Math.max(...s.hrHistogram.map((b) => b.sec)) || 1; return s.hrHistogram.map((b, j) => {
+                    const inB = b.lo >= (s.bandLow || Z2_LO) && b.lo <= (s.bandHigh || Z2_HI);
+                    return (
+                      <div key={j} className="flex items-center gap-2 font-mono text-[9px]" style={{ color: C.ashDim }}>
+                        <span style={{ width: 52 }}>{b.lo}{b.hi ? `–${b.hi}` : "+"}</span>
+                        <span style={{ width: 44, color: C.ash }}>{(b.sec / 60).toFixed(1)}m</span>
+                        <span className="flex-1 rounded-[2px]" style={{ height: 8, width: `${(b.sec / mx) * 100}%`, background: inB ? C.gold : C.goldDim }} />
+                      </div>
+                    ); }); })()}
+                </div>
+              </div>
+            )}
+
+            {/* What this session does NOT know, and why. An omission you cannot see is
+                indistinguishable from an oversight — the same rule the Method card's
+                refusal list exists for, applied one session at a time. */}
+            {unknowns && unknowns.length > 0 && (
+              <div>
+                <span className={sub} style={{ color: C.ashDim }}>not known for this session — {unknowns.length}</span>
+                <div className="mt-1 flex flex-col gap-1 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>
+                  {unknowns.map((u, j) => <p key={j}><span style={{ color: C.ash }}>{u.what}</span> — {u.why}</p>)}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
-      <div className="mt-6 flex items-center justify-between">
-        <button onClick={() => setViewDate(shiftDate(viewDate, -1))} aria-label="previous day" className="flex h-11 w-11 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronLeft size={18} /></button>
-        <div className="flex flex-col items-center">
-          <span className="font-mono text-[12px] font-bold" style={{ color: isToday ? C.gold : C.bone }}>{relDay(viewDate)}</span>
-          <input type="date" value={viewDate} onChange={(e) => e.target.value && setViewDate(e.target.value)} className="bg-transparent font-mono text-[16px] outline-none" style={{ color: C.ash, colorScheme: "dark" }} />
-        </div>
-        <button onClick={() => setViewDate(shiftDate(viewDate, 1))} aria-label="next day" className="flex h-11 w-11 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronRight size={18} /></button>
-      </div>
+      {/* ── Task 71 · the calendar ── "detailed session performances and any other specific info should
+          live in a calendar so that I can choose a day and see what that day had." The one-day-at-a-time
+          arrows this replaced could only walk you backwards a day at a time; a month you can point at is
+          the difference between finding a walk and remembering when it was. */}
+      <CardioMonth days={days} monthKey={monthKey} onMonth={setMonthKey} viewDate={viewDate}
+        onPick={(k) => { setViewDate(k); setMonthKey(monthKeyOf(k)); }} today={today} cellBg={cellBg} />
 
-      {/* ── 2. The day ── hero pair: minutes in zone against whatever the honest comparison is today. */}
-      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-        <span className={hdr} style={{ color: C.ash }}><Footprints size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />{isToday ? "Today" : relDay(viewDate)}</span>
+      {/* ── 2. The day ── hero pair: minutes in zone against whatever the honest comparison is today.
+          Task 71 — this is now the calendar's day view rather than a card a pair of arrows walked you
+          through, so it carries that day's SESSIONS underneath it: every number on this tab that is
+          about one specific day is here, and nowhere else. */}
+      <div className={card} style={{ background: C.card, borderColor: st && st.walked ? C.activeEdge : C.edge }}>
+        <span className={hdr} style={{ color: C.ash }}><Footprints size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />{relDay(viewDate)}{/* Task 71 — `relDay` already carries the date on any day that is not Today, Yesterday or
+          Tomorrow, so repeating it there would print "Sat, Sep 5 · Sep 5". The year only appears when it
+          is not this one, which is the rule Task 65 settled for every other date on the tab. */}
+          {["Today", "Yesterday", "Tomorrow"].includes(relDay(viewDate)) || viewDate.slice(0, 4) !== today.slice(0, 4)
+            ? <span className="ml-2 normal-case tracking-normal" style={{ color: C.ashDim }}>{dLblY(viewDate)}</span> : null}</span>
         {st && st.walked ? (
           <>
             <div className="mt-3 flex items-end justify-between gap-3">
@@ -5199,6 +5916,23 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
               {st.restingBPM != null && <span>resting {Math.round(st.restingBPM)} bpm{st.restingSource ? ` (${st.restingSource})` : ""}</span>}
               {st.hrv && st.hrv.rmssdMs != null && <span>HRV {Math.round(st.hrv.rmssdMs)} ms rmssd{st.hrv.quality === "usableWithCaveat" ? " (usable, with a caveat)" : ""}</span>}
             </div>
+            {/* Task 71 — this day's own split across all five zones, when schema 5 sent one. It sits UNDER
+                the zone-2 hero rather than replacing it: the hero is the number his goal is stated in. */}
+            {st.zones && (
+              <div className="mt-3">
+                <p className={sub} style={{ color: C.ashDim }}>time in zones · {fmtHM(st.zones.totalSec / 3600)} measured</p>
+                {/* Bar only, no legend. Seven legend rows here would rebuild the wall this whole task is
+                    about, one card down from the calendar — the named breakdown is one tap away in the
+                    Time in zones section, and the sentence under the bar carries the two facts worth
+                    having at a glance. */}
+                <div className="mt-1.5"><ZoneBar dist={st.zones} bands={cardioBandsFor(st.zones, an && an.zoneBands)} height={12} /></div>
+                <p className="mt-1.5 font-mono text-[10px]" style={{ color: C.ashDim }}>
+                  {st.zones.buckets.filter((b) => b.sec > 0).sort((a, b) => b.sec - a.sec).slice(0, 3)
+                    .map((b) => `${b.label} ${Math.round(b.pct)}%`).join(" · ")}
+                  {st.zones.selectedZone != null ? ` · aimed at zone ${st.zones.selectedZone}` : ""}
+                </p>
+              </div>
+            )}
             {st.sessions.length === 0 && manual.length > 0 && <p className={cap} style={{ color: C.ashDim }}>manual entry only — no heart rate was measured, so there are no zone-2 minutes or calories for this day.</p>}
             {/* Task 63 — a measured day with NO calorie figure has to say which kind of nothing it is,
                 rather than quietly omitting the line and reading as "zero calories". */}
@@ -5215,7 +5949,23 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
             )}
           </>
         ) : (
-          <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>nothing recorded for this day yet</p>
+          <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>nothing recorded for this day yet{everWalked > 0 ? " — the bright days on the calendar above are the ones that have something in them" : ""}</p>
+        )}
+
+        {/* ── Task 71 · what that day had ── the session rows, under the day they happened on. This is
+            what replaced the flat list: the SAME row, the same detail panel, the same in-session charts
+            from Task 67 — reachable by pointing at a date instead of by scrolling past 399 other walks. */}
+        {sessDayRows.length > 0 && (
+          <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
+            <p className={sub} style={{ color: C.ashDim }}>{nS(sessDayRows.length, "session")} · tap one for what happened inside it</p>
+            <div className="mt-2 flex flex-col gap-2">{sessDayRows.map((r) => sessRow(r, "day"))}</div>
+          </div>
+        )}
+        {/* Only when the manual-entry line above has NOT already said it. A day with manual entries
+            already explains itself there; this covers the other case — day totals with no session rows
+            behind them at all, which is what an old export or a partial one leaves behind. */}
+        {sessDayRows.length === 0 && st && st.walked && manual.length === 0 && (
+          <p className={cap} style={{ color: C.ashDim }}>the totals above arrived without any session behind them, so there is nothing to open. PadCoach sends a day's scalars and its sessions together; a day carrying one and not the other came from an older export.</p>
         )}
       </div>
 
@@ -5224,15 +5974,15 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
            scaffold of zero-height bars would be a worse answer than saying so. */
         <div className={card} style={{ background: C.card, borderColor: C.edge }}>
           <span className={hdr} style={{ color: C.ash }}><TrendingUp size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Progress</span>
-          <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>No walks have reached this app yet. Everything else on this tab — the trend, active calories, the consistency calendar, efficiency and decoupling, training load, weekly volume, records, and the projections — appears after the first one. PadCoach syncs on its own, or add a walk by hand below. The Method card at the bottom already explains what each of those will mean, and which famous metrics this app deliberately will not compute.</p>
+          <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>No walks have reached this app yet. Everything else on this tab — the trend, active calories, the consistency calendar, efficiency and decoupling, training load, weekly volume, time in zones, records, and the projections — appears after the first one. PadCoach syncs on its own, or add a walk by hand below. The Method card at the bottom already explains what each of those will mean, and which famous metrics this app deliberately will not compute.</p>
         </div>
       ) : (
         <>
           {/* ── Task 60 · the top line ── One question, answered honestly or not at all. Each row is a
               separate measurement rather than a blended score, so nothing can average a strong signal
               together with a signal that has no data behind it. */}
-          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-            <span className={hdr} style={{ color: C.ash }}><Sparkles size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Are you getting fitter?</span>
+          <Sec id="verdict" icon={Sparkles} title="Are you getting fitter?" line={secLine.verdict} tone={secTone.verdict}
+            open={secOpen("verdict")} onToggle={toggleSec}>
             <p className="mt-2 text-[13px] leading-relaxed" style={{ color: verdict.ready ? C.bone : C.ash }}>{verdict.headline}</p>
             <div className="mt-3 flex flex-col gap-1.5">
               {verdict.signals.map((s) => (
@@ -5253,12 +6003,12 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
               a row only takes a side when its own 95% interval excludes zero, so “waiting” means the data genuinely cannot yet tell the difference — it is not a hidden zero.
               minutes walked is deliberately not one of these rows: walking more is doing <em>more</em>, not being fitter, and it is the one number you set directly.
             </p>
-          </div>
+          </Sec>
 
           {/* ── 3. Trend ── the Diet tab's chart, pointed at cardio. Same numbers, two zoom levels. */}
-          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+          <Sec id="trend" icon={TrendingUp} title="Trend" line={secLine.trend} tone={secTone.trend}
+            open={secOpen("trend")} onToggle={toggleSec}>
             <div className="flex items-center justify-between gap-2">
-              <span className={hdr} style={{ color: C.ash }}><TrendingUp size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Trend</span>
               <div className="flex gap-1.5">
                 {[["14d", "14 days"], ["8w", "8 weeks"]].map(([id, lab]) => (
                   <button key={id} onClick={() => setRange(id)} className="rounded-full border px-3 py-1 font-mono text-[10px]" style={{ borderColor: range === id ? C.goldDim : C.edge, background: range === id ? "#241F12" : "transparent", color: range === id ? C.gold : C.ash }}>{lab}</button>
@@ -5297,14 +6047,14 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
               {chartGoal ? ` dashed line = ${range === "8w" ? weekGoalNote : "PadCoach's adaptive target for the day"}.` : ""}
               {sVals.length < 3 ? " the line needs a few more days before its shape means anything." : ""}
             </p>
-          </div>
+          </Sec>
 
           {/* ── Task 63 · Energy ── The answer to "there is NO CALORIES ANYWHERE". Everything on this
               card is arithmetic over what PadCoach sent; nothing here estimates a calorie, and the days
               that genuinely have none are counted and named rather than drawn as zeroes. */}
-          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+          <Sec id="calories" icon={Flame} title="Calories" line={secLine.calories} tone={secTone.calories}
+            open={secOpen("calories")} onToggle={toggleSec}>
             <div className="flex items-center justify-between gap-2">
-              <span className={hdr} style={{ color: C.ash }}><Flame size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Calories</span>
               <div className="flex gap-1.5">
                 {[["14d", "14 days"], ["8w", "8 weeks"], ["all", "all time"]].map(([id, lab]) => (
                   <button key={id} onClick={() => setCalRange(id)} className="rounded-full border px-3 py-1 font-mono text-[10px]" style={{ borderColor: calRange === id ? C.goldDim : C.edge, background: calRange === id ? "#241F12" : "transparent", color: calRange === id ? C.gold : C.ash }}>{lab}</button>
@@ -5473,20 +6223,26 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
                 )}
               </>
             )}
-          </div>
+          </Sec>
 
           {/* ── 4. Consistency ── the training variable that actually is his goal. Never a red cell. */}
-          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-            <span className={hdr} style={{ color: C.ash }}><CalendarDays size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Consistency · 8 weeks</span>
+          <Sec id="consistency" icon={CalendarDays} title="Consistency · 8 weeks" line={secLine.consistency} tone={secTone.consistency}
+            open={secOpen("consistency")} onToggle={toggleSec}>
             <div className="mt-3 flex gap-1" style={{ paddingLeft: 0 }}>
               {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => <span key={i} className="flex-1 text-center font-mono text-[8px]" style={{ color: C.ashDim }}>{d}</span>)}
             </div>
             <div className="mt-1 flex flex-col gap-1">
               {cal.map((w) => (
                 <div key={w.start} className="flex gap-1">
+                  {/* Task 71 — the same cells, now tappable. This strip and the month calendar at the top
+                      would otherwise be two calendars doing the same job; making a cell jump the calendar
+                      to that day makes this one an INDEX into the other rather than a copy of it, which is
+                      worth having because eight weeks back is two months of paging. The two views are not
+                      redundant: this is eight rolling weeks, that is a named month. */}
                   {w.cells.map((c) => (
-                    <div key={c.key} title={`${c.key}${c.st && c.st.walked ? ` · ${c.st.zone2Min != null ? Math.round(c.st.zone2Min) + " min in zone" : mins(c.st.movingSec) + " min moving"}` : ""}`}
-                      className="flex-1 rounded-[3px]" style={{ height: 16, background: c.future ? "transparent" : cellBg(c.st), border: c.future ? `1px dashed ${C.edge}` : c.key === today ? `1px solid ${C.activeEdge}` : "none" }} />
+                    <button key={c.key} onClick={() => { if (!c.future) { setViewDate(c.key); setMonthKey(monthKeyOf(c.key)); window.scrollTo({ top: 0, behavior: "smooth" }); } }}
+                      disabled={c.future} aria-label={`${c.key}${c.st && c.st.walked ? ` · ${c.st.zone2Min != null ? Math.round(c.st.zone2Min) + " min in zone" : mins(c.st.movingSec) + " min moving"}` : " · nothing recorded"}`}
+                      className="flex-1 rounded-[3px]" style={{ height: 16, background: c.future ? "transparent" : cellBg(c.st), border: c.key === viewDate ? `1px solid ${C.gold}` : c.future ? `1px dashed ${C.edge}` : c.key === today ? `1px solid ${C.activeEdge}` : "none" }} />
                   ))}
                 </div>
               ))}
@@ -5496,12 +6252,12 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
               <span className="ml-3" style={{ color: streak > 0 ? C.sage : C.ash }}>{streak}-day streak</span>
               <span className="ml-3" style={{ color: C.ashDim }}>{everWalked} day{everWalked === 1 ? "" : "s"} logged in all</span>
             </p>
-            <p className={cap} style={{ color: C.ashDim }}>brighter = more minutes in zone that day. dashed cells are the rest of this week, not misses.</p>
-          </div>
+            <p className={cap} style={{ color: C.ashDim }}>brighter = more minutes in zone that day. dashed cells are the rest of this week, not misses. tap any cell to open that day on the calendar at the top — this strip is eight rolling weeks, the calendar is a named month, and they read the same days off the same brightness scale.</p>
+          </Sec>
 
           {/* ── 5. Progress ── speed at 130 bpm, then the 28-vs-28 comparison in Apple's Trends shape. */}
-          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-            <span className={hdr} style={{ color: C.ash }}><Activity size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Progress</span>
+          <Sec id="progress" icon={Activity} title="Progress" line={secLine.progress} tone={secTone.progress}
+            open={secOpen("progress")} onToggle={toggleSec}>
             <div className="mt-3 flex items-end justify-between gap-3">
               <div>
                 <p className={sub} style={{ color: C.ashDim }}>speed at {Z2_MID} bpm</p>
@@ -5587,13 +6343,13 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
                 not sent yet, because PadCoach doesn't compute them at all so far: {deferred.join(", ")}. blank rather than zero, on purpose — and cadence will arrive as steps/min, not strides.
               </p>
             )}
-          </div>
+          </Sec>
 
           {/* ── Task 60 · Efficiency Factor & aerobic durability ── The two metrics the platform survey
               found are the best fit for long steady work, and that NEITHER Garmin nor Strava exposes.
               EF is speed ÷ HR (never pace, which inverts the direction); decoupling is Friel's. */}
-          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-            <span className={hdr} style={{ color: C.ash }}><Leaf size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Efficiency &amp; durability</span>
+          <Sec id="efficiency" icon={Leaf} title="Efficiency &amp; durability" line={secLine.efficiency} tone={secTone.efficiency}
+            open={secOpen("efficiency")} onToggle={toggleSec}>
             <div className="mt-3 flex items-end justify-between gap-3">
               <div>
                 <p className={sub} style={{ color: C.ashDim }}>efficiency factor</p>
@@ -5668,14 +6424,14 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
                 There is no pass/fail badge here on purpose — the figure moves across the 5% line depending on the treadmill's grade, which is not always recorded. TrainingPeaks treats anything under 20 minutes as invalid, and so does this.
               </p>
             </div>
-          </div>
+          </Sec>
 
           {/* ── Task 60 · Training load ── Deliberately NOT Garmin's. Firstbeat's own papers say EPOC
               stops accumulating below ~75% VO2max, so every Garmin load metric would score a 96-minute
               zone-2 walk about the same as a 40-minute one. This one is linear in duration by
               construction, which is the only property that matters for someone whose plan is hours. */}
-          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-            <span className={hdr} style={{ color: C.ash }}><Gauge size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Training load · fitness, fatigue, form</span>
+          <Sec id="load" icon={Gauge} title="Training load · fitness, fatigue, form" line={secLine.load} tone={secTone.load}
+            open={secOpen("load")} onToggle={toggleSec}>
             {loadHist.loadDays === 0 ? (
               <p className="mt-2 text-[12.5px]" style={{ color: C.ash }}>No walk with a heart rate has reached this app yet, so there is no load to accumulate. Manual entries are deliberately left out — a manual walk has no zone time to weight, and padding it with a guess is the one thing this tab has never done.</p>
             ) : (
@@ -5754,17 +6510,15 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
                 )}
               </>
             )}
-          </div>
+          </Sec>
 
           {/* ── Task 60 · Projections ── The part he asked for that did not exist. Nothing here is ever
               a date: it is a fitted line, its 95% confidence band, and the range of dates that band is
               consistent with — including "never", said in those words when the data allows it. A
               projection from four sessions has to LOOK like a projection from four sessions. */}
           {PROJ.length > 0 && projSel && (
-            <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-              <div className="flex items-center justify-between gap-2">
-                <span className={hdr} style={{ color: C.ash }}><Target size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Where this is heading</span>
-              </div>
+            <Sec id="projections" icon={Target} title="Where this is heading" line={secLine.projections} tone={secTone.projections}
+              open={secOpen("projections")} onToggle={toggleSec}>
               <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
                 {PROJ.map((x) => (
                   <button key={x.id} onClick={() => setProjTab(x.id)} className="shrink-0 rounded-full border px-3 py-1.5 font-mono text-[11px] whitespace-nowrap"
@@ -5849,12 +6603,12 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
               <p className={cap} style={{ color: C.ashDim }}>
                 a straight line fitted by least squares, with Student's-t 95% intervals. Nothing here is a prediction of what you <em>will</em> do — it is the range of futures this much data cannot rule out, and it narrows only as readings accumulate. It assumes the last stretch keeps going, which is exactly the assumption a projection is.
               </p>
-            </div>
+            </Sec>
           )}
 
           {/* ── 6. This week ── weekly minutes in zone against the WHO line, plus how much of it held. */}
-          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-            <span className={hdr} style={{ color: C.ash }}><Flame size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Weekly volume</span>
+          <Sec id="volume" icon={Flame} title="Weekly volume" line={secLine.volume} tone={secTone.volume}
+            open={secOpen("volume")} onToggle={toggleSec}>
             <div className="mt-3 flex items-end justify-between gap-3">
               <div>
                 <p className={sub} style={{ color: C.ashDim }}>this week so far</p>
@@ -5887,12 +6641,90 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
               </p>
             )}
             <p className={cap} style={{ color: C.ashDim }}>weeks run Monday–Sunday; the last bar is still in progress, and the average only counts weeks since your first logged walk. the % is an adherence figure — it says PadCoach held you where you asked, not that you got fitter. it should sit near a ceiling; it's interesting when it drops.</p>
-          </div>
+          </Sec>
+
+          {/* ── Task 71 · Time in zones ── "we need to make it non exclusive with data available on all
+              zones as well but current zone 2 stats should stay untouched." Every card above this one is
+              a zone-2 card and every one of them still is: not a number on this tab was recomputed from
+              these buckets. This is the distribution BESIDE them — and when PadCoach has not sent one it
+              says so instead of drawing five empty bars. */}
+          <Sec id="zones" icon={Layers} title="Time in zones" line={secLine.zones} tone={secTone.zones}
+            open={secOpen("zones")} onToggle={toggleSec}>
+            {!zoneEver ? (
+              <>
+                <p className="mt-3 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>
+                  PadCoach is not sending per-zone time yet, so there is nothing here to split. Every figure on this tab is time inside the one band it was holding you in — which is zone 2 for every session on record — and that is a real measurement, not a limitation of the band it happens to describe.
+                </p>
+                <p className={cap} style={{ color: C.ashDim }}>this section fills itself in the moment an export carries <span style={{ color: C.ash }}>timeInZonesSec</span>. nothing here estimates the other four zones from a heart-rate average in the meantime: an average of 128 bpm says nothing about how many minutes were spent above 135.</p>
+              </>
+            ) : (
+              <>
+                <div className="mt-3 flex gap-1.5">
+                  {[["14d", "14 days"], ["8w", "8 weeks"], ["all", "all time"]].map(([id, lab]) => (
+                    <button key={id} onClick={() => setZoneRange(id)} className="rounded-full border px-3 py-1 font-mono text-[10px]"
+                      style={{ borderColor: zoneRange === id ? C.goldDim : C.edge, background: zoneRange === id ? "#241F12" : "transparent", color: zoneRange === id ? C.gold : C.ash }}>{lab}</button>
+                  ))}
+                </div>
+                {!zoneWin ? (
+                  <p className="mt-3 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>No day in this window carries per-zone time. Try a wider one — the days that do are older than this.</p>
+                ) : (
+                  <>
+                    <div className="mt-3 flex items-end justify-between gap-3">
+                      <div>
+                        <p className={sub} style={{ color: C.ashDim }}>on the strap's clock</p>
+                        <p className="font-mono text-2xl font-bold" style={{ color: C.bone }}>{fmtHM(zoneWin.totalSec / 3600)}</p>
+                        <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>over {nS(zoneWin.covered, "day")} that carried a split</p>
+                      </div>
+                      {zoneWin.selectedZone != null && (
+                        <div className="text-right">
+                          <p className={sub} style={{ color: C.ashDim }}>in the zone you aimed for</p>
+                          <p className="font-mono text-xl font-bold" style={{ color: C.sage }}>{Math.round(zoneWin.selectedPct)}<span className="ml-0.5 font-mono text-[12px] font-normal" style={{ color: C.ash }}>%</span></p>
+                          <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>zone {zoneWin.selectedZone}</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-3"><ZoneBar dist={zoneWin} bands={an && an.zoneBands} height={18} showLegend /></div>
+                    {/* The one sentence that has to be here, because the tab's own vocabulary makes it
+                        easy to misread: "% in zone" is an ADHERENCE figure PadCoach computes at native
+                        sample resolution, and this bar is a different measurement of a different thing. */}
+                    <p className={cap} style={{ color: C.ashDim }}>
+                      colour is intensity, not judgement — there is no good zone and no bad one on this bar, and
+                      &ldquo;between bands&rdquo; is drawn off the ramp because it is not an intensity at all.
+                      {zoneWin.selectedZones && zoneWin.selectedZones.length > 1
+                        ? ` these days aimed at more than one zone (${zoneWin.selectedZones.map((z) => `zone ${z}`).join(", ")}), so there is no single "the zone you aimed for" figure for the window — only the split.`
+                        : ""}
+                      {" "}the percentages are of the STRAP's clock ({fmtHM(zoneWin.totalSec / 3600)}), not of moving time — the two differ by a minute or two per walk, and dividing by the wrong one would produce percentages that quietly fail to add up.
+                      {" "}this bar is PadCoach's per-zone seconds, summed. it is NOT where the "% in zone" figure on the cards above comes from — that one is computed upstream at native sample resolution and is left exactly as it was, so the two can differ slightly for the same walk and neither is wrong.
+                      {zoneWin.covered < zoneWin.sources ? ` ${zoneWin.sources - zoneWin.covered} day${zoneWin.sources - zoneWin.covered === 1 ? "" : "s"} in this window carried no split and are not in this total.` : ""}
+                      {zoneWin.unaccountedSec ? ` ${fmtHM(Math.abs(zoneWin.unaccountedSec) / 3600)} of that clock lands in none of these buckets — reported rather than spread across them, because a bar that always sums to 100% cannot tell you when it is missing something.` : ""}
+                    </p>
+                    {/* The two things his own ladder does at its seams. Both are real, both are visible in
+                        the numbers above, and both would read as a bug if the card stayed quiet about
+                        them — so they are stated rather than smoothed over. */}
+                    {zoneSeams && (
+                      <p className="mt-2 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>
+                        {zoneSeams.gaps.length ? `your band ladder leaves ${zoneSeams.gaps.map((g) => `${Math.round(g.from)}–${Math.round(g.to)} bpm`).join(" and ")} in no zone at all — that time is the "between bands" bucket, never rounded into a neighbour. ` : ""}
+                        {zoneSeams.overlaps.length ? `zone${zoneSeams.overlaps.length === 1 ? "" : "s"} ${zoneSeams.overlaps.map((o) => `${o.zones[0]} and ${o.zones[1]}`).join(", ")} overlap at ${zoneSeams.overlaps.map((o) => `${Math.round(o.from)}–${Math.round(o.to)} bpm`).join(", ")}; PadCoach gives those beats to the LOWER zone, and this app reports that rather than re-deciding it.` : ""}
+                      </p>
+                    )}
+                    {an && an.zoneBandsSource && (
+                      <p className="mt-1 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>
+                        these bands are {an.zoneBandsSource === "edited" ? "ones you set yourself" : an.zoneBandsSource === "garmin" ? "the ones Garmin calculated for you" : "the app's starting defaults — not a measurement of you"}
+                        {zoneWin.bandsRecorded === false ? ", and no session in this window recorded a ladder of its own, so every second above was measured against them" : ""}.
+                        {an.zoneBandsSource === "default" ? " Zone 2 is the one band on this tab your own data has validated, because it is the one PadCoach has been holding you in; read zones 3–5 as \u201cwhere the default ladder says I was\u201d rather than as thresholds of yours." : ""}
+                      </p>
+                    )}
+                    {!(an && an.zoneBands) && <p className="mt-1 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>PadCoach has not sent what each zone number means in heart rates (<span style={{ color: C.ash }}>analytics.zoneBands</span>), so the bands are named by index. The seconds are the seconds either way.</p>}
+                  </>
+                )}
+              </>
+            )}
+          </Sec>
 
           {/* ── 7. Records ── in the unit of the actual goal. A treadmill pace record measures the
               controller's decisions, not him, so there isn't one here. */}
-          <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-            <span className={hdr} style={{ color: C.ash }}><Star size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Records</span>
+          <Sec id="records" icon={Star} title="Records" line={secLine.records} tone={secTone.records}
+            open={secOpen("records")} onToggle={toggleSec}>
             <div className="mt-3 flex flex-wrap gap-x-6 gap-y-3">
               {[["longest session", recs.session && Math.round(recs.session.min), recs.session && dLbl(recs.session.key)],
                 ["best day", recs.day && Math.round(recs.day.min), recs.day && dLbl(recs.day.key)],
@@ -5906,7 +6738,7 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
             </div>
             {recs.longestSessionMin > 0 && <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>longest walk of any kind: {Math.round(recs.longestSessionMin)} min moving</p>}
             <p className={cap} style={{ color: C.ashDim }}>time in zone, not pace — on a treadmill holding your heart rate, a speed record would be a record set by the controller.</p>
-          </div>
+          </Sec>
         </>
       )}
 
@@ -5915,18 +6747,8 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
           against the one before it, averages across sessions with their denominators on screen, the
           three things he named — speed, heart rate, calories — tracked session to session, and every
           session in the history as its own row with everything it does and does not know. */}
-      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className={hdr} style={{ color: C.ash }}><List size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Sessions</span>
-          {sessDay.length > 0 && (
-            <div className="flex gap-1.5">
-              {[["all", `all ${sessAll.length}`], ["day", `${dLbl(viewDate)} (${sessDay.length})`]].map(([id, lab]) => (
-                <button key={id} onClick={() => { setSessScope(id); setSessShow(8); }} className="rounded-full border px-3 py-1 font-mono text-[10px]"
-                  style={{ borderColor: sessScopeOk === id ? C.goldDim : C.edge, background: sessScopeOk === id ? "#241F12" : "transparent", color: sessScopeOk === id ? C.gold : C.ash }}>{lab}</button>
-              ))}
-            </div>
-          )}
-        </div>
+      <Sec id="sessions" icon={List} title="Sessions" line={secLine.sessions} tone={secTone.sessions}
+        open={secOpen("sessions")} onToggle={toggleSec}>
 
         {sessAll.length === 0 ? (
           <p className="mt-3 text-[12.5px] leading-relaxed" style={{ color: C.ash }}>
@@ -6114,170 +6936,24 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
               </>
             )}
 
-            {/* ── D. every session ── newest first, each one its own row. */}
+            {/* ── D. the newest few ── Task 71. This used to be EVERY session, newest first, paged 8
+                at a time: "after 400 there will just be 400 lines by default." The whole list now lives
+                on the calendar, one day at a time, and what survives here is the handful that answer
+                "what did I just do" — an overall question the calendar would make him hunt for. */}
             <p className={`mt-5 ${sub}`} style={{ color: C.ashDim }}>
-              {sessScopeOk === "day" ? `${dLbl(viewDate)} · ${nS(sessRows.length, "session")}` : `every session · newest first · ${sessRows.length}`}
+              {sessAll.length > CARDIO_SESSION_PREVIEW
+                ? `the newest ${CARDIO_SESSION_PREVIEW} of ${sessAll.length}`
+                : `${nS(sessAll.length, "session")}, all of them`}
             </p>
             <div className="mt-2 flex flex-col gap-2">
-              {sessRows.slice(0, sessShow).map((r) => {
-                const s = r.s, open = openSess === r.sid;
-                const drift = s.decoupling && s.decoupling.speedDriftPercent;
-                const halves = s.decoupling && s.decoupling.firstHalfSpeedKmh != null && s.decoupling.secondHalfSpeedKmh != null
-                  ? `${s.decoupling.firstHalfSpeedKmh.toFixed(2)} → ${s.decoupling.secondHalfSpeedKmh.toFixed(2)} km/h` : null;
-                const unknowns = open ? cardioSessionUnknowns(r) : null;
-                return (
-                  <div key={r.sid} className="flex flex-col gap-1 rounded-lg border px-3 py-2"
-                    style={{ borderColor: r.key === viewDate && sessScopeOk === "all" ? C.activeEdge : C.edge }}>
-                    <button onClick={() => setOpenSess(open ? null : r.sid)} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-left">
-                      <span className="font-mono text-[11px] font-bold" style={{ color: C.bone }}>
-                        <span style={{ color: C.ashDim }}>#{r.seq}</span> {dLblY(r.key)} · {tHM(s.startedAt)}–{tHM(s.endedAt)}
-                      </span>
-                      <span className="flex items-center gap-2">
-                        {r.idle
-                          ? <span className={sub} style={{ color: C.ashDim }}>belt never moved</span>
-                          : <span className="font-mono text-[11px]" style={{ color: C.gold }}>{fmt(r.min, 0)} min</span>}
-                        <span className={sub} style={{ color: C.goldDim }}>{open ? "▾" : "▸"}</span>
-                      </span>
-                    </button>
-                    {!r.idle && (
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px]" style={{ color: C.ash }}>
-                        {r.speed != null && <span>{r.speed.toFixed(2)} km/h{s.speedSource === "derived" ? "*" : ""}</span>}
-                        {r.avgHr != null && <span>{Math.round(r.avgHr)}{r.maxHr != null ? `/${Math.round(r.maxHr)}` : ""} bpm{r.inBand ? "" : " (outside band)"}</span>}
-                        {r.inZonePct != null && <span style={{ color: C.sage }}>{Math.round(r.inZonePct)}% in zone</span>}
-                        <span>{r.km.toFixed(2)} km</span>
-                        {r.kcal != null
-                          ? <span>{Math.round(r.kcal)} kcal active{s.cal.banded ? ` (${Math.round(s.cal.lowKcal)}–${Math.round(s.cal.highKcal)})` : ""}{r.kcalPerHour != null ? ` · ${Math.round(r.kcalPerHour)} kcal/h` : ""}</span>
-                          : <span style={{ color: C.ashDim }}>no calorie estimate</span>}
-                      </div>
-                    )}
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[9px]" style={{ color: C.ashDim }}>
-                      {r.grade != null
-                        ? <span>{r.grade.toFixed(2)}% grade{r.gradeSource && r.gradeSource !== "measured" ? ` (${r.gradeSource})` : ""}</span>
-                        : <span>no recorded grade</span>}
-                      {r.weightKg != null && <span>{r.weightKg.toFixed(1)} kg</span>}
-                      {s.context && <span>{s.context.tag}{s.context.source === "standingDefault" ? " (default)" : ""}</span>}
-                      {s.modality && s.modality !== "walk" && <span style={{ color: C.rust }}>{s.modality}</span>}
-                      {s.presenceUnverified === true && <span style={{ color: C.rust }}>strap dropped out</span>}
-                      {r.spansMidnight && <span>crosses midnight</span>}
-                    </div>
-
-                    {open && (
-                      <div className="mt-2 flex flex-col gap-2 border-t pt-2" style={{ borderColor: C.edge }}>
-                        {/* Task 67 — WHAT HAPPENED DURING THE WALK, first, because it is the thing every
-                            card before it could only summarise. Everything below this block is still a
-                            summary; this is the only part that shows the session changing. */}
-                        <SessionSeries s={s} policy={seriesPolicy} sub={sub} cap={cap} />
-                        <div className="border-t" style={{ borderColor: C.edge }} />
-                        {/* Everything known about this one session, grouped the way it was measured. */}
-                        {[
-                          ["Timing", [
-                            `started ${tHM(s.startedAt)}${r.startDay && r.startDay !== r.key ? ` on ${dLblY(r.startDay)}` : ""}`,
-                            `ended ${tHM(s.endedAt)}${r.endDay && r.endDay !== r.key ? ` on ${dLblY(r.endDay)}` : ""}`,
-                            `${fmt(r.min, 1)} min moving`,
-                            r.wallSec != null ? `${fmt(r.wallSec / 60, 1)} min between its own timestamps` : null,
-                            r.elapsedAgrees === true ? `${fmt(r.elapsedSec / 60, 1)} min elapsed per PadCoach · ${fmt(Math.max(0, r.elapsedSec - s.movingSec) / 60, 1)} min not moving` : null,
-                          ]],
-                          ["Belt", [
-                            r.speed != null ? `${r.speed.toFixed(2)} km/h average${s.speedSource === "derived" ? " (derived from distance ÷ moving time)" : ""}` : null,
-                            r.maxSpeed != null ? `${r.maxSpeed.toFixed(2)} km/h peak` : null,
-                            `${r.km.toFixed(2)} km`, `${r.steps.toLocaleString()} steps`,
-                            r.grade != null ? `${r.grade.toFixed(2)}% grade${r.gradeSource ? ` (${r.gradeSource})` : ""}` : null,
-                          ]],
-                          ["Heart", [
-                            r.avgHr != null ? `${Math.round(r.avgHr)} bpm average` : null,
-                            r.maxHr != null ? `${Math.round(r.maxHr)} bpm peak` : null,
-                            s.bandName ? `${s.bandName}${s.bandLow && s.bandHigh ? ` · ${s.bandLow}–${s.bandHigh} bpm` : ""}` : null,
-                            r.inZonePct != null ? `${fmt(r.inZoneMin, 1)} min in band · ${Math.round(r.inZonePct)}% of moving time` : null,
-                            r.avgHr != null ? (r.inBand ? "this session's own average landed inside its band, so its speed is comparable with the others that did"
-                              : "this session's own average did NOT land inside its band, so it is left out of every speed comparison rather than adjusted to fit") : null,
-                          ]],
-                          ["Energy", r.kcal == null ? [s.calUnavailableReason || "no estimate — PadCoach returns nothing for a session missing the treadmill grade or your body weight"] : [
-                            `${Math.round(s.cal.kcal)} kcal ACTIVE${s.cal.banded ? ` · ${Math.round(s.cal.lowKcal)}–${Math.round(s.cal.highKcal)} (±${s.cal.bandPct.toFixed(0)}%)` : " · no band sent"}`,
-                            s.cal.model ? `${CAL_MODEL_LABEL[s.cal.model] || s.cal.model}` : null,
-                            `${Math.round(r.kcalPerHour)} kcal/h${r.kcalPerKm != null ? ` · ${Math.round(r.kcalPerKm)} kcal/km` : ""}`,
-                            s.cal.grossKcal != null ? `${Math.round(s.cal.grossKcal)} kcal gross, of which ${Math.round(s.cal.restingKcal)} is the resting share you would have spent sitting still` : null,
-                            s.cal.hrCrossCheckKcal != null ? `${Math.round(s.cal.hrCrossCheckKcal)} kcal from the heart-rate cross-check — carried so a disagreement is visible, never averaged with the figure above` : null,
-                            s.cal.supportReductionFraction != null ? `${(s.cal.supportReductionFraction * 100).toFixed(1)}% taken off the grade term for leaning on the desk` : null,
-                            s.cal.belowValidatedSpeedFloor ? "below the speed the walking equation was validated at — still the best available, but extrapolating" : null,
-                            r.weightKg != null ? `computed against ${r.weightKg.toFixed(1)} kg` : null,
-                          ]],
-                          ["Effort", [
-                            r.ef != null ? `EF ${r.ef.toFixed(3)} — metres per minute, per heartbeat` : null,
-                            s.efficiencyRatio != null ? `VO₂÷HR ${s.efficiencyRatio.toFixed(3)}${s.efficiencyBasis ? ` (${s.efficiencyBasis})` : ""}` : null,
-                            r.load != null ? `load ${Math.round(r.load)} — zone-weighted minutes, linear in duration` : null,
-                            s.context ? `${s.context.tag}${s.context.source === "standingDefault" ? " — inherited from a standing default, not something you said about this walk" : ""}` : null,
-                            s.effort != null ? `perceived effort ${s.effort}/10` : null,
-                          ]],
-                          ["Provenance", [
-                            s.modality ? `${s.modality}${s.modalitySource ? ` (${s.modalitySource})` : ""}` : null,
-                            s.presenceUnverified === true ? "the strap was seen disconnected at some point, so nobody-on-the-belt could not be ruled out for part of this"
-                              : s.presenceUnverified === false ? "the strap stayed connected throughout" : null,
-                            r.spansMidnight ? `this session crossed local midnight — PadCoach files it whole under ${dLblY(r.key)}, so all of its minutes land in that day's totals even though some of them were the day before` : null,
-                            r.filedElsewhere && !r.spansMidnight ? `PadCoach filed this under ${dLblY(r.key)}; by this device's clock it started on ${dLblY(r.startDay)}. That is a statement about two clocks, not about the walk.` : null,
-                            s.id ? `id ${String(s.id).slice(0, 8)}` : null,
-                          ]],
-                        ].map(([g, items]) => { const list = items.filter(Boolean); return !list.length ? null : (
-                          <div key={g}>
-                            <span className={sub} style={{ color: C.ashDim }}>{g}</span>
-                            <div className="mt-0.5 flex flex-col gap-0.5 font-mono text-[10px] leading-relaxed" style={{ color: C.ash }}>
-                              {list.map((x, j) => <span key={j}>{x}</span>)}
-                            </div>
-                          </div>
-                        ); })}
-
-                        {/* Drift, in words — PadCoach pins heart rate, so aerobic drift shows up as the
-                            belt slowing down, and that sentence needs no threshold. */}
-                        {drift != null && (
-                          <div className="font-mono text-[10px] leading-relaxed" style={{ color: C.ash }}>
-                            <span className={sub} style={{ color: C.ashDim }}>Drift</span><br />
-                            {drift < -0.5 ? `the belt slowed ${Math.abs(drift).toFixed(1)}% across the walk to hold your heart rate` : drift > 0.5 ? `the belt sped up ${drift.toFixed(1)}% across the walk at the same heart rate` : "belt speed held steady across the walk"}
-                            {halves ? <span style={{ color: C.ashDim }}> ({halves})</span> : null}
-                            {r.dec && !r.dec.tooShort && r.dec.pct != null && <span style={{ color: C.ashDim }}> · decoupling {r.dec.pct > 0 ? "" : "−"}{Math.abs(r.dec.pct).toFixed(1)}% ({r.dec.band.label}{r.dec.assumedSign ? ", sign inferred" : ""})</span>}
-                            {r.dec && r.dec.tooShort && <span style={{ color: C.ashDim }}> · too short for a valid decoupling reading (under {Math.round(STEADY_MIN_SEC / 60)} min)</span>}
-                            {s.decoupling.confidence && <span className="block" style={{ color: C.ashDim }}>{s.decoupling.confidence.reason || `confidence: ${s.decoupling.confidence.grade}`}</span>}
-                          </div>
-                        )}
-
-                        {s.hrHistogram && (
-                          <div>
-                            <span className={sub} style={{ color: C.ashDim }}>Heart-rate histogram</span>
-                            <div className="mt-1 flex flex-col gap-0.5">
-                              {(() => { const mx = Math.max(...s.hrHistogram.map((b) => b.sec)) || 1; return s.hrHistogram.map((b, j) => {
-                                const inB = b.lo >= (s.bandLow || Z2_LO) && b.lo <= (s.bandHigh || Z2_HI);
-                                return (
-                                  <div key={j} className="flex items-center gap-2 font-mono text-[9px]" style={{ color: C.ashDim }}>
-                                    <span style={{ width: 52 }}>{b.lo}{b.hi ? `–${b.hi}` : "+"}</span>
-                                    <span style={{ width: 44, color: C.ash }}>{(b.sec / 60).toFixed(1)}m</span>
-                                    <span className="flex-1 rounded-[2px]" style={{ height: 8, width: `${(b.sec / mx) * 100}%`, background: inB ? C.gold : C.goldDim }} />
-                                  </div>
-                                ); }); })()}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* What this session does NOT know, and why. An omission you cannot see is
-                            indistinguishable from an oversight — the same rule the Method card's
-                            refusal list exists for, applied one session at a time. */}
-                        {unknowns && unknowns.length > 0 && (
-                          <div>
-                            <span className={sub} style={{ color: C.ashDim }}>not known for this session — {unknowns.length}</span>
-                            <div className="mt-1 flex flex-col gap-1 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>
-                              {unknowns.map((u, j) => <p key={j}><span style={{ color: C.ash }}>{u.what}</span> — {u.why}</p>)}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              {cardioSessionPreview(sessNewest).map((r) => sessRow(r, "recent"))}
             </div>
-            {sessRows.length > sessShow && (
-              <button onClick={() => setSessShow((v) => v + 20)} className={`mt-2 ${sub} block text-left`} style={{ color: C.goldDim }}>
-                ▸ show {Math.min(20, sessRows.length - sessShow)} more of {sessRows.length}
-              </button>
+            {sessAll.length > CARDIO_SESSION_PREVIEW && (
+              <p className="mt-2 font-mono text-[10px]" style={{ color: C.goldDim }}>
+                the other {sessAll.length - CARDIO_SESSION_PREVIEW} are on the calendar at the top — tap the day they happened on.
+              </p>
             )}
-            {sessRows.some((r) => r.s.speedSource === "derived") && <p className={cap} style={{ color: C.ashDim }}>* average speed derived from distance ÷ moving time — PadCoach didn't send its own belt-speed average for that session.</p>}
+            {sessNewest.some((r) => r.s.speedSource === "derived") && <p className={cap} style={{ color: C.ashDim }}>* average speed derived from distance ÷ moving time — PadCoach didn't send its own belt-speed average for that session.</p>}
 
             {/* ── E. reconciliation ── these rows and the day cards above are two views of the same
                 data, so they have to agree. This says whether they do, and where they cannot. */}
@@ -6306,13 +6982,13 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
             )}
           </>
         )}
-      </div>
+      </Sec>
 
       {/* ── Task 60 · Method ── Every metric on this tab, in one place, plus the famous ones this app
           deliberately does NOT compute and the reason for each. An omission you cannot see is
           indistinguishable from an oversight, so the refusals are on screen rather than in a spec. */}
-      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-        <span className={hdr} style={{ color: C.ash }}><Info size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Method</span>
+      <Sec id="method" icon={Info} title="Method" line={secLine.method} tone={secTone.method}
+        open={secOpen("method")} onToggle={toggleSec}>
         <button onClick={() => setMethodOpen((v) => !v)} className={`mt-2 ${sub} block text-left`} style={{ color: C.goldDim }}>{methodOpen ? "▾ hide" : "▸ what every number here means, and what this app refuses to compute"}</button>
         {methodOpen && (
           <div className="mt-3">
@@ -6344,12 +7020,12 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
             </p>
           </div>
         )}
-      </div>
+      </Sec>
 
       {/* ── 9. Manual entries — an activity PadCoach never saw. Always tagged, never merged into the
           measured sessions above, so the two sources can't be mistaken for one another. */}
-      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-        <span className={hdr} style={{ color: C.ash }}>Manual entry</span>
+      <Sec id="manual" icon={Plus} title="Manual entry" line={secLine.manual} tone={secTone.manual}
+        open={secOpen("manual")} onToggle={toggleSec}>
         <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>An outdoor walk, run or ride PadCoach never saw. Logged as-is — no heart-rate or calorie data, since none was measured.</p>
         <div className="mt-3 flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
@@ -6396,12 +7072,12 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
             ))}
           </div>
         )}
-      </div>
+      </Sec>
 
       {/* ── 10. PadCoach sync — plumbing, demoted to the bottom now that Task 51 made the import
           automatic. Both "last happened" lines stay visible; only the file picker is folded away. */}
-      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-        <span className={hdr} style={{ color: C.ash }}><Activity size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />PadCoach sync</span>
+      <Sec id="sync" icon={RefreshCw} title="PadCoach sync" line={secLine.sync} tone={secTone.sync}
+        open={secOpen("sync")} onToggle={toggleSec}>
         {cardio.lastAutoSyncAt && <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>auto-synced from PadCoach {new Date(cardio.lastAutoSyncAt).toLocaleString()}</p>}
         {cardio.lastImportAt && <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>last manual import {new Date(cardio.lastImportAt).toLocaleString()}</p>}
         {!cardio.lastAutoSyncAt && !cardio.lastImportAt && <p className="mt-2 font-mono text-[9px]" style={{ color: C.ashDim }}>nothing has arrived from PadCoach yet.</p>}
@@ -6426,7 +7102,7 @@ function CardioView({ mem, importCardioExport, addManualCardio, removeManualCard
           </div>
         )}
         {toast && <p className="mt-2 font-mono text-[10px]" style={{ color: C.sage }}>{toast}</p>}
-      </div>
+      </Sec>
     </>
   );
 }
