@@ -214,7 +214,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0911-1359";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b0922-1049";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -2810,19 +2810,19 @@ const EXERCISES = {
   // ── reused from the existing program (cues/basic/startLoad carried over) ──
   "Incline DB Bench Press": _ex("Incline DB Bench Press", "Upper chest", { sets: 4, range: [6, 10] }),
   "Standing DB Shoulder Press": _ex("Standing DB Shoulder Press", "Front delts", { sets: 3, range: [8, 12] }),
-  "DB Lateral Raises": _ex("DB Lateral Raises", "Side delts", { sets: 4, range: [12, 20] }),
+  "DB Lateral Raises": _ex("DB Lateral Raises", "Side delts", { sets: 4, range: [10, 15] }),
   "DB Skull Crushers": _ex("DB Skull Crushers", "Triceps", { sets: 2, range: [10, 15] }),
   "Chest-Supported DB Row": _ex("Chest-Supported DB Row", "Mid back", { sets: 4, range: [8, 12] }),
   "DB Romanian Deadlift": _ex("DB Romanian Deadlift", "Hamstrings", { sets: 4, range: [8, 12] }),
-  "Bent-Over DB Flyes": _ex("Bent-Over DB Flyes", "Rear delts", { sets: 4, range: [12, 20] }),
+  "Bent-Over DB Flyes": _ex("Bent-Over DB Flyes", "Rear delts", { sets: 4, range: [10, 15] }),
   "Incline DB Curls": _ex("Incline DB Curls", "Biceps", { sets: 4, range: [8, 12] }),
   "Single-Leg Calf Raises": _ex("Single-Leg Calf Raises", "Calves", { sets: 3, range: [12, 15] }),
   "Bench-Supported DB Pullover": _ex("Bench-Supported DB Pullover", "Lats", { sets: 2, range: [12, 15], twoHand: true }),
   "Bulgarian Split Squat": _ex("Bulgarian Split Squat", "Quads", { sets: 4, range: [8, 12] }),
-  "DB Goblet Squat": _ex("DB Goblet Squat", "Quads", { sets: 3, range: [10, 15], twoHand: true }),
+  "DB Goblet Squat": _ex("DB Goblet Squat", "Quads", { sets: 3, range: [8, 12], twoHand: true }),
   "Weighted DB Crunch": _ex("Weighted DB Crunch", "Abs", { sets: 3, range: [10, 15], twoHand: true }),
   // ── new lifts the 5-day split adds ──
-  "Flat DB Press": _ex("Flat DB Press", "Mid chest", { sets: 3, range: [10, 15], rest: 120, startLoad: 35,
+  "Flat DB Press": _ex("Flat DB Press", "Mid chest", { sets: 3, range: [8, 12], rest: 120, startLoad: 35,
     basic: "Lie flat on the bench, dumbbells at the sides of your mid-chest, wrists stacked over elbows. Press up and slightly together to just short of lockout, then lower under control until you feel a stretch across the chest.",
     cues: ["Lower the dumbbells to the sides of your mid-chest, not up by your shoulders.","Press up and slightly together, stopping just short of locking out.","Keep your shoulder blades pinned back and down into the bench.","Feel a deep stretch across the chest at the bottom of each rep.","Drive your feet into the floor for a stable, powerful press.","Keep your forearms stacked vertically under the weight the whole time.","Push your chest up to meet the dumbbells instead of rounding your shoulders forward.","Lower under control for a two-count; don't just drop into the bottom.","Squeeze the dumbbells together at the top to fire the inner chest.","Keep a hard grip and brace your core before each rep.","Don't clack them at the top — stop short and keep the pecs loaded.","Leave one clean rep in the tank rather than grinding and losing form."] }),
   "Overhead DB Triceps Extension": _ex("Overhead DB Triceps Extension", "Triceps", { sets: 3, range: [10, 15], rest: 90, single: true, startLoad: 30, twoHand: true,
@@ -2848,6 +2848,9 @@ const EXERCISES = {
     cues: ["Sink the heels as far below the step as they'll go before pressing.","Press all the way up onto the tips of your big toes.","Pause a full second at the top and a full second at the bottom.","Drive up through the big-toe side to keep the ankles honest.","Keep the knees straight but unlocked to bias the gastrocnemius.","Lower slow and controlled; never bounce off the Achilles.","Hold the dumbbells at your sides and stand tall and balanced.","Feel the stretch at the bottom as much as the squeeze up top.","Keep your ankles tracking straight, not rolling outward.","Run the rhythm 'stretch, pause, press, squeeze' every rep.","Stack load with the vest plus dumbbells when bodyweight gets easy.","Full, patient reps beat fast and shallow every time."] }),
 };
 // PROGRAM — 5 days. Slot = { exercise } with optional { sets, range } override for that day.
+// Rep cap (2026-09-22, his call, research-backed): compounds top out at 12, isolation at 15 — growth is
+// the same across ~6–30 reps near failure, but reps-in-reserve guesses fall apart past ~12 and long sets
+// cost time and misery. Hip Thrust keeps 10–15: it is already at the 90 lb PowerBlock cap, so reps are its only road.
 // superset pairs (ss): exactly TWO adjacent slots per id — the pairing pass does not support 3+ slot chains.
 const PROGRAM = [
   { id: 1, focus: "Upper — push", sub: "Chest · Shoulders · Triceps", slots: [
@@ -2862,12 +2865,12 @@ const PROGRAM = [
     { exercise: "Hammer Curl", ss: 2 }, { exercise: "Bench-Supported DB Pullover", ss: 2 } ] },
   { id: 4, focus: "Lower", sub: "Glutes · Quads · Calves", slots: [
     { exercise: "Reverse Lunge" }, { exercise: "DB Hip Thrust" },
-    { exercise: "DB Goblet Squat", sets: 3, range: [12, 20], ss: 1 }, { exercise: "Single-Leg Calf Raises", ss: 1 } ] },
+    { exercise: "DB Goblet Squat", sets: 3, ss: 1 }, { exercise: "Single-Leg Calf Raises", ss: 1 } ] },
   { id: 5, focus: "Upper — arms/delts/chest", sub: "Arms · Side delts · Chest", slots: [
     { exercise: "Incline DB Bench Press", sets: 3, range: [8, 12] }, { exercise: "DB Lateral Raises" },
-    { exercise: "Chest-Supported DB Row", sets: 3, range: [10, 15] },
+    { exercise: "Chest-Supported DB Row", sets: 3 },
     { exercise: "Incline DB Curls", sets: 3, range: [10, 12], ss: 1 }, { exercise: "Overhead DB Triceps Extension", ss: 1 },
-    { exercise: "Bent-Over DB Flyes", sets: 3, range: [15, 20], ss: 2 }, { exercise: "Weighted DB Crunch", ss: 2 } ] },
+    { exercise: "Bent-Over DB Flyes", sets: 3, ss: 2 }, { exercise: "Weighted DB Crunch", ss: 2 } ] },
 ];
 // how many days per cycle a lift appears (used by projection + volume reasoning; never hardcoded)
 const exerciseFreq = (name) => PROGRAM.reduce((n, d) => n + d.slots.filter((s) => s.exercise === name).length, 0);
@@ -2896,7 +2899,8 @@ const slotPB = (recs, ex) => {
   if (!recs || !recs.length) return null;
   const tot = (h) => setTotal(h, ex);
   const b = recs.reduce((a, h) => (e1rm(tot(h), h.r) > e1rm(tot(a), a.r) ? h : a), recs[0]);
-  return { w: b.w, r: b.r, dbs: b.dbs || (ex.single ? 1 : 2), e1: e1rm(tot(b), b.r) };
+  const dbs = b.dbs || (ex.single ? 1 : 2);
+  return { w: b.w, r: b.r, dbs, load: tot(b) / dbs, e1: e1rm(tot(b), b.r) };   // load = per hand, band bars included
 };
 if (typeof window !== "undefined" && window.__wk) window.__wk.slotPB = slotPB;
 // A deload is a PERCENTAGE of the load, not a fixed number of plate steps: two steps off 90 lb is -6%,
@@ -3040,7 +3044,8 @@ function buildStraightSets(ex, exIndex, nSets, range, target) {
   const mk = (kind, label, load, prefill, repsLabel, rest, rangeArr, aim) => ({ kind, label, load, repsNum: prefill, repsLabel, rest, range: rangeArr, aim });
   if (exIndex === 0 && !ex.repProgress && target.load >= 20)
     [[0.55, 5], [0.8, 3]].forEach(([p, r], k) => sets.push(mk("warmup", `W${k + 1}`, nearest(target.load * p), r, String(r), 90, null, null)));
-  for (let k = 0; k < nSets; k++) sets.push(mk("work", `${k + 1}`, target.load, target.reps, `${bot}–${top}`, ex.rest, [bot, top], target.reps));
+  const aim = Math.max(bot, Math.min(top, target.reps || bot));   // a goal from a wider range or another day's range stays inside THIS range
+  for (let k = 0; k < nSets; k++) sets.push(mk("work", `${k + 1}`, target.load, aim, `${bot}–${top}`, ex.rest, [bot, top], aim));
   return sets;
 }
 // build a full day's plan from PROGRAM + per-lift prescription in mem.targets
@@ -3099,8 +3104,8 @@ const nextDayId = (dayId) => { const ids = PROGRAM.map((d) => d.id); const i = i
 // The standard is what you ACTUALLY lifted, never what the plan said. Work heavier than prescribed and
 // that load becomes the benchmark on the spot: the next prescription is built from there (more reps, then
 // more load once the range is topped) and never falls back to the easy weight. The only way down is a
-// deload after three straight sessions where neither reps nor load could move.
-function nextPrescription({ range, target, work, last, stall, floor }) {
+// deload after three straight sessions where neither reps nor load could move — band bars included.
+function nextPrescription({ range, target, work, last, stall, floor, ex }) {
   const [bot, top] = range; stall = stall || 0;
   const fl = floor && floor.load > 0 ? { ...floor } : null;
   if (!work || work.length === 0) return { load: target.load, reps: target.reps, stall, decision: "skip", pb: floor || null };
@@ -3117,10 +3122,14 @@ function nextPrescription({ range, target, work, last, stall, floor }) {
   const lastBase = last && last.length ? benchLoad(last, bot) * (cnt && pcnt && cnt !== pcnt ? pcnt / cnt : 1) : null;
   const raised = lastBase != null && base > lastBase + 1e-6;
   const sameAsLast = lastBase != null && Math.abs(lastBase - base) < 1e-6;
-  const lastTotal = last && last.length ? last.reduce((a, s) => a + (s.r || 0), 0) : null;
-  const thisTotal = work.reduce((a, s) => a + (s.r || 0), 0);
+  // work done, bars included: each rep weighs the set's real load (plates × DB count + band bars). At one
+  // plate weight with no bars that's just the rep total; with bars, one more bar at equal reps is more work
+  // (progress) and a bar that costs reps is less (a stall). Bodyweight sets (load 0) weigh 1 → reps decide.
+  const vol = (sets) => sets.reduce((a, s) => a + (s.r || 0) * (setTotal(s, ex || {}) || 1), 0);
+  const lastTotal = last && last.length ? vol(last) : null;
+  const thisTotal = vol(work);
   const gained = lastTotal != null && thisTotal > lastTotal;
-  // A stall is NO PROGRESS at the same load — not merely working below the range. Grinding extra reps out
+  // A stall is NO PROGRESS at the same plate load (less or equal work, bars counted) — not merely working below the range. Grinding extra reps out
   // of a weight that's still too heavy is exactly how you earn your way into the range; that isn't a stall.
   const regressed = (sameAsLast && lastTotal != null && thisTotal <= lastTotal) || (belowBottom && !gained);
   const allHardMaxed = efforts.length === atBase.length && efforts.every((e) => e === "hard" || e === "fail");
@@ -7630,7 +7639,7 @@ function App() {
       const c = cursors.current[exIdx] ?? 0; recentCues[name] = item.order.slice(0, c);   // cue rotation memory
       if (!logged.length) return;                                                          // skip lifts you didn't log
       const target = newTargets[name] || { load: item.target.load, reps: range[0] };
-      const res = nextPrescription({ range, target, work: logged, last: prevSnap?.lifts?.[name]?.sets || null, stall: newStalls[name] || 0, floor: newPb[name] || null });
+      const res = nextPrescription({ range, target, work: logged, last: prevSnap?.lifts?.[name]?.sets || null, stall: newStalls[name] || 0, floor: newPb[name] || null, ex: item.ex });
       if (res.pb) newPb[name] = res.pb;
       newTargets[name] = { load: res.load, reps: res.reps };
       newWeights[name] = res.load;
@@ -8043,7 +8052,7 @@ function App() {
           <div className="flex gap-4 px-2 pb-1.5 pl-7 font-mono text-[12px]">
             <span style={{ color: C.ashDim }}>overall <span style={{ color: pctColor(overallPct) }}>{fmtPct(overallPct)}</span></span>
             <span style={{ color: C.ashDim }}>vs last <span style={{ color: pctColor(lastPct) }}>{fmtPct(lastPct)}</span></span>
-            {pbRec && <span style={{ color: C.ashDim }}>PB <span style={{ color: C.bone }}>{dispW(pbRec.w, unit)}×{pbRec.r}</span></span>}
+            {pbRec && <span style={{ color: C.ashDim }}>PB <span style={{ color: C.bone }}>{dispW1(pbRec.load, unit)}×{pbRec.r}</span></span>}
           </div>
         )}
 
