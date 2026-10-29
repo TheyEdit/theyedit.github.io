@@ -214,7 +214,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b1029-2012";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b1029-2357";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -2875,18 +2875,29 @@ const PROGRAM = [
     { exercise: "Incline DB Curls", sets: 3, range: [10, 12], ss: 1 }, { exercise: "Overhead DB Triceps Extension", ss: 1 },
     { exercise: "Bent-Over DB Flyes", sets: 3, ss: 2 }, { exercise: "Weighted DB Crunch", ss: 2 } ] },
 ];
+// his own edits, synced in mem: swaps = { dayId: { slotIdx: liftName } } (permanent, made in the app),
+// customLifts = { name: { muscle, sets, range, rest, single, twoHand, startLoad } } for names typed in.
+// Swapped-out lifts are never deleted — every stat is keyed by lift name, so swapping one back resumes it.
+const liftOf = (name, mem) => EXERCISES[name] || (mem?.customLifts?.[name] ? _ex(name, mem.customLifts[name].muscle || "Custom", mem.customLifts[name]) : null);
+const bankLifts = (mem) => [...Object.values(EXERCISES), ...Object.keys(mem?.customLifts || {}).filter((n) => !EXERCISES[n]).map((n) => liftOf(n, mem))];
 // how many days per cycle a lift appears (used by projection + volume reasoning; never hardcoded)
-const exerciseFreq = (name) => PROGRAM.reduce((n, d) => n + d.slots.filter((s) => s.exercise === name).length, 0);
-// resolve a day's slots into { ex, sets, range } with per-slot overrides merged over the library defaults
-const daySlots = (dayId) => {
+const exerciseFreq = (name, mem) => PROGRAM.reduce((n, d) => n + daySlots(d.id, mem).filter((s) => s.ex.name === name).length, 0);
+// resolve a day's slots into { ex, sets, range } with per-slot overrides merged over the library defaults.
+// A swapped slot takes the new lift's own sets/range — the slot overrides were tuned for the old lift.
+const daySlots = (dayId, mem) => {
   const day = PROGRAM.find((d) => d.id === dayId) || PROGRAM[0];
-  return day.slots.map((s) => { const ex = EXERCISES[s.exercise]; return { ex, sets: s.sets ?? ex.sets, range: s.range ?? ex.range, ss: s.ss }; });
+  const sw = mem?.swaps?.[day.id] || {};
+  return day.slots.map((s, i) => {
+    const swapped = sw[i] != null && sw[i] !== s.exercise ? liftOf(sw[i], mem) : null;
+    if (swapped) return { ex: swapped, sets: swapped.sets, range: swapped.range, ss: s.ss };
+    const ex = EXERCISES[s.exercise]; return { ex, sets: s.sets ?? ex.sets, range: s.range ?? ex.range, ss: s.ss };
+  });
 };
 // dev hook: exposes the static program (NOT user data) so progress tooling / debugging can read it
 if (typeof window !== "undefined") window.__wk = { EXERCISES, PROGRAM, exerciseFreq, daySlots, BAR_LB, bandFactor, setTotal, dispW1, bandSuggest };
 // program-shape fingerprint: stale live sessions are discarded, not misattributed
-const daySig = (d) => daySlots(d).map((s) => s.ex.name).join("|");
-const liveValid = (l) => !!(l && l.sig && l.sig === daySig(l.day));
+const daySig = (d, mem) => daySlots(d, mem).map((s) => s.ex.name).join("|");
+const liveValid = (l, mem) => !!(l && l.sig && l.sig === daySig(l.day, mem));
 
 // The benchmark load of a set of logged sets: the heaviest weight actually held INSIDE the rep range.
 // If nothing reached the range bottom, fall back to the best set's load (heaviest on a rep tie).
@@ -2940,7 +2951,7 @@ const migrateMem = (raw) => {
   if (!m.rebasedTargets) {
     const t = { ...m.targets };
     Object.keys(m.lastByDay).forEach((dk) => {
-      const snap = m.lastByDay[dk] || {}, slots = daySlots(Number(dk));
+      const snap = m.lastByDay[dk] || {}, slots = daySlots(Number(dk), m);
       Object.keys(snap.lifts || {}).forEach((name) => {
         const lift = snap.lifts[name], slot = slots.find((s) => s.ex.name === name), cur = t[name];
         if (!slot || !cur || !lift || !lift.sets || !lift.sets.length) return;
@@ -2979,7 +2990,7 @@ const migrateMem = (raw) => {
   if (!m.pbSeeded) {
     const pb = { ...(m.pb || {}) };
     Object.keys(m.lastByDay || {}).forEach((dk) => {
-      const snap = m.lastByDay[dk] || {}, slots = daySlots(Number(dk));
+      const snap = m.lastByDay[dk] || {}, slots = daySlots(Number(dk), m);
       Object.keys(snap.lifts || {}).forEach((name) => {
         const lift = snap.lifts[name], slot = slots.find((s) => s.ex.name === name);
         if (!slot || !lift || !lift.sets || !lift.sets.length) return;
@@ -3053,14 +3064,14 @@ function buildStraightSets(ex, exIndex, nSets, range, target) {
 }
 // build a full day's plan from PROGRAM + per-lift prescription in mem.targets
 function buildDayPlan(dayId, mem) {
-  const items = daySlots(dayId).map((slot, i) => {
+  const items = daySlots(dayId, mem).map((slot, i) => {
     const ex = slot.ex;
     const target = (mem.targets && mem.targets[ex.name]) || { load: ex.startLoad, reps: slot.range[0] };
     return { ex, w: target.load, target, sets: buildStraightSets(ex, i, slot.sets, slot.range, target), order: buildOrder(ex.cues, mem.recentCues[ex.name]) };
   });
   // superset plumbing: two ADJACENT slots sharing an `ss` id form one pair. A = first, B = second.
   // Zero rest after A-sets (the plate change IS the transition); one full rest after B-sets = max of both.
-  const slots = daySlots(dayId);
+  const slots = daySlots(dayId, mem);
   items.forEach((it, i) => {
     const s = slots[i];
     it.pair = null;
@@ -3503,14 +3514,15 @@ const SHORT = {
 // never an abbreviation of it ("Lateral Raise", not "LATERA").
 const rowName = (name) => SHORT[name] || name.replace(/^DB\s+/, "");
 const ProgressChart = React.memo(function ProgressChart({ mem }) {
+  const lifts = bankLifts(mem);
   const [sel, setSel] = useState(ALL_EX[0].name);
-  const ex = ALL_EX.find((e) => e.name === sel);
+  const ex = lifts.find((e) => e.name === sel) || ALL_EX[0];
   const pref = mem.unit || "lb";
   const cnt = dbCount(mem, ex);
-  const liftDays = PROGRAM.filter((d) => daySlots(d.id).some((s) => s.ex.name === ex.name)).map((d) => d.id);
+  const liftDays = PROGRAM.filter((d) => daySlots(d.id, mem).some((s) => s.ex.name === ex.name)).map((d) => d.id);
   const bandStart = Math.max(0, ...liftDays.map((id) => mem.bandByDay?.[id] || 0));
   const model = buildChartModel({ ex, hist: mem.history?.[ex.name] || [], target: mem.targets?.[ex.name],
-    pb: mem.pb?.[ex.name], freq: exerciseFreq(ex.name), cnt, bandStart, nowMs: Date.now() });
+    pb: mem.pb?.[ex.name], freq: exerciseFreq(ex.name, mem), cnt, bandStart, nowMs: Date.now() });
   const [selPt, setSelPt] = useState(null);            // tapped history point → detail strip
   useEffect(() => setSelPt(null), [sel]);
   const D = (v) => (model.rp ? Math.round(v) : dispW(Math.round(v * 10) / 10, pref));
@@ -3531,7 +3543,7 @@ const ProgressChart = React.memo(function ProgressChart({ mem }) {
       </div>
 
       <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
-        {ALL_EX.map((e) => (
+        {lifts.map((e) => (
           <button key={e.name} onClick={() => setSel(e.name)} className="shrink-0 rounded-full border px-3 py-1.5 font-mono text-[11px] whitespace-nowrap"
             style={{ borderColor: sel === e.name ? C.goldDim : C.edge, background: sel === e.name ? "#241F12" : "transparent", color: sel === e.name ? C.gold : C.ash }}>
             {SHORT[e.name]}
@@ -3597,7 +3609,7 @@ const ProgressChart = React.memo(function ProgressChart({ mem }) {
           </div>
         ))}
       </div>
-      <p className="mt-3 font-mono text-[9px]" style={{ color: C.ashDim }}>plan = if you hit every target ({exerciseFreq(ex.name)}×/week) · ceiling from your current standard · tap a logged point for detail</p>
+      <p className="mt-3 font-mono text-[9px]" style={{ color: C.ashDim }}>plan = if you hit every target ({exerciseFreq(ex.name, mem)}×/week) · ceiling from your current standard · tap a logged point for detail</p>
     </div>
   );
 });
@@ -7180,6 +7192,57 @@ function ReviewDay({ plan, units, mem, unit, done, bars, onClose, onJump }) {
 // two overlapped glyphs = 2 DB. Active state gold, inactive ash; shared by renderSetRow and
 // renderPairStripCol so both render paths stay pixel-identical. `disabled` preserves the existing
 // mid-session lock (weight-per-hand math can't shift once a session is underway).
+// swap: permanent, one slot on one day. Lives at the bottom of every exercise card, before and during a session.
+function SwapButton({ name, onClick }) {
+  return (
+    <button onClick={onClick} aria-label={`swap ${name}`} className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl border font-mono text-[11px] uppercase tracking-wider active:scale-95"
+      style={{ borderColor: C.edge, color: C.ash }}>
+      <ArrowLeftRight size={13} style={{ color: C.goldDim }} /> swap {name}
+    </button>
+  );
+}
+// picker: every lift in the bank (library + his typed-in ones), minus what's already on this day; or type a new one
+function SwapSheet({ mem, current, taken, droppedSets, onPick, onClose }) {
+  const [q, setQ] = useState("");
+  const name = q.trim().replace(/\s+/g, " ");
+  const all = bankLifts(mem).filter((e) => e.name !== current && !taken.includes(e.name));
+  const hit = all.filter((e) => !name || (e.name + " " + e.muscle).toLowerCase().includes(name.toLowerCase()));
+  const exact = bankLifts(mem).some((e) => e.name.toLowerCase() === name.toLowerCase());
+  const logged = (n) => (mem.history?.[n] || []).length;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" style={{ background: "rgba(0,0,0,0.72)" }} onClick={onClose}>
+      <div className="flex max-h-[85vh] w-full max-w-md flex-col rounded-t-2xl border p-5 sm:rounded-2xl" style={{ background: C.card, borderColor: C.edge }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-[15px] font-bold leading-tight" style={{ color: C.bone }}>Swap {current}</h3>
+            <p className="mt-0.5 font-mono text-[10px]" style={{ color: C.ashDim }}>permanent for this day · {current} keeps its stats</p>
+          </div>
+          <button onClick={onClose} aria-label="close" className="-my-2 -mr-2 flex h-11 w-11 shrink-0 items-center justify-center active:scale-90" style={{ color: C.ash }}><X size={18} /></button>
+        </div>
+        {droppedSets > 0 && <p className="mt-2 font-mono text-[10px]" style={{ color: C.rust }}>the {droppedSets} set{droppedSets === 1 ? "" : "s"} logged on it today won't be saved</p>}
+        <label className="mt-3 flex items-center gap-2 rounded-xl border px-3 py-2" style={{ borderColor: C.edge, background: "#100E09" }}>
+          <Search size={14} style={{ color: C.ashDim }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="search or type a new lift" aria-label="lift name"
+            className="w-full bg-transparent text-[16px] outline-none" style={{ color: C.bone }} />
+        </label>
+        <div className="mt-3 min-h-0 flex-1 space-y-1.5 overflow-y-auto">
+          {name && !exact && (
+            <button onClick={() => onPick(name, true)} className="flex min-h-[48px] w-full items-center gap-2 rounded-xl border px-3 text-left active:scale-[0.98]" style={{ borderColor: C.goldDim, color: C.gold }}>
+              <Plus size={14} /> <span className="text-[14px]">add “{name}” as a new lift</span>
+            </button>
+          )}
+          {hit.map((e) => (
+            <button key={e.name} onClick={() => onPick(e.name, false)} className="flex min-h-[48px] w-full items-center justify-between gap-2 rounded-xl border px-3 text-left active:scale-[0.98]" style={{ borderColor: C.edge }}>
+              <span className="min-w-0 truncate text-[14px]" style={{ color: C.bone }}>{e.name}</span>
+              <span className="shrink-0 font-mono text-[10px]" style={{ color: C.ashDim }}>{e.muscle}{logged(e.name) ? ` · ${logged(e.name)} logged` : ""}</span>
+            </button>
+          ))}
+          {!hit.length && !name && <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>no other lifts in the bank — type one</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
 function DbToggle({ count, onSet, disabled }) {
   const seg = (n, active) => (
     <button key={n} onClick={() => onSet(n)} aria-label={n === 1 ? "use one dumbbell" : "use two dumbbells"}
@@ -7241,7 +7304,7 @@ function App() {
       if (s && hasStore && !(await localTs())) await bumpChange();
       setDay(m.lastDay ? nextDayId(m.lastDay) : 1);
       const live = hasStore ? await loadLive() : null;
-      const liveOk = live && Array.isArray(live.done) && (live.done.length > 0 || live.active) && liveValid(live);
+      const liveOk = live && Array.isArray(live.done) && (live.done.length > 0 || live.active) && liveValid(live, m);
       if (liveOk && Date.now() - (live.ts || 0) < 86400000) { setPending(live); liveRef.current = live; }
       const saved = hasStore ? await loadSyncCfg() : null;
       let cfg = saved && saved.repo && saved.token ? saved : null;   // a prior unlock persisted the cfg here → no password needed again
@@ -7276,7 +7339,7 @@ function App() {
     await LS.set(TSKEY, adoptTs);        // local "change" clock == what we just adopted
     await setSyncedTs(adoptTs);          // ...and we are in sync with it
     if (setTagToo) setDay(rmem.lastDay ? nextDayId(rmem.lastDay) : 1);   // adopted: suggest next day (auto-resume overrides to the live session's day if present)
-    const liveOk = rlive && Array.isArray(rlive.done) && (rlive.done.length > 0 || rlive.active) && liveValid(rlive);
+    const liveOk = rlive && Array.isArray(rlive.done) && (rlive.done.length > 0 || rlive.active) && liveValid(rlive, rmem);
     if (liveOk) { liveRef.current = rlive; if (hasStore) await LS.set(LIVE, rlive); setPending(rlive); }
     else { liveRef.current = null; if (hasStore) await LS.del(LIVE); setPending(null); }
     liveClearedRef.current = false;                 // we adopted remote state, not a local clear
@@ -7289,7 +7352,7 @@ function App() {
     const lt = await localTs();
     const remoteLive = remote && remote.data ? remote.data.live : null;
     let live = liveRef.current;
-    if (!live && !liveClearedRef.current && remoteLive && Array.isArray(remoteLive.done) && (remoteLive.done.length > 0 || remoteLive.active) && liveValid(remoteLive)) {
+    if (!live && !liveClearedRef.current && remoteLive && Array.isArray(remoteLive.done) && (remoteLive.done.length > 0 || remoteLive.active) && liveValid(remoteLive, memRef.current)) {
       live = remoteLive; liveRef.current = remoteLive; if (hasStore) await LS.set(LIVE, remoteLive); setPending(remoteLive);   // adopt the other device's session locally too, so it shows here as well
     }
     if (liveClearedRef.current) live = null;
@@ -7422,7 +7485,8 @@ function App() {
   const [brokenPairs, setBrokenPairs] = useState(() => new Set());   // per-session only: "straight sets today"
   const [page, setPage] = useState(0);   // focus pager: index into `units`
   const [reopenedRounds, setReopenedRounds] = useState(() => new Set());   // merged-card rounds manually expanded after auto-collapse, keyed "aIdx-r{n}"
-  const [reviewOpen, setReviewOpen] = useState(false);   // "review day" overlay — whole day's work loads at a glance
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [swapFor, setSwapFor] = useState(null);   // exIdx whose swap picker is open   // "review day" overlay — whole day's work loads at a glance
   const pairActive = (item) => !!(item.pair && !brokenPairs.has(`${day}-${item.pair.id}`));
   const breakPair = (pairId) => setBrokenPairs((b) => { const n = new Set(b); const k = `${day}-${pairId}`; n.has(k) ? n.delete(k) : n.add(k); return n; });
   const cursors = useRef({});
@@ -7440,9 +7504,29 @@ function App() {
   }, []);
 
   const prevPlanRef = useRef(null);
+  const prevDayRef = useRef(null);
   useEffect(() => {
     const prev = prevPlanRef.current; prevPlanRef.current = plan;
+    const prevDay = prevDayRef.current; prevDayRef.current = day;
     if (skipNextReset.current) { skipNextReset.current = false; return; }
+    // a lift swapped on THIS day mid-session: only that slot starts over — every other lift's logged
+    // sets, done marks and skips stay. The swapped-out lift's sets from today are dropped, not saved:
+    // a half-finished session would read to the engine as a bad day for a lift you walked away from.
+    if (prev && prevDay === day && prev.length === plan.length && prev.some((it, ei) => it.ex.name !== plan[ei].ex.name)) {
+      const changed = plan.map((it, ei) => it.ex.name !== prev[ei].ex.name);
+      if (prev.every((it, ei) => changed[ei] || it.sets.length === plan[ei].sets.length)) {
+        const mine = (k) => changed[+k.split("-")[0]];
+        setLogs((L) => { const n = {};
+          Object.keys(L).forEach((k) => { if (!mine(k)) n[k] = L[k]; });
+          plan.forEach((it, ei) => { if (changed[ei]) it.sets.forEach((st, si) => { n[`${ei}-${si}`] = { weight: st.load, reps: st.repsNum }; }); });
+          return n; });
+        setDone((d) => new Set([...d].filter((k) => !mine(k))));
+        if (active && mine(active)) { setActive(null); setCue(""); }
+        if (rest && mine(rest.key)) setRest(null);
+        setOpenInfo(null);
+        return;
+      }
+    }
     // `plan` derives from mem, so ANY mem write re-creates it — but only a SHAPE change (new day,
     // variant swap) is a genuinely different workout. A same-shape rebuild (mid-session DB flip
     // converting loads, a diet log, a sync merge) must never wipe a live session: those merge —
@@ -7512,7 +7596,7 @@ function App() {
   useEffect(() => {
     if (!loaded) return;
     const started = done.size > 0 || active !== null;
-    const liveObj = started ? { day, logs, done: [...done], active, ts: Date.now(), sig: daySig(day), bars: sessionBars, skipped: [...skippedEx] } : (pending || null);
+    const liveObj = started ? { day, logs, done: [...done], active, ts: Date.now(), sig: daySig(day, mem), bars: sessionBars, skipped: [...skippedEx] } : (pending || null);
     liveRef.current = liveObj;
     if (hasStore && started) saveLive(liveObj);
     // Only mark the device "dirty" (bump the change clock + push) when the session GENUINELY changed —
@@ -7521,7 +7605,7 @@ function App() {
     const sig = liveSig(liveObj);
     if (sig !== syncedLiveSig.current) { bumpChange().then(schedulePush); }
     else { schedulePush(); }
-  }, [done, active, loaded, pending, skippedEx]);
+  }, [done, active, loaded, pending, skippedEx, daySig(day, mem)]);
 
   const workKeys = useMemo(() => { const ks = []; plan.forEach((it, ei) => { if (it.ex.optional) return; it.sets.forEach((s, si) => { if (s.kind === "work") ks.push(`${ei}-${si}`); }); }); return ks; }, [plan]);
   const workTotal = workKeys.length;
@@ -7725,6 +7809,19 @@ function App() {
     if (active && active.startsWith(`${exIdx}-`)) cancelSet();   // skipping the lift you're mid-set on cancels that set
     setSkippedEx((s) => { const n = new Set(s); if (n.has(exIdx)) n.delete(exIdx); else n.add(exIdx); return n; });
   };
+  // permanent swap of one slot on this day. A typed-in name becomes a custom lift that copies the
+  // replaced lift's sets, rep range, rest and DB setup, starting at its current load. Picking the day's
+  // original lift back just clears the swap.
+  const swapLift = async (exIdx, name, isNew) => {
+    const cur = daySlots(day, mem)[exIdx], target = (mem.targets || {})[cur.ex.name];
+    const customLifts = isNew ? { ...(mem.customLifts || {}), [name]: { muscle: cur.ex.muscle, sets: cur.sets, range: cur.range, rest: cur.ex.rest,
+      single: cur.ex.single, twoHand: cur.ex.twoHand, startLoad: target ? target.load : cur.ex.startLoad } } : (mem.customLifts || {});
+    const daySw = { ...(mem.swaps?.[day] || {}) };
+    const orig = (PROGRAM.find((d) => d.id === day) || PROGRAM[0]).slots[exIdx]?.exercise;
+    if (name === orig) delete daySw[exIdx]; else daySw[exIdx] = name;
+    const nm = { ...mem, swaps: { ...(mem.swaps || {}), [day]: daySw }, customLifts };
+    if (hasStore) await saveState(nm); setMem(nm); setSwapFor(null);
+  };
   const discardSession = async () => { if (hasStore) await clearLive(); liveRef.current = null; liveClearedRef.current = true; setPending(null); };
   // Auto-restore an in-progress session (saved locally, or just pulled from another device) into the
   // live view — one seamless session, no "Resume" click. This is what makes a refresh (here or on
@@ -7735,7 +7832,7 @@ function App() {
   const setUnit = async (u) => { const nm = { ...mem, unit: u }; if (hasStore) await saveState(nm); setMem(nm); };
   // flip an exercise 2⇄1 DB. Converts the prescription so TOTAL load carries over (2×30 → 1×60),
   // rounded to a real DB step, then double progression resumes from there.
-  const setDbMode = async (name, count) => { const ex = EXERCISES[name]; const old = dbCount(mem, ex);
+  const setDbMode = async (name, count) => { const ex = liftOf(name, mem); const old = dbCount(mem, ex);
     if (count === old) return;
     const t = (mem.targets || {})[name];
     const newTargets = t ? { ...mem.targets, [name]: { ...t, load: nearest(t.load * old / count) } } : mem.targets;
@@ -8213,6 +8310,7 @@ function App() {
           </>
         )}
       </p>
+      <SwapButton name={item.ex.name} onClick={() => setSwapFor(exIdx)} />
     </div>
     );
   };
@@ -8359,6 +8457,10 @@ function App() {
           })}
         </div>
         <p className="mt-3 font-mono text-[10px]" style={{ color: C.ashDim }}>rest {fmtRest(A.pair.postRest)} after each round</p>
+        <div className="grid grid-cols-2 gap-2">
+          <SwapButton name={rowName(A.ex.name)} onClick={() => setSwapFor(a)} />
+          <SwapButton name={rowName(B.ex.name)} onClick={() => setSwapFor(b)} />
+        </div>
       </div>
     );
   };
@@ -8680,6 +8782,11 @@ function App() {
           )}
         </div>
       </div>
+      {swapFor != null && plan[swapFor] && (
+        <SwapSheet mem={mem} current={plan[swapFor].ex.name} taken={plan.map((it) => it.ex.name)}
+          droppedSets={[...done].filter((k) => k.startsWith(`${swapFor}-`) && plan[swapFor].sets[+k.split("-")[1]]?.kind === "work").length}
+          onPick={(n, isNew) => swapLift(swapFor, n, isNew)} onClose={() => setSwapFor(null)} />
+      )}
       {reviewOpen && (
         <ReviewDay plan={plan} units={units} mem={mem} unit={unit} done={done} bars={bars} onClose={() => setReviewOpen(false)}
           onJump={(unitIdx) => { if (unitIdx >= 0) setPage(unitIdx); setReviewOpen(false); }} />
