@@ -134,7 +134,7 @@ async function saveSyncCfg(c) { return LS.set(SYNCKEY, c); }
 // Only ciphertext lives in the public file — it matches no token pattern, so GitHub never revokes it,
 // and it's useless without your password. Type the password once per device to unlock sync.
 const BAKED_SYNC = { repo: "TheyEdit/workout-data", path: "data.json", branch: "main" };
-const SYNC_CIPHER = "aFWeYEU/EQ9vNx3o0OFqm4t3Rmg60f5XhLbUFOl6Xo368enDtBtqfxcfomRkcwk5BLSoHhhfYlNEBNMg7BxWmAnC5jMLfOzAZUxcG4Y+2XWJIZuqC7KjNVTDbR0topAHu2dC2JZhOlbszEhQ9nRBvFxlRu1PFx8GbdnqWdeX/R0mhcCrymKI6Bc=";
+const SYNC_CIPHER = "__SYNC_DISABLED_REVIEW__";
 const CIPHER_ACTIVE = typeof SYNC_CIPHER === "string" && SYNC_CIPHER.indexOf("__SYNC_") !== 0 && SYNC_CIPHER.length > 24;
 const PWKEY = "gg:pw";
 async function decryptToken(cipherB64, password) {
@@ -214,7 +214,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b0922-1049";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b1029-2012";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -2843,6 +2843,9 @@ const EXERCISES = {
   "DB Hip Thrust": _ex("DB Hip Thrust", "Glutes", { sets: 4, range: [10, 15], rest: 120, startLoad: 50, twoHand: true,
     basic: "Upper back against the bench, a dumbbell across your hips, feet flat and shin vertical at the top. Drive through your heels to lift your hips until your torso is parallel to the floor, squeezing the glutes hard, then lower under control.",
     cues: ["Drive through your heels to lift the hips, not through your toes.","Squeeze your glutes hard at the top until your torso is parallel to the floor.","Tuck your chin and keep your ribs down — don't arch your lower back to finish.","Aim for vertical shins at the top of each rep.","Pause a full beat at the top with the glutes locked.","Lower under control; don't just drop the hips.","Keep the dumbbell pinned across your hip crease with your hands.","Push your knees out slightly in line with your toes.","Keep your core braced so the work stays in the glutes.","Move through a full range — deep at the bottom, locked at the top.","Keep your gaze forward and neck neutral, not cranked back.","Finish every rep with a hard glute squeeze, not a back arch."] }),
+  "Belt Squat": _ex("Belt Squat", "Quads", { sets: 4, range: [8, 12], rest: 150, single: true, startLoad: 50,
+    basic: "Stand on two raised platforms with the load hanging from a hip belt between your feet. Feet shoulder-width, toes slightly out. Sit straight down to at least parallel with the torso tall, then drive up through mid-foot. The load sits on the hips, so the legs work without the back or grip giving out first.",
+    cues: ["Sit straight down between your heels; the weight hangs, so stay upright.","Go to at least parallel on every rep, deeper if the hips allow.","Push the knees out over the toes as you drive up.","Drive through the whole foot and stand all the way tall at the top."] }),
   "Standing Calf Raise": _ex("Standing Calf Raise", "Calves", { sets: 4, range: [10, 15], rest: 90, startLoad: 50,
     basic: "Balls of both feet on a step's edge, a dumbbell in each hand (add the vest to stack load). Drop the heels below the step for a deep stretch, then press all the way up onto the big toes. Slow and full, with a pause at both ends.",
     cues: ["Sink the heels as far below the step as they'll go before pressing.","Press all the way up onto the tips of your big toes.","Pause a full second at the top and a full second at the bottom.","Drive up through the big-toe side to keep the ankles honest.","Keep the knees straight but unlocked to bias the gastrocnemius.","Lower slow and controlled; never bounce off the Achilles.","Hold the dumbbells at your sides and stand tall and balanced.","Feel the stretch at the bottom as much as the squeeze up top.","Keep your ankles tracking straight, not rolling outward.","Run the rhythm 'stretch, pause, press, squeeze' every rep.","Stack load with the vest plus dumbbells when bodyweight gets easy.","Full, patient reps beat fast and shallow every time."] }),
@@ -2857,7 +2860,7 @@ const PROGRAM = [
     { exercise: "Incline DB Bench Press" }, { exercise: "Standing DB Shoulder Press" }, { exercise: "Flat DB Press" },
     { exercise: "DB Lateral Raises", ss: 1 }, { exercise: "DB Skull Crushers", ss: 1 }, { exercise: "Overhead DB Triceps Extension" } ] },
   { id: 2, focus: "Lower", sub: "Quads · Hamstrings · Calves", slots: [
-    { exercise: "Bulgarian Split Squat" }, { exercise: "DB Romanian Deadlift" }, { exercise: "Single-Leg RDL" },
+    { exercise: "Belt Squat" }, { exercise: "DB Romanian Deadlift" }, { exercise: "Single-Leg RDL" },
     { exercise: "DB Goblet Squat", ss: 1 }, { exercise: "Standing Calf Raise", ss: 1 } ] },
   { id: 3, focus: "Upper — pull", sub: "Back · Rear delts · Side delts · Biceps", slots: [
     { exercise: "Chest-Supported DB Row" }, { exercise: "One-Arm DB Row" }, { exercise: "Bent-Over DB Flyes" },
@@ -3364,7 +3367,7 @@ const ANIM = {
   "Incline DB Bench Press": "press recline", "Standing DB Shoulder Press": "press", "DB Lateral Raises": "raise", "DB Skull Crushers": "extend",
   "Chest-Supported DB Row": "row", "DB Romanian Deadlift": "hinge", "Bench-Supported DB Pullover": "pullover", "Incline DB Curls": "curl recline",
   "Bent-Over DB Flyes": "fly", "Single-Leg Calf Raises": "calf",
-  "Bulgarian Split Squat": "squat", "DB Squat": "squat", "DB Goblet Squat": "squat", "Pistol Squat": "squat",
+  "Bulgarian Split Squat": "squat", "DB Squat": "squat", "DB Goblet Squat": "squat", "Pistol Squat": "squat", "Belt Squat": "squat",
   "V-ups": "vup", "DB Russian Twist": "situp", "Bicycle Crunch": "vup", "Reverse Crunch": "legraise", "Weighted DB Crunch": "situp",
 };
 function ExerciseAnim({ kind }) {
@@ -3493,7 +3496,7 @@ const SHORT = {
   "Incline DB Bench Press": "Incline Press", "Standing DB Shoulder Press": "Shoulder Press", "Flat DB Press": "Flat Press", "DB Lateral Raises": "Lateral Raise",
   "Overhead DB Triceps Extension": "OH Ext", "DB Skull Crushers": "Skull Crusher", "Chest-Supported DB Row": "Row", "One-Arm DB Row": "1-Arm Row",
   "DB Romanian Deadlift": "RDL", "Single-Leg RDL": "SL-RDL", "Bent-Over DB Flyes": "Rear Fly", "Incline DB Curls": "Incline Curl", "Hammer Curl": "Hammer Curl",
-  "Single-Leg Calf Raises": "SL Calf", "Standing Calf Raise": "Calf Raise", "Bench-Supported DB Pullover": "Pullover", "Bulgarian Split Squat": "Bulgarian",
+  "Single-Leg Calf Raises": "SL Calf", "Standing Calf Raise": "Calf Raise", "Bench-Supported DB Pullover": "Pullover", "Bulgarian Split Squat": "Bulgarian", "Belt Squat": "Belt Squat",
   "DB Goblet Squat": "Goblet", "Reverse Lunge": "Reverse Lunge", "DB Hip Thrust": "Hip Thrust", "Weighted DB Crunch": "Weighted Crunch",
 };
 // the name a set row is titled by inside the merged superset card — the exercise's own short name,
