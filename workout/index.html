@@ -134,7 +134,7 @@ async function saveSyncCfg(c) { return LS.set(SYNCKEY, c); }
 // Only ciphertext lives in the public file — it matches no token pattern, so GitHub never revokes it,
 // and it's useless without your password. Type the password once per device to unlock sync.
 const BAKED_SYNC = { repo: "TheyEdit/workout-data", path: "data.json", branch: "main" };
-const SYNC_CIPHER = "__SYNC_DISABLED_REVIEW__";
+const SYNC_CIPHER = "aFWeYEU/EQ9vNx3o0OFqm4t3Rmg60f5XhLbUFOl6Xo368enDtBtqfxcfomRkcwk5BLSoHhhfYlNEBNMg7BxWmAnC5jMLfOzAZUxcG4Y+2XWJIZuqC7KjNVTDbR0topAHu2dC2JZhOlbszEhQ9nRBvFxlRu1PFx8GbdnqWdeX/R0mhcCrymKI6Bc=";
 const CIPHER_ACTIVE = typeof SYNC_CIPHER === "string" && SYNC_CIPHER.indexOf("__SYNC_") !== 0 && SYNC_CIPHER.length > 24;
 const PWKEY = "gg:pw";
 async function decryptToken(cipherB64, password) {
@@ -214,7 +214,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b1029-2357";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b1111-0945";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -2816,7 +2816,7 @@ const EXERCISES = {
   "DB Romanian Deadlift": _ex("DB Romanian Deadlift", "Hamstrings", { sets: 4, range: [8, 12] }),
   "Bent-Over DB Flyes": _ex("Bent-Over DB Flyes", "Rear delts", { sets: 4, range: [10, 15] }),
   "Incline DB Curls": _ex("Incline DB Curls", "Biceps", { sets: 4, range: [8, 12] }),
-  "Single-Leg Calf Raises": _ex("Single-Leg Calf Raises", "Calves", { sets: 3, range: [12, 15] }),
+  "Single-Leg Calf Raises": _ex("Single-Leg Calf Raises", "Calves", { sets: 3, range: [12, 15], rest: 30 }),   // 30 s after BOTH legs = ~75 s per calf (each rests while the other works)
   "Bench-Supported DB Pullover": _ex("Bench-Supported DB Pullover", "Lats", { sets: 2, range: [12, 15], twoHand: true }),
   "Bulgarian Split Squat": _ex("Bulgarian Split Squat", "Quads", { sets: 4, range: [8, 12] }),
   "DB Goblet Squat": _ex("DB Goblet Squat", "Quads", { sets: 3, range: [8, 12], twoHand: true }),
@@ -2860,7 +2860,7 @@ const PROGRAM = [
     { exercise: "Incline DB Bench Press" }, { exercise: "Standing DB Shoulder Press" }, { exercise: "Flat DB Press" },
     { exercise: "DB Lateral Raises", ss: 1 }, { exercise: "DB Skull Crushers", ss: 1 }, { exercise: "Overhead DB Triceps Extension" } ] },
   { id: 2, focus: "Lower", sub: "Quads · Hamstrings · Calves", slots: [
-    { exercise: "Belt Squat" }, { exercise: "DB Romanian Deadlift" }, { exercise: "Single-Leg RDL" },
+    { exercise: "Belt Squat" }, { exercise: "DB Romanian Deadlift" }, { exercise: "Single-Leg Calf Raises" },
     { exercise: "DB Goblet Squat", ss: 1 }, { exercise: "Standing Calf Raise", ss: 1 } ] },
   { id: 3, focus: "Upper — pull", sub: "Back · Rear delts · Side delts · Biceps", slots: [
     { exercise: "Chest-Supported DB Row" }, { exercise: "One-Arm DB Row" }, { exercise: "Bent-Over DB Flyes" },
