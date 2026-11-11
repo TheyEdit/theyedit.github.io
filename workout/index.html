@@ -214,7 +214,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b1111-0949";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b1111-0951";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -2864,7 +2864,7 @@ const PROGRAM = [
     { exercise: "Incline DB Bench Press" }, { exercise: "Standing DB Shoulder Press" }, { exercise: "Flat DB Press" },
     { exercise: "DB Lateral Raises", ss: 1 }, { exercise: "DB Skull Crushers", ss: 1 }, { exercise: "Overhead DB Triceps Extension" } ] },
   { id: 2, focus: "Lower", sub: "Quads · Hamstrings · Calves", slots: [
-    { exercise: "DB Back Squat" }, { exercise: "DB Romanian Deadlift" }, { exercise: "Single-Leg Calf Raises" },
+    { exercise: "DB Back Squat" }, { exercise: "DB Romanian Deadlift" }, { exercise: "Single-Leg Calf Raises", sets: 4 },
     { exercise: "DB Goblet Squat" } ] },
   { id: 3, focus: "Upper — pull", sub: "Back · Rear delts · Side delts · Biceps", slots: [
     { exercise: "Chest-Supported DB Row" }, { exercise: "One-Arm DB Row" }, { exercise: "Bent-Over DB Flyes" },
