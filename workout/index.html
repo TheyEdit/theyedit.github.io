@@ -214,7 +214,7 @@ const shortSha = (s) => (s ? String(s).slice(0, 7) : "none");
 const tsLabel = (ts) => { if (!ts) return "0"; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return String(ts); } };
 // signature of an in-progress session's meaningful content — used to tell a genuine edit from an adopted/echoed one
 const liveSig = (l) => (l && Array.isArray(l.done) ? JSON.stringify({ day: l.day, done: [...l.done].sort(), logs: l.logs, active: l.active || null }) : "null");
-const BUILD = "b1111-1003";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
+const BUILD = "b1116-1350";   // replaced at deploy with the deploy time; shown in the sync panel so we can confirm which code a device runs
 // ── diet/nutrition helpers ──
 const todayKey = () => { try { return new Date().toLocaleDateString("en-CA"); } catch (e) { return new Date().toISOString().slice(0, 10); } };  // local YYYY-MM-DD
 const shiftDate = (key, delta) => { const [y, m, d] = key.split("-").map(Number); const dt = new Date(y, m - 1, d); dt.setDate(dt.getDate() + delta); return dt.toLocaleDateString("en-CA"); };
@@ -1626,6 +1626,12 @@ const cardioSessionKey = (key, s, i) => (s && s.id ? String(s.id) : `${key}#${i}
 // anything unparseable, so a bad timestamp can never silently read as 1970-01-01.
 const isoDayKey = (iso) => { if (!iso) return null; const t = Date.parse(iso); if (!isFinite(t)) return null;
   try { return new Date(t).toLocaleDateString("en-CA"); } catch (e) { return null; } };
+// One weigh-in per LOCAL calendar day: logging again the same day replaces that day's entry. This used to compare
+// UTC dates (`toISOString().slice(0, 10)`), which in Japan (UTC+9) is the wrong day until 9 am — so a morning
+// weigh-in was filed under yesterday and REPLACED yesterday's entry, and a morning + afternoon pair counted as two
+// days. Keeps two years of daily weigh-ins (the old cap of 60 silently dropped the start of a long cut).
+const addWeighIn = (hist, w, now = new Date()) => { const iso = now.toISOString(), today = isoDayKey(iso);
+  return [...(hist || []).filter((e) => e && isoDayKey(e.t) !== today), { t: iso, w }].slice(-730); };
 // How far PadCoach's own `totalElapsedSec` may sit from the gap between a session's own two timestamps
 // before the two count as disagreeing rather than as rounding. Deliberately generous.
 const SESSION_ELAPSED_TOL = 0.05;
@@ -2558,6 +2564,16 @@ const parseServingG = (str) => { if (!str || typeof str !== "string") return nul
   const v = parseFloat(m[1].replace(",", ".")); return v > 0 && v < 5000 ? Math.round(v) : null; };
 // one REAL portion: labeled serving beats package weight; a big multi-portion package (>750g) is not "a portion".
 const resolvePortionG = ({ servingG, packageG }) => servingG || (packageG > 0 && packageG <= 750 ? Math.round(packageG) : null);
+// Open Food Facts reports every nutrient per 100 g in GRAMS (energy aside). This app keeps minerals and caffeine in
+// mg and several vitamins in µg (NUTRIENTS[].unit), so each OFF value is scaled into the app's unit on the way in.
+// It used to be stored raw: a sports drink's 49 mg of sodium read as 0.049 mg, and every scanned product added
+// ~nothing to the day's sodium, potassium, calcium and caffeine.
+const OFF_UNIT_SCALE = (() => { const m = {}; NUTRIENTS.forEach((x) => { m[x.key] = x.unit === "mg" ? 1000 : x.unit === "µg" ? 1e6 : 1; }); return m; })();
+const offScale = (key, v) => { const sc = OFF_UNIT_SCALE[key] || 1; return sc === 1 ? v : Math.round(v * sc * 1e4) / 1e4; };
+// Stored foods that came from OFF before that fix: convert once, and mark them (`u: 1`) so it never runs twice.
+// Foods read from a label photo (source "ai"/"ocr") or USDA were already in mg and are left alone.
+const fixOffUnits = (f) => { if (!f || typeof f !== "object" || f.source !== "off" || f.u || !f.nutr) return f;
+  const nutr = {}; for (const k in f.nutr) nutr[k] = offScale(k, f.nutr[k]); return { ...f, nutr, u: 1 }; };
 // OFF: nutriments carry <field>_100g values (may be strings). Derive sodium from salt/2.5 when only salt present.
 const offProductToFood = (prod) => {
   const nm = prod.nutriments || {};
@@ -2565,16 +2581,16 @@ const offProductToFood = (prod) => {
   for (const field in OFF_MAP) {
     const key = OFF_MAP[field];
     const v = nm[field + "_100g"];
-    if (v != null && v !== "") nutr[key] = +v;
+    if (v != null && v !== "" && isFinite(+v)) nutr[key] = offScale(key, +v);   // OFF fields can be strings, and not always numeric ("traces") — a NaN here would poison the whole day's totals
   }
-  if (nutr.kcal == null && nm.energy_100g != null && nm.energy_100g !== "") nutr.kcal = Math.round(+nm.energy_100g / 4.184);   // kJ-only labels → kcal
-  if (nutr.sodium == null && nm.salt_100g != null && nm.salt_100g !== "") nutr.sodium = +nm.salt_100g / 2.5;
+  if (nutr.kcal == null && nm.energy_100g != null && nm.energy_100g !== "" && isFinite(+nm.energy_100g)) nutr.kcal = Math.round(+nm.energy_100g / 4.184);   // kJ-only labels → kcal
+  if (nutr.sodium == null && nm.salt_100g != null && nm.salt_100g !== "" && isFinite(+nm.salt_100g)) nutr.sodium = offScale("sodium", +nm.salt_100g / 2.5);   // g salt → g sodium → mg
   const brand = (prod.brands || "").split(",")[0].trim() || undefined;
   // real-portion default: labeled serving_size beats product_quantity/quantity (package net weight); big multi-portion packages (>750g) don't count.
   const servingG = parseServingG(prod.serving_size);
   const packageG = +prod.product_quantity || parseServingG(prod.quantity);
   const portionG = resolvePortionG({ servingG, packageG });
-  return ensureWater({ id: "off:" + prod.code, label: prod.product_name, brand, basis: "per100", basisGrams: 100, nutr, source: "off", barcode: prod.code, ...(portionG ? { portionG } : {}) });
+  return ensureWater({ id: "off:" + prod.code, label: prod.product_name, brand, basis: "per100", basisGrams: 100, nutr, source: "off", u: 1, barcode: prod.code, ...(portionG ? { portionG } : {}) });
 };
 // query cleanup: qualifier words users type that USDA descriptions never contain, + common aliases.
 const QUERY_SYNONYMS = { "cow milk": "milk", "cows milk": "milk", "cow's milk": "milk", "soy milk": "soymilk", "chicken meat": "chicken", "beef meat": "beef", "white rice": "rice, white", "brown rice": "rice, brown" };
@@ -2659,23 +2675,31 @@ async function searchOFF(query) {
   return { items: [], error: "network" };
 }
 const findByBarcode = (nut, code) => (nut.foods || []).find((f) => f.barcode === code) || null;
+// → { food } on a hit, { food: null } when OFF genuinely doesn't have it, { food: null, error: true } when the
+// lookup itself failed (offline, timeout, rate-limited, 5xx). The two misses are different to the user: one means
+// "photo the label", the other means "try again" — reporting a dead connection as "not found" sent him to the
+// wrong fix. The 10 s abort keeps "looking up…" from hanging forever on a bad connection.
 async function lookupBarcode(code) {
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), 10000) : null;
   try {
     const url = `https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=code,product_name,product_name_ja,nutriments,serving_size,product_quantity,quantity`;
-    const r = await fetch(url);
-    if (!r.ok) return null;
+    const r = await fetch(url, ctl ? { signal: ctl.signal } : undefined);
+    if (r.status === 404) return { food: null };              // OFF answers an unknown code with a 404
+    if (!r.ok) return { food: null, error: true };            // 429 rate limit / 5xx — not a verdict on the product
     const j = await r.json();
-    if (j.status !== 1 || !j.product) return null;
+    if (j.status !== 1 || !j.product) return { food: null };
     const p = j.product;
     const name = p.product_name_ja || p.product_name;   // he shops in Japan — prefer the local name
-    if (!name) return null;
+    if (!name) return { food: null };
     // ghost guard: OFF has stub entries with a name but EMPTY nutriments → the app used to show a 0-kcal
     // "product". Presence check (not >0 — water is legitimately 0 kcal): any energy or macro field defined.
     const nm = p.nutriments || {};
     const hasNutr = ["energy-kcal_100g", "energy_100g", "proteins_100g", "carbohydrates_100g", "fat_100g"].some((k) => nm[k] != null && nm[k] !== "");
-    if (!hasNutr) return null;
-    return offProductToFood({ ...p, product_name: name });
-  } catch (e) { return null; }
+    if (!hasNutr) return { food: null };
+    return { food: offProductToFood({ ...p, product_name: name }) };
+  } catch (e) { return { food: null, error: true }; }
+  finally { if (timer) clearTimeout(timer); }
 }
 const DEFAULT_FOODS = [
   // water: g water at this basis, from the ensureWater estimate (0.99·basisG − protein − carbs − fat), hand-computed
@@ -3021,7 +3045,7 @@ const migrateMem = (raw) => {
   // Idempotent (re-running is stable) and lossless for real day-entries + custom/non-staple foods.
   const reseedStaple = (f) => { if (!f || typeof f !== "object") return f; if (f.corr) return upgradeFood(f);   // user-corrected staples keep his numbers — never re-seed over a correction
     const staple = DEFAULT_FOODS.find((s) => s.id === f.id); if (!staple) return upgradeFood(f); return { ...staple, fav: !!f.fav, lastGrams: f.lastGrams != null ? f.lastGrams : staple.basisGrams }; };
-  const foods = (Array.isArray(rn.foods) && rn.foods.length ? rn.foods : DEFAULT_FOODS).map(reseedStaple).map(ensureWater);
+  const foods = (Array.isArray(rn.foods) && rn.foods.length ? rn.foods : DEFAULT_FOODS).map(reseedStaple).map(fixOffUnits).map(ensureWater);
   // fill missing entry-level water from that entry's own macros + grams (same estimate, at entry scale); never overwrite a real value.
   const fillEntryWater = (e) => { if (!e || typeof e !== "object" || !e.nutr || e.nutr.water != null || !(e.grams > 0)) return e;
     const n = e.nutr, macros = (+n.protein || 0) + (+n.carbs || 0) + (+n.fat || 0);
@@ -3031,7 +3055,7 @@ const migrateMem = (raw) => {
   const rnDays = rn.days && typeof rn.days === "object" ? rn.days : {};
   const days = {};
   for (const k in rnDays) { const d = rnDays[k] || {}; days[k] = { ...d, entries: Array.isArray(d.entries) ? d.entries.map(upgradeEntry).map(fillEntryWater) : [] }; }
-  m.nutrition = { goals: { ...DEFAULT.nutrition.goals, ...(rn.goals || {}) }, days, foods, meals: Array.isArray(rn.meals) ? rn.meals : [], proxyUrl: typeof rn.proxyUrl === "string" ? rn.proxyUrl : DEFAULT.nutrition.proxyUrl, geminiKey: typeof rn.geminiKey === "string" ? rn.geminiKey : "", usdaKey: typeof rn.usdaKey === "string" ? rn.usdaKey : DEFAULT.nutrition.usdaKey };
+  m.nutrition = { goals: { ...DEFAULT.nutrition.goals, ...(rn.goals || {}) }, days, foods, meals: Array.isArray(rn.meals) ? rn.meals.map((ml) => (ml && Array.isArray(ml.items) ? { ...ml, items: ml.items.map((it) => (it && it.food ? { ...it, food: fixOffUnits(it.food) } : it)) } : ml)) : [], proxyUrl: typeof rn.proxyUrl === "string" ? rn.proxyUrl : DEFAULT.nutrition.proxyUrl, geminiKey: typeof rn.geminiKey === "string" ? rn.geminiKey : "", usdaKey: typeof rn.usdaKey === "string" ? rn.usdaKey : DEFAULT.nutrition.usdaKey };
   const rs = raw.sleep && typeof raw.sleep === "object" ? raw.sleep : {};
   m.sleep = { def: { ...DEFAULT.sleep.def, ...(rs.def || {}) }, days: rs.days && typeof rs.days === "object" ? rs.days : {} };
   m.bandByDay = m.bandByDay || {}; m.bandMiss = m.bandMiss || {};
@@ -3784,11 +3808,15 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
   const MACROS = [["kcal", "Calories", kcal, ""], ["protein", "Protein", p, "g"], ["carbs", "Carbs", c, "g"], ["fat", "Fat", f, "g"]];
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" style={{ background: "rgba(0,0,0,0.72)" }} onClick={onClose}>
-      <div className="max-h-[92vh] w-full max-w-md overflow-y-auto rounded-t-2xl border p-5 sm:rounded-2xl" style={{ background: C.card, borderColor: C.edge }} onClick={(e) => e.stopPropagation()}>
+      {/* max-height is measured against the overlay (the VISIBLE screen), not 92vh: in a Safari tab vh includes the
+          area behind the toolbars, so a tall sheet ran off the top and took its close button with it. The insets keep
+          it clear of the status bar and the home indicator when installed to the home screen. */}
+      <div className="flex w-full max-w-md flex-col overflow-hidden rounded-t-2xl border sm:rounded-2xl" style={{ background: C.card, borderColor: C.edge, maxHeight: "min(92vh, calc(100% - env(safe-area-inset-top) - 12px))" }} onClick={(e) => e.stopPropagation()}>
+       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 className="text-[15px] font-bold leading-tight" style={{ color: C.bone }}>{food.label}{food.corr && <span className="ml-2 rounded-full border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider align-middle" style={{ borderColor: C.goldDim, color: C.gold }}>yours</span>}</h3>
-            {frontError && <p className="mt-0.5 font-mono text-[9px]" style={{ color: C.ashDim }}>front photo failed — name saves as-is</p>}
+            {frontError && <p className="mt-0.5 font-mono text-[10px]" style={{ color: C.ashDim }}>front photo failed — name saves as-is</p>}
           </div>
           <div className="flex shrink-0 items-center gap-3">
             {onFav && <button onClick={onFav} aria-label="favorite" className="-my-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: isFav ? C.gold : C.ashDim }}><Star size={17} fill={isFav ? C.gold : "none"} /></button>}
@@ -3822,21 +3850,21 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
             showing (misleadingly precise) zeros; the label above still updates live as front/facts resolve. */}
         <div className="mt-4 rounded-xl border p-4" style={{ borderColor: C.edge, background: "#100E09" }}>
           <div className="flex items-baseline justify-between">
-            <span className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>Energy</span>
+            <span className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.ashDim }}>Energy</span>
             {factsPending ? <span className="inline-block h-6 w-12 animate-pulse rounded" style={{ background: "#2A2418" }} /> : <span className="font-mono text-2xl font-bold" style={{ color: C.gold }}>{Math.round(kcal)}<span className="text-[11px]" style={{ color: C.ash }}> kcal</span></span>}
           </div>
           <div className="mt-3 grid grid-cols-3 gap-2 text-center">
             {[["Protein", p, pct(p * 4)], ["Net Carbs", nc, pct(nc * 4)], ["Fat", f, pct(f * 9)]].map(([lab, val, pc]) => (
               <div key={lab}>
                 {factsPending ? <div className="mx-auto h-6 w-12 animate-pulse rounded" style={{ background: "#2A2418" }} /> : <p className="font-mono text-[13px] font-bold" style={{ color: C.bone }}>{fmtNut(val)}g</p>}
-                <p className="mt-1 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>{lab}{!factsPending && ` · ${pc}%`}</p>
+                <p className="mt-1 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>{lab}{!factsPending && ` · ${pc}%`}</p>
               </div>
             ))}
           </div>
         </div>
 
         {/* day-impact macro bars */}
-        <p className="mt-4 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>day impact</p>
+        <p className="mt-4 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>day impact</p>
         <div className="mt-2 space-y-2">
           {MACROS.map(([key, lab, val, suf]) => {
             const goal = g[key] || 0, cur = (before[key] || 0) + val;
@@ -3864,12 +3892,12 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
 
         {/* editable macros — per-entry override (does not touch the shared library food unless "save correction") */}
         <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
-          <button onClick={openOv} className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.goldDim }}>{ovOn ? "▾ hide" : "▸ adjust"} values</button>
+          <button onClick={openOv} className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.goldDim }}>{ovOn ? "▾ hide" : "▸ adjust"} values</button>
           {ovOn && (
             <div className="mt-3">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 {[["kcal", "kcal", 10], ["protein", "P", 1], ["carbs", "C", 1], ["fat", "F", 1]].map(([key, lab, stp]) => (
-                  <div key={key} className="flex items-center gap-1"><NumberField value={ov[key]} step={stp} label={key} width={56} onChange={(n) => setOv((o) => ({ ...o, [key]: n }))} live /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{lab}</span></div>
+                  <div key={key} className="flex items-center gap-1"><NumberField value={ov[key]} step={stp} label={key} width={56} onChange={(n) => setOv((o) => ({ ...o, [key]: n }))} live /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{lab}</span></div>
                 ))}
               </div>
               <button onClick={() => setSaveCorr((v) => !v)} className="mt-2 flex items-center gap-1.5 font-mono text-[10px]" style={{ color: saveCorr ? C.gold : C.ashDim }}><span style={{ width: 12, height: 12, borderRadius: 3, border: `1px solid ${saveCorr ? C.gold : C.edge}`, background: saveCorr ? C.gold : "transparent", display: "inline-block" }} />save correction to this food</button>
@@ -3879,7 +3907,7 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
 
         {/* complete nutrient summary (expandable) */}
         <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
-          <button onClick={() => setFull((v) => !v)} className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.goldDim }}>{full ? "▾ hide" : "▸ show"} complete nutrient summary</button>
+          <button onClick={() => setFull((v) => !v)} className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.goldDim }}>{full ? "▾ hide" : "▸ show"} complete nutrient summary</button>
           {full && <div className="mt-3"><NutrientSummary nutr={en} goals={goals} /></div>}
         </div>
 
@@ -3888,14 +3916,17 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
             names flow to the host draft via onRename, which locks them (nameLocked) against a late front resolve. */}
         {onRename && !factsPending && (factsError || food.label === "Reading…") && (
           <div className="mt-4">
-            <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>food name</p>
+            <p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>food name</p>
             <input type="text" value={food.label === "Reading…" ? "" : food.label} placeholder="name this food" onChange={(e) => onRename(e.target.value)} autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-3 py-2 text-[16px] outline-none" style={inp} aria-label="food name" />
           </div>
         )}
+       </div>
+       {/* pinned foot: the one action is always on screen, however long the detail above it gets */}
+       <div className="shrink-0 border-t px-5 pt-3" style={{ borderColor: C.edge, paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}>
         {/* facts-read failed and the user hasn't opted past it yet: swap ADD for a retake/manual-entry recovery row,
             unless the facts read is (re)pending — that always wins and shows the plain "reading…" gate below. */}
         {factsError && !manualEntry && !factsPending ? (
-          <div className="mt-5">
+          <div>
             <p className="font-mono text-[11px] leading-snug" style={{ color: C.rust }}>{factsError}</p>
             <div className="mt-2 flex flex-wrap items-center gap-3">
               <CamButton primary label="retake facts photo" busyLabel="reading…" busy={factsPending} onFile={onRetryFacts} />
@@ -3903,8 +3934,9 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
             </div>
           </div>
         ) : (
-          <button disabled={factsPending} onClick={() => { const payload = { food, grams, t: t.toISOString(), nutr: en, saveCorr: ovOn && saveCorr }; if (editMode && onSave) onSave(payload); else onAdd(payload); onClose(); }} className="mt-5 flex min-h-[44px] w-full items-center justify-center rounded-xl px-4 py-3 font-mono text-[12px] font-bold uppercase tracking-[0.2em] active:scale-95" style={{ background: C.gold, color: C.bg, opacity: factsPending ? 0.6 : 1 }}>{factsPending ? "reading…" : (editMode ? "Save" : "Add to Diary")}</button>
+          <button disabled={factsPending} onClick={() => { const payload = { food, grams, t: t.toISOString(), nutr: en, saveCorr: ovOn && saveCorr }; if (editMode && onSave) onSave(payload); else onAdd(payload); onClose(); }} className="flex min-h-[48px] w-full items-center justify-center rounded-xl px-4 py-3 font-mono text-[12px] font-bold uppercase tracking-[0.2em] active:scale-[0.98]" style={{ background: C.gold, color: C.bg, opacity: factsPending ? 0.6 : 1 }}>{factsPending ? "reading…" : (editMode ? "Save" : "Add to Diary")}</button>
         )}
+       </div>
       </div>
     </div>
   );
@@ -3912,11 +3944,13 @@ function FoodDetail({ food, initialGrams, initialT, goals, dayTotalsBefore, isFa
 // full-screen camera scanner: streams the rear camera, decodes EAN/UPC via zxing-wasm; first hit → onDetect(code).
 // Manual-entry field is a real fallback (and the deterministic test hook — the sandbox has no camera).
 const BARCODE_FORMATS = ["EAN-13", "EAN-8", "UPC-A", "UPC-E"];
-function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, goals, dayTotalsBefore, nutFoods, onAddFood, onFavFood }) {
+function BarcodeScanner({ onDetect, onClose, onRescan, scanState, onManual, ai, goals, dayTotalsBefore, nutFoods, onAddFood, onFavFood }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const doneRef = useRef(false);     // guard: only the first decode fires onDetect
+  const skipRef = useRef(null);      // the code that just came back not-found — a rescan ignores it (still in frame)
+  const [run, setRun] = useState(0); // bumped by "scan again": the ONLY thing that restarts the camera after mount
   const [status, setStatus] = useState("starting");   // starting | scanning | error
   const [errMsg, setErrMsg] = useState("");
   const [manual, setManual] = useState("");
@@ -3924,8 +3958,14 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, goals, day
   // the parallel-capture draft: null until the facts photo is taken, then this IS the FoodDetail food, live-patched
   // as the front/facts reads settle (see CaptureWizard + resolveFactsIntoDraft). Non-null takes over the whole render.
   const [draft, setDraft] = useState(null);
-  // a not-found result keeps the scanner open (the sheet shows the card) — re-arm so another code can be tried
-  useEffect(() => { if (scanState && scanState.notFound) { doneRef.current = false; } }, [scanState]);
+  // The parent hands over fresh onDetect/onClose closures on every render. They are read through refs so the camera
+  // effect below does NOT depend on them. It used to: every parent re-render (each setScanState, the 20 s sync poll)
+  // tore the camera down and started it again, and a not-found result re-armed the decoder on top of that — so an
+  // unknown barcode still in frame was decoded, looked up, not found, and decoded again ~3×/s, forever. The sheet
+  // flipped looking⇄not-found under his thumb (no button stayed put long enough to tap) and the lookups tripped
+  // Open Food Facts' rate limit, which then failed every later scan the same way.
+  const onDetectRef = useRef(onDetect); onDetectRef.current = onDetect;
+  const onCloseRef = useRef(onClose); onCloseRef.current = onClose;
 
   const stopTracks = useCallback(() => {
     const s = streamRef.current;
@@ -3935,12 +3975,15 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, goals, day
     if (doneRef.current) return;
     doneRef.current = true;
     stopTracks();
-    onDetect(code);
-  }, [onDetect, stopTracks]);
-  const close = useCallback(() => { doneRef.current = true; stopTracks(); onClose(); }, [onClose, stopTracks]);
+    onDetectRef.current(code);
+  }, [stopTracks]);
+  const close = useCallback(() => { doneRef.current = true; stopTracks(); onCloseRef.current(); }, [stopTracks]);
+  // not-found / lookup-failed → back to a live camera, on purpose and exactly once per tap
+  const rescan = () => { skipRef.current = scanState && scanState.notFound ? scanState.code : null; setManual(""); setStatus("starting"); onRescan(); setRun((r) => r + 1); };
 
   useEffect(() => {
     let cancelled = false, timer = null;
+    doneRef.current = false;
     (async () => {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         if (!cancelled) { setStatus("error"); setErrMsg("Camera not available on this device."); }
@@ -3969,7 +4012,7 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, goals, day
                 const crop = ctx.getImageData(Math.round((cv.width - cw) / 2), Math.round((cv.height - ch) / 2), cw, ch);
                 results = await readBarcodes(crop, { formats: BARCODE_FORMATS, tryHarder: true });
               }
-              if (!cancelled && !doneRef.current && results && results.length && results[0].text) { finish(results[0].text); return; }
+              if (!cancelled && !doneRef.current && results && results.length && results[0].text && results[0].text !== skipRef.current) { finish(results[0].text); return; }
             } catch {}
           }
           if (!cancelled && !doneRef.current) timer = setTimeout(tick, 250);
@@ -3980,9 +4023,9 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, goals, day
       }
     })();
     return () => { cancelled = true; if (timer) clearTimeout(timer); stopTracks(); };
-  }, [finish, stopTracks]);
+  }, [run, finish, stopTracks]);   // finish/stopTracks are stable — this runs on mount and on "scan again" only
 
-  const submitManual = () => { const code = manual.replace(/\D/g, ""); if (code) finish(code); };
+  const submitManual = () => { const code = manual.replace(/\D/g, ""); if (code) { skipRef.current = null; finish(code); } };
   // "no barcode" path: decoding stops and the sheet becomes the capture wizard. On the not-found path the camera
   // is already stopped (finish() stops tracks), so photo capture never fights a live stream.
   const startWizard = () => { doneRef.current = true; stopTracks(); setWizard(true); };
@@ -4009,10 +4052,12 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, goals, day
         onClose={onClose} />
     );
   }
-  const mode = wizard ? "wizard" : scanState && scanState.looking ? "looking" : scanState && scanState.notFound ? "notFound" : status;
+  const mode = wizard ? "wizard" : scanState && scanState.looking ? "looking" : scanState && (scanState.notFound || scanState.failed) ? "notFound" : status;
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "rgba(0,0,0,0.92)" }}>
-      <div className="flex items-center justify-between px-4 py-2">
+      {/* safe-area padding: installed to the home screen the page runs under the status bar / Dynamic Island, and
+          without it the close button sat up there where taps don't land */}
+      <div className="flex items-center justify-between px-4 py-2" style={{ paddingTop: "calc(0.5rem + env(safe-area-inset-top))" }}>
         <span className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: C.gold }}><ScanBarcode size={14} />scan barcode</span>
         <button onClick={close} aria-label="close" className="-mr-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.ash }}><X size={20} /></button>
       </div>
@@ -4026,32 +4071,35 @@ function BarcodeScanner({ onDetect, onClose, scanState, onManual, ai, goals, day
         )}
       </div>
       {/* the sheet: every state reads on solid card — nothing floats over the camera feed */}
-      <div className="border-t p-4 pb-6" style={{ borderColor: C.edge, background: C.card }}>
+      <div className="border-t p-4" style={{ borderColor: C.edge, background: C.card, paddingBottom: "calc(1.5rem + env(safe-area-inset-bottom))" }}>
         {mode === "looking" && (
-          <div className="flex items-baseline justify-between py-2">
-            <p className="animate-pulse font-mono text-[11px] uppercase tracking-wider" style={{ color: C.gold }}>looking up…</p>
-            <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>{scanState.code}</p>
+          <div className="flex items-center justify-between">
+            <p className="animate-pulse font-mono text-[11px] uppercase tracking-wider" style={{ color: C.gold }}>looking up… <span style={{ color: C.ashDim }}>{scanState.code}</span></p>
+            <button onClick={close} className={ghost} style={{ borderColor: C.edge, color: C.ash }}>Cancel</button>
           </div>
         )}
         {mode === "notFound" && (
           <div>
             <div className="flex items-baseline justify-between">
-              <p className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.rust }}>not found</p>
+              <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.rust }}>{scanState.failed ? "lookup failed" : "not found"}</p>
               <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>{scanState.code}</p>
             </div>
+            {scanState.failed && <p className="mt-1 text-[12px] leading-snug" style={{ color: C.ash }}>Couldn't reach the food database — check the connection and try again, or photo the label instead.</p>}
             <div className="mt-2">
               <CaptureWizard key={scanState.code} ai={ai} barcode={scanState.code} setDraft={setDraft} />
             </div>
-            <div className="mt-4 flex items-center gap-2 border-t pt-3" style={{ borderColor: C.edge }}>
+            <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: C.edge }}>
+              {scanState.failed && <button onClick={() => onDetectRef.current(scanState.code)} className={ghost} style={{ borderColor: C.goldDim, color: C.gold }}>Try again</button>}
+              <button onClick={rescan} className={ghost} style={{ borderColor: C.edge, color: C.ash }}>Scan again</button>
               <button onClick={() => onManual(scanState.code)} className={ghost} style={{ borderColor: C.edge, color: C.ash }}>Enter manually</button>
               <button onClick={close} className={ghost} style={{ borderColor: C.edge, color: C.ash }}>Cancel</button>
             </div>
-            {!hasAI(ai) && <p className="mt-2 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>tip: add your free Gemini key in Diet › edit goals — photos then read names and numbers accurately</p>}
+            {!hasAI(ai) && <p className="mt-2 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>tip: add your free Gemini key in Diet › edit goals — photos then read names and numbers accurately</p>}
           </div>
         )}
         {mode === "wizard" && (
           <div>
-            <p className="font-mono text-[9px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>no barcode</p>
+            <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: C.gold }}>no barcode</p>
             <div className="mt-2"><CaptureWizard ai={ai} setDraft={setDraft} /></div>
           </div>
         )}
@@ -4146,11 +4194,11 @@ function AddFlow({ onPick, ai, usdaKey, onParsed, onManual }) {
   };
   const inp = { background: "#100E09", border: `1px solid ${C.edge}`, color: C.bone };
   return (
-    <div className="mt-5">
-      <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>search food db</p>
-      <div className="relative mt-2">
-        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: C.ashDim }} />
-        <input value={q} onChange={(e) => { setQ(e.target.value); setDraft(null); setParseErr(""); }} placeholder="banana, greek yogurt, nutella…" autoCapitalize="off" autoCorrect="off" spellCheck="false" className="w-full rounded-lg py-2 pl-9 pr-3 font-mono text-[12px] outline-none" style={inp} />
+    <div className="mt-2">
+      <div className="relative">
+        <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: C.ash }} />
+        <input value={q} onChange={(e) => { setQ(e.target.value); setDraft(null); setParseErr(""); }} placeholder="Search food" aria-label="search food" autoCapitalize="off" autoCorrect="off" spellCheck="false" className="min-h-[48px] w-full rounded-xl py-2 pl-10 pr-10 text-[14px] outline-none" style={inp} />
+        {q && <button onClick={() => { setQ(""); setDraft(null); setParseErr(""); }} aria-label="clear search" className="absolute right-0 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center active:scale-90" style={{ color: C.ash }}><X size={15} /></button>}
       </div>
       {aiEligible && !draft && (
         <button onClick={parseAI} disabled={parsing} className="mt-2 flex w-full items-center gap-1.5 rounded-lg border py-2 px-3 text-left font-mono text-[11px] active:scale-[0.99]" style={{ borderColor: C.goldDim, color: C.gold }}>
@@ -4180,7 +4228,7 @@ function AddFlow({ onPick, ai, usdaKey, onParsed, onManual }) {
             const firstOff = !isUsda && i > 0 && results[i - 1].source === "usda";
             return (
               <React.Fragment key={f.id}>
-                {firstOff && <p className="pt-1 pb-0.5 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>packaged products</p>}
+                {firstOff && <p className="pt-1 pb-0.5 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>packaged products</p>}
                 <button onClick={() => onPick(f)} className="flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left active:scale-[0.99]" style={{ borderColor: C.edge }}>
                   {isUsda ? <Leaf size={13} className="shrink-0" style={{ color: C.sage }} /> : <Package size={13} className="shrink-0" style={{ color: C.gold }} />}
                   <span className="min-w-0 flex-1">
@@ -4363,14 +4411,14 @@ function PlateDraft({ items, onAddAll, onCancel }) {
   const total = rows.reduce((a, r) => a + scaled(r).kcal, 0);
   return (
     <div className="mt-3 rounded-xl border p-3" style={{ borderColor: C.edge, background: "#100E09" }}>
-      <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.gold }}>AI estimate — adjust weights</p>
+      <p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.gold }}>AI estimate — adjust weights</p>
       <div className="mt-2 space-y-1.5">
         {rows.map((r, i) => (
           <div key={i} className="flex items-center justify-between gap-2">
-            <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: C.bone }}>{r.label}<span className="ml-1 font-mono text-[9px]" style={{ color: C.ashDim }}>{Math.round(scaled(r).kcal)} kcal</span></span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: C.bone }}>{r.label}<span className="ml-1 font-mono text-[10px]" style={{ color: C.ashDim }}>{Math.round(scaled(r).kcal)} kcal</span></span>
             <span className="flex shrink-0 items-center gap-1.5">
               <NumberField value={r.grams} step={10} label={`${r.label} grams`} width={54} onChange={(n) => setRows((xs) => xs.map((x, j) => (j === i ? { ...x, grams: n } : x)))} />
-              <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>g</span>
+              <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>g</span>
               <button onClick={() => setRows((xs) => xs.filter((_, j) => j !== i))} aria-label={`remove ${r.label}`} className="flex h-11 w-11 shrink-0 items-center justify-center" style={{ color: C.ashDim }}><X size={16} /></button>
             </span>
           </div>
@@ -4384,11 +4432,34 @@ function PlateDraft({ items, onAddAll, onCancel }) {
     </div>
   );
 }
+// One folded row: a full-width 44px target whose label says what is inside, with the chevron showing open/closed.
+// Replaces the 9px "▸ show …" text links, which were too small to hit reliably.
+function Fold({ id, label, hint, open, onToggle, children }) {
+  return (
+    <div id={id} className="border-t" style={{ borderColor: C.edge }}>
+      <button onClick={onToggle} aria-expanded={open} className="flex min-h-[44px] w-full items-center justify-between gap-3 py-2 text-left active:opacity-70">
+        <span className="min-w-0 truncate text-[13px]" style={{ color: C.bone }}>{label}{hint != null && <span className="ml-2 font-mono text-[10px]" style={{ color: C.ashDim }}>{hint}</span>}</span>
+        <ChevronRight size={16} className="shrink-0" style={{ color: C.ash, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s ease" }} />
+      </button>
+      {open && <div className="pb-4 pt-1">{children}</div>}
+    </div>
+  );
+}
 function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, removeEntry, addFood, removeFood, toggleFav, favFood, addMeal, removeMeal, logMeal, logPlate, copyDay, setSteps, addWater, removeWaterEntry, setSleepToday, setSleepDefault, setNutGoals, setProxyUrl, setGeminiKey, setUsdaKey, setBody, logBW }) {
   const nut = mem.nutrition || DEFAULT.nutrition;
   const ai = { geminiKey: nut.geminiKey || "", proxyUrl: nut.proxyUrl || "" };
   const sl = mem.sleep || DEFAULT.sleep;
   const [viewDate, setViewDate] = useState(todayKey());   // which day the log cards (sleep/food/water) read & write
+  // The tab can sit open — or backgrounded as a home-screen app — across midnight. If it was showing today, move it
+  // to the new today; otherwise the next morning's breakfast is silently logged onto yesterday. A day he picked on
+  // purpose is left alone.
+  const todayRef = useRef(todayKey());
+  useEffect(() => {
+    const roll = () => { const now = todayKey(), was = todayRef.current; if (now === was) return; todayRef.current = now; setViewDate((v) => (v === was ? now : v)); };
+    document.addEventListener("visibilitychange", roll); window.addEventListener("focus", roll);
+    const id = setInterval(roll, 60000);
+    return () => { document.removeEventListener("visibilitychange", roll); window.removeEventListener("focus", roll); clearInterval(id); };
+  }, []);
   const isToday = viewDate === todayKey();
   const k = viewDate;
   const d = { ...blankDay(), ...(nut.days[k] || {}) };
@@ -4409,6 +4480,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
   };
   const card = "mt-6 rounded-2xl border p-5";
   const hdr = "font-mono text-[11px] uppercase tracking-[0.2em]";
+  const sub = "font-mono text-[10px] uppercase tracking-[0.2em]";   // a section inside a card
   const last7 = [...Array(7)].map((_, i) => { const dt = new Date(); dt.setDate(dt.getDate() - (6 - i)); return { key: dt.toLocaleDateString("en-CA"), lbl: dt.toLocaleDateString("en-US", { weekday: "short" }) }; });
   const dayMacros = ["kcal", "protein", "carbs", "fat", "fiber", "sugar", "sodium", "potassium", "calcium", "iron", "caffeine", "netCarbs"];   // derived from entries, never stored on the day
   const dayVal = (key, sel) => { const day = nut.days[key] || {};
@@ -4423,6 +4495,9 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
   const recent = bwHist.filter((h) => Date.now() - new Date(h.t).getTime() < 32 * 864e5);
   const bwDelta7 = (() => { const r = bwHist.filter((h) => Date.now() - new Date(h.t).getTime() < 8 * 864e5); return r.length >= 2 ? r[r.length - 1].w - r[0].w : null; })();
   const bwDelta30 = recent.length >= 2 ? recent[recent.length - 1].w - recent[0].w : null;
+  const lastBW = bwHist.length ? bwHist[bwHist.length - 1] : null;
+  const loggedToday = !!lastBW && isoDayKey(lastBW.t) === todayKey();
+  const bwSaved = loggedToday && lastBW.w === bw;   // today's weigh-in already holds the number in the field
   const dW = (lb) => dispW(lb, unit);
   // weight (div=1, KG const) keeps 3dp lb so a 0.1kg display step round-trips lb→kg exactly;
   // height/waist (div=2, 2.54 in/cm factor) are untouched — their step size didn't change.
@@ -4439,10 +4514,13 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
   const [detail, setDetail] = useState(null);   // { food, initialGrams, initialT } → opens FoodDetail confirm view
   const [plate, setPlate] = useState(null);   // null | [{label,grams,kcal,protein,carbs,fat}] AI plate draft
   const [scanOpen, setScanOpen] = useState(false);   // BarcodeScanner modal
-  const [scanState, setScanState] = useState(null);   // null | { looking:true, code } | { notFound:true, code } — resolution ladder overlay
+  const [scanState, setScanState] = useState(null);   // null | { looking:true, code } | { notFound:true, code } | { failed:true, code } — resolution ladder overlay
+  const scanSeq = useRef(0);   // bumps on every scan / close / rescan; a lookup that resolves under a stale number is dropped
   const meals = nut.meals || [];
-  const [toast, setToast] = useState("");   // brief inline confirmation
-  const flash = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2200); };
+  const [toast, setToast] = useState("");   // brief confirmation, pinned to the bottom of the screen
+  const toastTimer = useRef(null);
+  const flash = (msg) => { setToast(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(""), 2600); };
+  const logWeight = async () => { if (!bw) return; await logBW(); flash(`Logged ${fromLb(bw, 1)} ${uw(unit)}`); };
   const [mealOpen, setMealOpen] = useState(false);   // "New meal" builder
   const [mealLabel, setMealLabel] = useState("");
   const [mealItems, setMealItems] = useState([]);   // [{ food, grams }]
@@ -4450,8 +4528,12 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
   const addMealItem = (food) => { const gr = food.basis === "per100" ? (food.basisGrams || 100) : 1; setMealItems((xs) => [...xs, { food, grams: food.lastGrams || gr }]); };
   const [cf, setCf] = useState({ label: "", kcal: 0, protein: 0, carbs: 0, fat: 0, save: false, barcode: null });
   const [cw, setCw] = useState(0);
-  const [goalsOpen, setGoalsOpen] = useState(false);
-  const [nutOpen, setNutOpen] = useState(false);   // day-level Complete Nutrient Summary (collapsed by default)
+  const [fold, setFold] = useState({});   // which of the folded rows at the foot of the food card are open: custom | meals | nutr | goals
+  const tog = (key) => setFold((o) => ({ ...o, [key]: !o[key] }));
+  const [quickAll, setQuickAll] = useState(false);   // quick-add list: first 5, or everything
+  // "add by hand" lives in a folded row far down the card — every route to it (search's "can't find it?", the
+  // scanner's "enter manually") opens the row, brings it on screen and puts the cursor in the name field
+  const openCustom = () => { setFold((o) => ({ ...o, custom: true })); setTimeout(() => { const el = document.getElementById("diet-custom-food"); if (!el) return; el.scrollIntoView({ block: "center" }); const inp = el.querySelector("input"); if (inp) inp.focus({ preventScroll: true }); }, 60); };
   const [metric, setMetric] = useState("kcal");
   // ── 14-day per-metric series ──
   const last14 = [...Array(14)].map((_, i) => { const dt = new Date(); dt.setDate(dt.getDate() - (13 - i)); return { key: dt.toLocaleDateString("en-CA"), lbl: `${dt.getMonth() + 1}/${dt.getDate()}` }; });
@@ -4468,7 +4550,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
   ];
   const seriesFor = (id) => last14.map((x) => {
     let v = null;
-    if (id === "bw") { const h = (mem.body?.bwHist || []).filter((b) => b.t && b.t.slice(0, 10) === x.key); v = h.length ? (unit === "kg" ? Math.round(h[h.length - 1].w * KG * 10) / 10 : h[h.length - 1].w) : null; }
+    if (id === "bw") { const h = (mem.body?.bwHist || []).filter((b) => b.t && isoDayKey(b.t) === x.key); v = h.length ? (unit === "kg" ? Math.round(h[h.length - 1].w * KG * 10) / 10 : h[h.length - 1].w) : null; }
     else if (id === "sleep") { const s = sl.days[x.key]; v = s ? Math.round(sleepHours(s.bed, s.wake) * 10) / 10 : null; }
     else { v = dayVal(x.key, id); }   // macros (kcal/protein/carbs/fat/caffeine) via dayTotals; steps/water stored
     return { d: x.lbl, v };
@@ -4487,16 +4569,8 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
 
   return (
     <>
-      <div className="mt-4 flex justify-end">
-        <div className="inline-flex rounded-full border p-1" style={{ borderColor: C.edge, background: C.card }}>
-          {["kg", "lb"].map((u) => (
-            <button key={u} onClick={() => setDietUnit(u)} aria-label={`show body weights in ${u === "kg" ? "kilograms" : "pounds"}`} className="rounded-full px-4 py-2 font-mono text-sm active:scale-95"
-              style={{ background: unit === u ? C.gold : "transparent", color: unit === u ? C.bg : C.ash, fontWeight: unit === u ? 700 : 400 }}>{u}</button>
-          ))}
-        </div>
-      </div>
-      {/* Day selector — the Sleep / Today / Water cards below log for this day */}
-      <div className="mt-2 flex items-center justify-between rounded-2xl border px-2 py-2" style={{ background: C.card, borderColor: C.edge }}>
+      {/* Day selector — the food / water / sleep cards below log for this day */}
+      <div className="mt-4 flex items-center justify-between rounded-2xl border px-2 py-2" style={{ background: C.card, borderColor: C.edge }}>
         <button onClick={() => setViewDate(shiftDate(viewDate, -1))} aria-label="previous day" className="flex h-11 w-11 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronLeft size={18} /></button>
         <div className="flex items-center gap-2">
           <span className="font-mono text-[12px] font-bold" style={{ color: isToday ? C.gold : C.bone }}>{relDay(viewDate)}</span>
@@ -4509,104 +4583,139 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
         <button onClick={() => setViewDate(shiftDate(viewDate, 1))} aria-label="next day" className="flex h-11 w-11 items-center justify-center rounded-full active:scale-90" style={{ color: C.ash }}><ChevronRight size={18} /></button>
       </div>
 
-      {/* Sleep */}
-      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-        <span className={hdr} style={{ color: C.ash }}><Moon size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Sleep</span>
-        <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-3">
-          <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>bed</p>
-            <input type="time" value={st.bed} onChange={(e) => setSleepToday(e.target.value, st.wake, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[16px] outline-none" style={inp} /></div>
-          <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>wake</p>
-            <input type="time" value={st.wake} onChange={(e) => setSleepToday(st.bed, e.target.value, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[16px] outline-none" style={inp} /></div>
-          <div className="ml-auto text-right"><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>last night</p>
-            <p className="font-mono text-xl font-bold" style={{ color: slH >= 7 && slH <= 9.5 ? C.sage : C.gold }}>{fmtHM(slH)}</p></div>
-        </div>
-        <div className="mt-3 flex items-center justify-between">
-          <p className="font-mono text-[9px]" style={{ color: C.ashDim }}>{slAvg != null ? `7-day avg ${fmtHM(slAvg)}` : "log a few nights for the average"}</p>
-          <button onClick={() => setSleepDefault(st.bed, st.wake)} className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.goldDim }}>set as default</button>
-        </div>
-      </div>
-
-      {/* Body */}
-      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
-        <span className={hdr} style={{ color: C.ash }}>Body</span>
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+      {/* Weigh-in — one row, today only (a weigh-in is always stamped now). Same field as the Body card further down. */}
+      {isToday && (
+        <div className="mt-3 flex items-center gap-2 rounded-2xl border px-2 py-2" style={{ background: C.card, borderColor: C.edge }}>
           <NumberField value={fromLb(bw || 0, 1)} step={unit === "kg" ? 0.1 : 0.2} label="bodyweight" placeholder={uw(unit)} onChange={(disp) => setBody({ bw: toLb(disp, 1) })} />
           <span className="font-mono text-[11px]" style={{ color: C.ash }}>{uw(unit)}</span>
-          <button onClick={logBW} disabled={!bw} className="ml-auto rounded-full border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: bw ? C.gold : C.ashDim, opacity: bw ? 1 : 0.5 }}>log today</button>
+          {bwSaved
+            ? <span className="ml-auto flex min-h-[44px] items-center gap-1.5 whitespace-nowrap px-2 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.sage }}><Check size={13} />weighed in</span>
+            : <button onClick={logWeight} disabled={!bw} className="ml-auto min-h-[44px] whitespace-nowrap rounded-full border px-3 font-mono text-[10px] uppercase tracking-wider active:scale-95" style={{ borderColor: bw ? C.goldDim : C.edge, color: bw ? C.gold : C.ashDim, opacity: bw ? 1 : 0.5 }}>{loggedToday ? "update weight" : "log weight"}</button>}
         </div>
-        {bwDelta30 != null && <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>{recent.length} weigh-ins · <span style={{ color: bwDelta30 <= 0 ? C.sage : C.rust }}>{bwDelta30 > 0 ? "+" : ""}{fromLb(bwDelta30, 1)} {uw(unit)}</span> over ~30 days</p>}
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-3" style={{ borderColor: C.edge }}>
-          <div className="flex items-center gap-1.5"><NumberField value={fromLb(mem.body?.height || 0, 2)} step={unit === "kg" ? 1 : 0.5} label="height" placeholder={ulen(unit)} width={48} onChange={(disp) => setBody({ height: toLb(disp, 2) })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{ulen(unit)} height</span></div>
-          <div className="flex items-center gap-1.5"><NumberField value={fromLb(mem.body?.waist || 0, 2)} step={unit === "kg" ? 1 : 0.5} label="waist" placeholder={ulen(unit)} width={48} onChange={(disp) => setBody({ waist: toLb(disp, 2) })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{ulen(unit)} waist</span></div>
-        </div>
-      </div>
+      )}
 
-      {/* Today — nutrition + steps */}
+      {/* Food — the day's running total, the ways to add, what's been eaten, then the rarely-touched controls folded away */}
       <div className={card} style={{ background: C.card, borderColor: C.edge }}>
         <div className="flex items-center justify-between">
-          <span className={hdr} style={{ color: C.ash }}>{isToday ? "Today" : relDay(viewDate)}</span>
-          <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{viewDate}</span>
+          <span className={hdr} style={{ color: C.ash }}><Flame size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />{isToday ? "Food today" : `Food · ${relDay(viewDate)}`}</span>
         </div>
-        <div className="mt-4 space-y-3">
-          <NutBar icon={<Flame size={13} style={{ color: C.gold }} />} label="Calories" cur={dt.kcal || 0} goal={g.kcal} suffix=" kcal" overIsBad />
-          <NutBar label="Protein" cur={dt.protein || 0} goal={g.protein} suffix=" g" />
-          <NutBar label="Carbs" cur={dt.carbs || 0} goal={g.carbs} suffix=" g" />
-          <NutBar label="Fat" cur={dt.fat || 0} goal={g.fat} suffix=" g" />
-          <NutBar icon={<Footprints size={13} style={{ color: C.gold }} />} label="Steps" cur={d.steps} goal={g.steps} />
-        </div>
-        <p className="mt-2 font-mono text-[10px]" style={{ color: C.ashDim }}>Caffeine <span style={{ color: (dt.caffeine || 0) > g.caffeine ? C.rust : C.ash }}>{Math.round(dt.caffeine || 0)} / {g.caffeine} mg</span></p>
 
-        {/* external DB search */}
-        <button onClick={() => setScanOpen(true)} className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }}><ScanBarcode size={14} />Scan barcode</button>
-        {hasAI(ai) && <PlatePhotoButton ai={ai} onDraft={(items) => setPlate(items)} onFallback={(msg) => flash(msg)}
-          className="mt-2 flex min-h-[44px] w-full items-center justify-center rounded-lg border py-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.99]" style={{ borderColor: C.edge, color: C.gold }} />}
+        {/* the one number he needs before a meal, then the three macros side by side */}
+        {(() => {
+          const eaten = dt.kcal || 0, left = (g.kcal || 0) - eaten, over = left < 0, pct = g.kcal > 0 ? Math.min(1, eaten / g.kcal) : 0;
+          return (
+            <div className="mt-4">
+              <div className="flex items-end justify-between gap-3">
+                <p className="leading-none" style={{ color: over ? C.rust : C.bone }}>
+                  <span className="text-5xl font-bold" style={{ fontFamily: "Georgia, serif" }}>{Math.abs(Math.round(left)).toLocaleString()}</span>
+                  <span className="ml-2 font-mono text-[12px]" style={{ color: over ? C.rust : C.ash }}>kcal {over ? "over" : "left"}</span>
+                </p>
+                <p className="pb-1 text-right font-mono text-[11px] leading-snug" style={{ color: C.ash }}>{Math.round(eaten).toLocaleString()} eaten<br />of {Math.round(g.kcal || 0).toLocaleString()}</p>
+              </div>
+              <div className="mt-3 h-2 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
+                <div className="h-full rounded-full" style={{ width: `${pct * 100}%`, background: over ? C.rust : C.gold, transition: "width .4s ease" }} />
+              </div>
+              <div className="mt-4 grid grid-cols-3 gap-3">
+                {[["Protein", dt.protein || 0, g.protein, true], ["Carbs", dt.carbs || 0, g.carbs, false], ["Fat", dt.fat || 0, g.fat, false]].map(([lab, cur, goal, floor]) => {
+                  const p1 = goal > 0 ? Math.min(1, cur / goal) : 0, hit = floor && goal > 0 && cur >= goal * 0.9;   // protein is a floor to reach; carbs and fat are budgets
+                  return (
+                    <div key={lab}>
+                      <p className="text-[12px]" style={{ color: C.ash }}>{lab}</p>
+                      <p className="mt-0.5 font-mono text-[13px]" style={{ color: C.bone }}>{Math.round(cur)}<span style={{ color: C.ashDim }}> / {Math.round(goal || 0)} g</span></p>
+                      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full" style={{ background: "#2A2418" }}>
+                        <div className="h-full rounded-full" style={{ width: `${p1 * 100}%`, background: hit ? C.sage : (!floor && cur > goal ? C.rust : C.gold), transition: "width .4s ease" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {(dt.caffeine || 0) > 0 && <p className="mt-3 font-mono text-[10px]" style={{ color: C.ashDim }}>Caffeine <span style={{ color: (dt.caffeine || 0) > g.caffeine ? C.rust : C.ash }}>{Math.round(dt.caffeine || 0)} / {g.caffeine} mg</span></p>}
+            </div>
+          );
+        })()}
+
+        {/* add: scan is the main road (packaged food), the plate photo beside it, search underneath */}
+        <div className="mt-5 flex gap-2">
+          <button onClick={() => setScanOpen(true)} className="flex min-h-[48px] flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-[0.98]" style={{ background: C.gold, color: C.bg }}><ScanBarcode size={16} className="shrink-0" />Scan barcode</button>
+          {hasAI(ai) && <PlatePhotoButton ai={ai} label="Photo plate" onDraft={(items) => setPlate(items)} onFallback={(msg) => flash(msg)}
+            className="flex min-h-[48px] flex-1 items-center justify-center whitespace-nowrap rounded-xl border px-2 font-mono text-[11px] uppercase tracking-wider active:scale-[0.98]" style={{ borderColor: C.goldDim, color: C.gold }} />}
+        </div>
         {plate && <PlateDraft items={plate} onCancel={() => setPlate(null)}
           onAddAll={async (rows) => { const n = await logPlate(rows, viewDate); setPlate(null); flash(n ? `Logged ${n} item${n === 1 ? "" : "s"}` : "Nothing to log"); }} />}
         <AddFlow onPick={(f) => setDetail({ food: f })} ai={ai} usdaKey={nut.usdaKey}
-          onManual={() => { const el = document.getElementById("diet-custom-food"); if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); const inp = el.querySelector("input"); if (inp) setTimeout(() => inp.focus(), 300); } }}
+          onManual={() => openCustom()}
           onParsed={async (rows) => { const n = await logPlate(rows, viewDate); flash(n ? `Logged ${n} item${n === 1 ? "" : "s"}` : "Nothing to log"); }} />
 
-        {/* favorites — one-tap, prefilled with last portion as hint */}
-        {favs.length > 0 && (<>
-          <p className="mt-5 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>favorites</p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {favs.map((f) => (
-              <span key={f.id} className="flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 active:scale-95" style={{ borderColor: C.goldDim, color: C.bone }}>
-                <button onClick={() => setDetail({ food: f, initialGrams: f.lastGrams })} className="font-mono text-[11px]">{f.label}{f.lastGrams != null && <span style={{ color: C.ashDim }}> · {Math.round(f.lastGrams)}g</span>}</button>
-                <button onClick={() => toggleFav(f.id)} aria-label="unfavorite" className="-my-2 -mr-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.gold }}><Star size={12} fill={C.gold} /></button>
-              </span>
-            ))}
-          </div>
-        </>)}
+        {/* quick add — favorites first, then what he logged most recently; one food per row so long names stay readable
+            and every row is a full-width tap. Staples and older recents sit behind "show all". */}
+        {(() => {
+          const quick = [...favs, ...recs];
+          const extra = staples.filter((f) => !quick.some((q) => q.id === f.id));
+          const all = [...quick, ...extra];
+          const shown = quickAll || !quick.length ? all : quick.slice(0, 5);
+          const hint = (f) => { const legacy = f.basisGrams == null && f.basis !== "per100";
+            if (legacy) return `${Math.round(entryNutr(f, f.lastGrams || 1).kcal || 0)} kcal`;
+            const gr = f.lastGrams || (f.portionG > 0 ? f.portionG : (f.basisGrams > 0 ? f.basisGrams : 100));
+            return `${Math.round(gr)} g · ${Math.round(entryNutr(f, gr).kcal || 0)} kcal`; };
+          return (
+            <div className="mt-5">
+              <p className={sub} style={{ color: C.ash }}>Quick add</p>
+              <div className="mt-1">
+                {shown.map((f) => (
+                  <div key={f.id} className="flex items-center border-b" style={{ borderColor: C.edge }}>
+                    <button onClick={() => setDetail({ food: f, initialGrams: f.lastGrams })} className="min-h-[44px] min-w-0 flex-1 py-2 text-left active:opacity-70">
+                      <span className="block truncate text-[13px]" style={{ color: C.bone }}>{f.label}</span>
+                      <span className="mt-0.5 block font-mono text-[11px]" style={{ color: C.ash }}>{hint(f)}</span>
+                    </button>
+                    <button onClick={() => toggleFav(f.id)} aria-label={f.fav ? `unfavorite ${f.label}` : `favorite ${f.label}`} className="-mr-3 flex h-11 w-11 shrink-0 items-center justify-center active:scale-90" style={{ color: f.fav ? C.gold : C.ashDim }}><Star size={14} fill={f.fav ? C.gold : "none"} /></button>
+                  </div>
+                ))}
+              </div>
+              {quick.length > 0 && all.length > 5 && <button onClick={() => setQuickAll((v) => !v)} className="flex min-h-[44px] items-center font-mono text-[11px] uppercase tracking-wider active:opacity-70" style={{ color: C.gold }}>{quickAll ? "show fewer" : `show all ${all.length}`}</button>}
+            </div>
+          );
+        })()}
 
-        {/* recents — recently logged, with last-portion hint; star to favorite */}
-        {recs.length > 0 && (<>
-          <p className="mt-5 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>recents</p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {recs.map((f) => (
-              <span key={f.id} className="flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 active:scale-95" style={{ borderColor: C.edge, color: C.bone }}>
-                <button onClick={() => setDetail({ food: f, initialGrams: f.lastGrams })} className="font-mono text-[11px]">{f.label}{f.lastGrams != null && <span style={{ color: C.ashDim }}> · last {Math.round(f.lastGrams)}g</span>}</button>
-                <button onClick={() => toggleFav(f.id)} aria-label="favorite" className="-my-2 -mr-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.ashDim }}><Star size={12} /></button>
-              </span>
-            ))}
+        {/* what's logged for the viewed day — tap a row to change the amount or time */}
+        <div className="mt-5">
+          <div className="flex items-baseline justify-between">
+            <p className={sub} style={{ color: C.ash }}>{isToday ? "Eaten today" : `Eaten · ${relDay(viewDate)}`}</p>
+            {d.entries.length > 0 && <span className="font-mono text-[11px]" style={{ color: C.ash }}>{d.entries.length} {d.entries.length === 1 ? "item" : "items"}</span>}
           </div>
-        </>)}
-
-        {/* quick-add staples */}
-        <p className="mt-5 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>staples</p>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {staples.map((f) => (
-            <button key={f.id} onClick={() => setDetail({ food: f, initialGrams: f.lastGrams })} className="rounded-full border px-3 py-1.5 font-mono text-[11px] active:scale-95" style={{ borderColor: C.edge, color: C.bone }}>
-              {f.label} <span style={{ color: C.ashDim }}>· {Math.round((f.nutr || {}).kcal || 0)}{f.basis === "per100" ? "/100g" : ""}</span>
-            </button>
-          ))}
+          {d.entries.length === 0
+            ? <p className="mt-2 text-[13px] leading-snug" style={{ color: C.ashDim }}>Nothing logged yet. Scan a barcode, search, or tap a food above.</p>
+            : (
+              <div className="mt-1">
+                {d.entries.map((e) => (
+                  <div key={e.id} className="flex items-center border-b" style={{ borderColor: C.edge }}>
+                    <button onClick={() => openEntry(e)} className="min-h-[44px] min-w-0 flex-1 py-2 text-left active:opacity-70">
+                      <span className="block truncate text-[13px]" style={{ color: C.bone }}>{e.label}</span>
+                      <span className="mt-0.5 block truncate font-mono text-[11px]" style={{ color: C.ash }}><span style={{ color: C.ashDim }}>{tHM(e.t)} · </span>{e.grams != null && e.grams > 0 ? `${Math.round(e.grams)} g · ` : ""}{Math.round((e.nutr || {}).kcal || 0)} kcal · {Math.round((e.nutr || {}).protein || 0)}P</span>
+                    </button>
+                    <button onClick={() => removeEntry(e.id, viewDate)} aria-label={`remove ${e.label}`} className="-mr-3 flex h-11 w-11 shrink-0 items-center justify-center active:scale-90" style={{ color: C.ashDim }}><X size={15} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
         </div>
 
-        {/* saved meals — one tap logs every item to the viewed day */}
-        <div className="mt-5 flex items-center justify-between">
-          <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>meals</p>
-          <button onClick={() => setMealOpen((v) => !v)} className="font-mono text-[10px] uppercase tracking-wider active:scale-95" style={{ color: C.gold }}>{mealOpen ? "close" : "＋ new meal"}</button>
-        </div>
+        {/* everything else: full-width rows, closed until wanted */}
+        <div className="mt-6">
+          <Fold id="diet-custom-food" label="Add by hand" hint={cf.barcode ? `barcode ${cf.barcode}` : "type the numbers yourself"} open={!!fold.custom} onToggle={() => tog("custom")}>
+          <input value={cf.label} onChange={(e) => setCf({ ...cf, label: e.target.value })} placeholder="name — e.g. black coffee" className="w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={inp} />
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="flex items-center gap-1"><NumberField value={cf.kcal} step={10} label="kcal" width={56} onChange={(n) => setCf({ ...cf, kcal: n })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>kcal</span></div>
+            <div className="flex items-center gap-1"><NumberField value={cf.protein} step={1} label="protein" width={44} onChange={(n) => setCf({ ...cf, protein: n })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>P</span></div>
+            <div className="flex items-center gap-1"><NumberField value={cf.carbs} step={1} label="carbs" width={44} onChange={(n) => setCf({ ...cf, carbs: n })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>C</span></div>
+            <div className="flex items-center gap-1"><NumberField value={cf.fat} step={1} label="fat" width={44} onChange={(n) => setCf({ ...cf, fat: n })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>F</span></div>
+          </div>
+          <div className="mt-2 flex items-center gap-3">
+            <button onClick={() => { if (cf.label.trim() || cf.kcal || cf.protein || cf.carbs || cf.fat) { const food = { id: ((cf.save || cf.barcode) ? uid() : null), label: cf.label || "food", basis: "item", basisGrams: null, nutr: { kcal: +cf.kcal || 0, protein: +cf.protein || 0, carbs: +cf.carbs || 0, fat: +cf.fat || 0 }, source: "custom", barcode: cf.barcode || undefined }; if (cf.save) favFood(food); setDetail({ food }); setCf({ label: "", kcal: 0, protein: 0, carbs: 0, fat: 0, save: false, barcode: null }); } }} className="rounded-full px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Add</button>
+            <button onClick={() => setCf({ ...cf, save: !cf.save })} className="flex items-center gap-1.5 font-mono text-[10px]" style={{ color: cf.save ? C.gold : C.ashDim }}><span style={{ width: 12, height: 12, borderRadius: 3, border: `1px solid ${cf.save ? C.gold : C.edge}`, background: cf.save ? C.gold : "transparent", display: "inline-block" }} />save to favorites</button>
+          </div>
+          </Fold>
+          <Fold label="Saved meals" hint={meals.length ? `${meals.length} saved` : "log several foods in one tap"} open={!!fold.meals} onToggle={() => tog("meals")}>
+            <button onClick={() => setMealOpen((v) => !v)} className="flex min-h-[44px] items-center font-mono text-[11px] uppercase tracking-wider active:opacity-70" style={{ color: C.gold }}>{mealOpen ? "close builder" : "＋ new meal"}</button>
         {meals.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {meals.map((m) => (
@@ -4627,14 +4736,14 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
                     <span className="min-w-0 truncate font-mono text-[11px]" style={{ color: C.bone }}>{it.food.label}</span>
                     <span className="flex shrink-0 items-center gap-1.5">
                       <NumberField value={it.grams} step={it.food.basis === "per100" ? 10 : 1} label="grams" width={54} onChange={(n) => setMealItems((xs) => xs.map((x, j) => (j === i ? { ...x, grams: n } : x)))} />
-                      <span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{it.food.basis === "per100" ? "g" : "×"}</span>
+                      <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{it.food.basis === "per100" ? "g" : "×"}</span>
                       <button onClick={() => setMealItems((xs) => xs.filter((_, j) => j !== i))} aria-label="remove item" className="flex h-11 w-11 shrink-0 items-center justify-center" style={{ color: C.ashDim }}><X size={16} /></button>
                     </span>
                   </div>
                 ))}
               </div>
             )}
-            <p className="mt-3 font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>add items — pick from below</p>
+            <p className="mt-3 font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>add items — pick from below</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {[...favs, ...recs, ...staples].filter((f, i, a) => a.findIndex((x) => x.id === f.id) === i).map((f) => (
                 <button key={f.id} onClick={() => addMealItem(f)} className="rounded-full border px-2.5 py-1 font-mono text-[10px] active:scale-95" style={{ borderColor: C.edge, color: C.bone }}>＋ {f.label}</button>
@@ -4646,78 +4755,40 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
             <button onClick={() => { if (mealItems.length) { addMeal({ label: mealLabel || "Meal", items: mealItems }); flash(`Saved ${mealLabel || "Meal"}`); setMealLabel(""); setMealItems([]); setMealOpen(false); } }} disabled={!mealItems.length} className="mt-3 rounded-full px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: mealItems.length ? C.gold : C.edge, color: mealItems.length ? C.bg : C.ashDim }}>Save meal</button>
           </div>
         )}
-
-        {/* copy prior day's food into the viewed day */}
-        <div className="mt-4 flex items-center gap-3">
-          <button onClick={async () => { const n = await copyDay(shiftDate(viewDate, -1), viewDate); flash(n ? `Copied ${n} entries from yesterday` : "Yesterday had no food"); }} className="rounded-full border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.edge, color: C.gold }}>copy yesterday</button>
-          {toast && <span className="font-mono text-[10px]" style={{ color: C.sage }}>{toast}</span>}
-        </div>
-
-        {/* steps set (absolute) */}
-        <div className="mt-4 flex items-center gap-2">
-          <span className="font-mono text-[10px]" style={{ color: C.ashDim }}>set steps</span>
-          <NumberField value={d.steps} step={1000} label="steps" width={72} onChange={(n) => setSteps(n, viewDate)} />
-        </div>
-
-        {/* custom add */}
-        <div id="diet-custom-food" className="mt-4 border-t pt-4" style={{ borderColor: C.edge }}>
-          <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>custom food{cf.barcode && <span style={{ color: C.gold }}> · barcode {cf.barcode}</span>}</p>
-          <input value={cf.label} onChange={(e) => setCf({ ...cf, label: e.target.value })} placeholder="label" className="mt-2 w-full rounded-lg px-3 py-2 font-mono text-[12px] outline-none" style={inp} />
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-            <div className="flex items-center gap-1"><NumberField value={cf.kcal} step={10} label="kcal" width={56} onChange={(n) => setCf({ ...cf, kcal: n })} /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>kcal</span></div>
-            <div className="flex items-center gap-1"><NumberField value={cf.protein} step={1} label="protein" width={44} onChange={(n) => setCf({ ...cf, protein: n })} /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>P</span></div>
-            <div className="flex items-center gap-1"><NumberField value={cf.carbs} step={1} label="carbs" width={44} onChange={(n) => setCf({ ...cf, carbs: n })} /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>C</span></div>
-            <div className="flex items-center gap-1"><NumberField value={cf.fat} step={1} label="fat" width={44} onChange={(n) => setCf({ ...cf, fat: n })} /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>F</span></div>
+          </Fold>
+          <div className="flex min-h-[44px] items-center justify-between gap-3 border-t py-2" style={{ borderColor: C.edge }}>
+            <span className="text-[13px]" style={{ color: C.bone }}>Copy yesterday's food</span>
+            <button onClick={async () => { const n = await copyDay(shiftDate(viewDate, -1), viewDate); flash(n ? `Copied ${n} ${n === 1 ? "entry" : "entries"} from the day before` : "The day before has no food logged"); }} className="min-h-[36px] rounded-full border px-4 font-mono text-[11px] uppercase tracking-wider active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>copy</button>
           </div>
-          <div className="mt-2 flex items-center gap-3">
-            <button onClick={() => { if (cf.kcal || cf.protein) { const food = { id: ((cf.save || cf.barcode) ? uid() : null), label: cf.label || "food", basis: "item", basisGrams: null, nutr: { kcal: +cf.kcal || 0, protein: +cf.protein || 0, carbs: +cf.carbs || 0, fat: +cf.fat || 0 }, source: "custom", barcode: cf.barcode || undefined }; if (cf.save) favFood(food); setDetail({ food }); setCf({ label: "", kcal: 0, protein: 0, carbs: 0, fat: 0, save: false, barcode: null }); } }} className="rounded-full px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Add</button>
-            <button onClick={() => setCf({ ...cf, save: !cf.save })} className="flex items-center gap-1.5 font-mono text-[10px]" style={{ color: cf.save ? C.gold : C.ashDim }}><span style={{ width: 12, height: 12, borderRadius: 3, border: `1px solid ${cf.save ? C.gold : C.edge}`, background: cf.save ? C.gold : "transparent", display: "inline-block" }} />save to favorites</button>
+          <div className="flex min-h-[44px] items-center justify-between gap-3 border-t py-2" style={{ borderColor: C.edge }}>
+            <span className="text-[13px]" style={{ color: C.bone }}>Steps<span className="ml-2 font-mono text-[10px]" style={{ color: C.ashDim }}>goal {(g.steps || 0).toLocaleString()}</span></span>
+            <NumberField value={d.steps} step={1000} label="steps" width={72} onChange={(n) => setSteps(n, viewDate)} />
           </div>
-        </div>
-
-        {/* today's entries */}
-        {d.entries.length > 0 && (
-          <div className="mt-4 space-y-1">
-            {d.entries.map((e) => (
-              <div key={e.id} className="flex items-center justify-between gap-2 text-[12px]" style={{ color: C.bone }}>
-                <button onClick={() => openEntry(e)} className="flex items-center gap-2 min-w-0 flex-1 text-left active:opacity-70"><span style={{ color: C.ashDim }} className="font-mono text-[10px]">{tHM(e.t)}</span><span className="truncate">{e.label}{e.grams != null && <span style={{ color: C.ashDim }}> · {Math.round(e.grams)}g</span>}</span></button>
-                <span className="flex items-center gap-2 shrink-0"><span className="font-mono text-[10px]" style={{ color: C.ash }}>{Math.round((e.nutr || {}).kcal || 0)} kcal · {Math.round((e.nutr || {}).protein || 0)}P</span><button onClick={() => removeEntry(e.id, viewDate)} aria-label="remove" className="-mr-2 flex h-11 w-11 items-center justify-center active:scale-90" style={{ color: C.ashDim }}><X size={14} /></button></span>
-              </div>
+          <Fold label="Full nutrient summary" hint="vitamins, minerals, fiber" open={!!fold.nutr} onToggle={() => tog("nutr")}>
+            <NutrientSummary nutr={dt} goals={g} />
+          </Fold>
+          <Fold label="Goals and API keys" hint={`${(g.kcal || 0).toLocaleString()} kcal · ${g.protein} g protein`} open={!!fold.goals} onToggle={() => tog("goals")}>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-2">
+            {[["kcal", "kcal", 50], ["protein", "P", 5], ["carbs", "C", 5], ["fat", "F", 5], ["steps", "steps", 1000], ["water", "ml", 250]].map(([key, lab, stp]) => (
+              <div key={key} className="flex items-center gap-1"><NumberField value={g[key]} step={stp} label={key} width={60} onChange={(n) => setNutGoals({ [key]: Math.max(0, Math.round(n)) })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{lab}</span></div>
             ))}
-          </div>
-        )}
-
-        {/* day-level complete nutrient summary — full vitamin/mineral/caffeine panel for the whole day */}
-        <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
-          <button onClick={() => setNutOpen((v) => !v)} className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.goldDim }}>{nutOpen ? "▾ hide" : "▸ show"} complete nutrient summary</button>
-          {nutOpen && <div className="mt-3"><NutrientSummary nutr={dt} goals={g} /></div>}
-        </div>
-
-        {/* goals editor */}
-        <div className="mt-4 border-t pt-3" style={{ borderColor: C.edge }}>
-          <button onClick={() => setGoalsOpen((v) => !v)} className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.goldDim }}>{goalsOpen ? "▾ hide" : "▸ edit"} goals</button>
-          {goalsOpen && (
-            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-              {[["kcal", "kcal", 50], ["protein", "P", 5], ["carbs", "C", 5], ["fat", "F", 5], ["steps", "steps", 1000], ["water", "ml", 250]].map(([key, lab, stp]) => (
-                <div key={key} className="flex items-center gap-1"><NumberField value={g[key]} step={stp} label={key} width={60} onChange={(n) => setNutGoals({ [key]: Math.max(0, Math.round(n)) })} /><span className="font-mono text-[9px]" style={{ color: C.ashDim }}>{lab}</span></div>
-              ))}
-              <div className="w-full mt-2">
-                <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>Gemini API key (free)</label>
-                <input type="password" placeholder="paste your key" defaultValue={nut.geminiKey || ""} onBlur={(e) => setGeminiKey(e.target.value)} autoCapitalize="off" autoCorrect="off" spellCheck="false" autoComplete="new-password" className="mt-1 w-full rounded-lg px-2 py-1.5 font-mono text-[11px]" style={inp} />
-                <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>free at aistudio.google.com/apikey — turns on label photos, plate photos & AI text logging. Kept in your private synced data only.</p>
-              </div>
-              <div className="w-full mt-2">
-                <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>AI proxy URL</label>
-                <input type="url" inputMode="url" placeholder="https://your-worker.workers.dev" defaultValue={nut.proxyUrl || ""} onBlur={(e) => setProxyUrl(e.target.value)} className="mt-1 w-full rounded-lg px-2 py-1.5 font-mono text-[11px]" style={inp} />
-                <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>optional alternative to the key — your own Cloudflare Worker URL (docs/gemini-proxy/SETUP.md)</p>
-              </div>
-              <div className="w-full mt-2">
-                <label className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>USDA API key</label>
-                <input type="text" inputMode="text" placeholder="your free FDC key" defaultValue={nut.usdaKey || ""} onBlur={(e) => setUsdaKey(e.target.value)} autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-2 py-1.5 font-mono text-[11px]" style={inp} />
-                <p className="mt-1 font-mono text-[9px]" style={{ color: C.ashDim }}>free at fdc.nal.usda.gov/api-key-signup — lifts the shared demo-key rate limit on search</p>
-              </div>
+            <div className="w-full mt-2">
+              <label className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>Gemini API key (free)</label>
+              <input type="password" placeholder="paste your key" defaultValue={nut.geminiKey || ""} onBlur={(e) => setGeminiKey(e.target.value)} autoCapitalize="off" autoCorrect="off" spellCheck="false" autoComplete="new-password" className="mt-1 w-full rounded-lg px-2 py-1.5 font-mono text-[11px]" style={inp} />
+              <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>free at aistudio.google.com/apikey — turns on label photos, plate photos & AI text logging. Kept in your private synced data only.</p>
             </div>
-          )}
+            <div className="w-full mt-2">
+              <label className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>AI proxy URL</label>
+              <input type="url" inputMode="url" placeholder="https://your-worker.workers.dev" defaultValue={nut.proxyUrl || ""} onBlur={(e) => setProxyUrl(e.target.value)} className="mt-1 w-full rounded-lg px-2 py-1.5 font-mono text-[11px]" style={inp} />
+              <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>optional alternative to the key — your own Cloudflare Worker URL (docs/gemini-proxy/SETUP.md)</p>
+            </div>
+            <div className="w-full mt-2">
+              <label className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>USDA API key</label>
+              <input type="text" inputMode="text" placeholder="your free FDC key" defaultValue={nut.usdaKey || ""} onBlur={(e) => setUsdaKey(e.target.value)} autoCapitalize="off" autoCorrect="off" spellCheck="false" className="mt-1 w-full rounded-lg px-2 py-1.5 font-mono text-[11px]" style={inp} />
+              <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>free at fdc.nal.usda.gov/api-key-signup — lifts the shared demo-key rate limit on search</p>
+            </div>
+          </div>
+          </Fold>
         </div>
       </div>
 
@@ -4727,7 +4798,7 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
         <div className="mt-3"><NutBar label={`${(d.water / 250).toFixed(0)} glasses`} cur={waterCombined} goal={g.water} suffix=" ml" /></div>
         <p className="mt-0.5 font-mono text-[10px]" style={{ color: C.ash }}>{(waterCombined / 1000).toFixed(1)}L — drunk {(d.water / 1000).toFixed(1)}L · food {(waterFoodG / 1000).toFixed(1)}L</p>
         <div className="mt-3 flex items-center gap-2">
-          <button onClick={() => addWater(250, viewDate)} className="rounded-full border px-4 py-2 font-mono text-[11px] active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>+250 ml</button>
+          <button onClick={() => addWater(250, viewDate)} className="min-h-[44px] whitespace-nowrap rounded-full border px-3 py-2 font-mono text-[11px] active:scale-95" style={{ borderColor: C.goldDim, color: C.gold }}>+250 ml</button>
           <NumberField value={cw} step={50} label="custom ml" width={64} onChange={(n) => setCw(n)} />
           <button onClick={() => { if (cw > 0) { addWater(cw, viewDate); setCw(0); } }} className="rounded-full px-3 py-2 font-mono text-[11px] font-bold uppercase tracking-wider active:scale-95" style={{ background: C.gold, color: C.bg }}>Add</button>
         </div>
@@ -4740,12 +4811,53 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
         )}
       </div>
 
+      {/* Body */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <div className="flex items-center justify-between">
+          <span className={hdr} style={{ color: C.ash }}>Body</span>
+          <div className="inline-flex rounded-full border p-0.5" style={{ borderColor: C.edge }}>
+            {["kg", "lb"].map((u) => (
+              <button key={u} onClick={() => setDietUnit(u)} aria-label={`show body weights in ${u === "kg" ? "kilograms" : "pounds"}`} className="min-h-[36px] rounded-full px-3.5 font-mono text-[12px] active:scale-95"
+                style={{ background: unit === u ? C.gold : "transparent", color: unit === u ? C.bg : C.ash, fontWeight: unit === u ? 700 : 400 }}>{u}</button>
+            ))}
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <NumberField value={fromLb(bw || 0, 1)} step={unit === "kg" ? 0.1 : 0.2} label="bodyweight" placeholder={uw(unit)} onChange={(disp) => setBody({ bw: toLb(disp, 1) })} />
+          <span className="font-mono text-[11px]" style={{ color: C.ash }}>{uw(unit)}</span>
+          <button onClick={logWeight} disabled={!bw} className="ml-auto min-h-[44px] whitespace-nowrap rounded-full border px-3 font-mono text-[10px] uppercase tracking-wider active:scale-95" style={{ borderColor: bw ? C.goldDim : C.edge, color: bw ? C.gold : C.ashDim, opacity: bw ? 1 : 0.5 }}>{loggedToday ? "update" : "log today"}</button>
+        </div>
+        {lastBW && <p className="mt-2 font-mono text-[10px]" style={{ color: loggedToday ? C.sage : C.ash }}>last weigh-in {relDay(isoDayKey(lastBW.t) || todayKey()).toLowerCase()} · {fromLb(lastBW.w, 1)} {uw(unit)}</p>}
+        {bwDelta30 != null && <p className="mt-1 font-mono text-[10px]" style={{ color: C.ashDim }}>{recent.length} weigh-ins · <span style={{ color: bwDelta30 <= 0 ? C.sage : C.rust }}>{bwDelta30 > 0 ? "+" : ""}{fromLb(bwDelta30, 1)} {uw(unit)}</span> over ~30 days</p>}
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-3" style={{ borderColor: C.edge }}>
+          <div className="flex items-center gap-1.5"><NumberField value={fromLb(mem.body?.height || 0, 2)} step={unit === "kg" ? 1 : 0.5} label="height" placeholder={ulen(unit)} width={48} onChange={(disp) => setBody({ height: toLb(disp, 2) })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{ulen(unit)} height</span></div>
+          <div className="flex items-center gap-1.5"><NumberField value={fromLb(mem.body?.waist || 0, 2)} step={unit === "kg" ? 1 : 0.5} label="waist" placeholder={ulen(unit)} width={48} onChange={(disp) => setBody({ waist: toLb(disp, 2) })} /><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>{ulen(unit)} waist</span></div>
+        </div>
+      </div>
+
+      {/* Sleep */}
+      <div className={card} style={{ background: C.card, borderColor: C.edge }}>
+        <span className={hdr} style={{ color: C.ash }}><Moon size={12} style={{ display: "inline", marginRight: 6, color: C.gold }} />Sleep</span>
+        <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-3">
+          <div><p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>bed</p>
+            <input type="time" value={st.bed} onChange={(e) => setSleepToday(e.target.value, st.wake, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[16px] outline-none" style={inp} /></div>
+          <div><p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>wake</p>
+            <input type="time" value={st.wake} onChange={(e) => setSleepToday(st.bed, e.target.value, viewDate)} className="mt-1 rounded-lg px-3 py-2 font-mono text-[16px] outline-none" style={inp} /></div>
+          <div className="ml-auto text-right"><p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>last night</p>
+            <p className="font-mono text-xl font-bold" style={{ color: slH >= 7 && slH <= 9.5 ? C.sage : C.gold }}>{fmtHM(slH)}</p></div>
+        </div>
+        <div className="mt-3 flex items-center justify-between">
+          <p className="font-mono text-[10px]" style={{ color: C.ashDim }}>{slAvg != null ? `7-day avg ${fmtHM(slAvg)}` : "log a few nights for the average"}</p>
+          <button onClick={() => setSleepDefault(st.bed, st.wake)} className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.goldDim }}>set as default</button>
+        </div>
+      </div>
+
       {/* Road to ripped — ideal-self forecast */}
       <div className={card} style={{ background: C.card, borderColor: C.edge }}>
         <span className={hdr} style={{ color: C.ash }}>Road to ripped</span>
         <div className="mt-3 flex items-center justify-between gap-3">
           <div>
-            <p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>now → goal</p>
+            <p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>now → goal</p>
             <p className="font-mono text-lg font-bold" style={{ color: C.bone }}>{curLb != null ? fromLb(curLb, 1) : "—"} → {fromLb(goalLb, 1)} {uw(unit)}</p>
           </div>
           <div className="flex items-center gap-1.5"><span className="font-mono text-[10px]" style={{ color: C.ashDim }}>goal</span>
@@ -4757,16 +4869,16 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
           <p className="mt-3 text-[12.5px]" style={{ color: C.sage }}>You're at your goal weight — reassess: lean enough, or set a new target?</p>
         ) : (
           <div className="mt-3 flex flex-wrap items-end gap-x-5 gap-y-2">
-            <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>forecast (ideal world)</p>
+            <div><p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>forecast (ideal world)</p>
               <p className="font-mono text-xl font-bold" style={{ color: C.gold }}>{eta.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p></div>
-            <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>rate</p>
+            <div><p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>rate</p>
               <p className="font-mono text-[13px]" style={{ color: C.ash }}>{(rateUsed * (unit === "kg" ? KG : 1)).toFixed(1)} {uw(unit)}/wk{lossWk ? "" : " est"}</p></div>
-            <div><p className="font-mono text-[9px] uppercase tracking-wider" style={{ color: C.ashDim }}>to lose</p>
+            <div><p className="font-mono text-[10px] uppercase tracking-wider" style={{ color: C.ashDim }}>to lose</p>
               <p className="font-mono text-[13px]" style={{ color: C.ash }}>{fromLb(toGo, 1)} {uw(unit)} · {Math.ceil(weeksToGoal)} wk</p></div>
           </div>
         )}
         {leanBand && <p className="mt-3 font-mono text-[10px]" style={{ color: C.ashDim }}>leanness now: waist {Math.round(wtHR * 100)}% of height → <span style={{ color: leanBand === "ripped" || leanBand === "athletic" ? C.sage : leanBand === "soft" ? C.rust : C.gold }}>{leanBand}</span> <span style={{ color: C.ashDim }}>(ripped &lt;43% · athletic &lt;46%)</span></p>}
-        <p className="mt-2 font-mono text-[9px] leading-relaxed" style={{ color: C.ashDim }}>ideal-world ETA — assumes you hold the plan; fat loss slows near the end, so let your waist + the mirror confirm "ripped," not just the scale. Strength is tracked on the Workout tab's projection.</p>
+        <p className="mt-2 font-mono text-[10px] leading-relaxed" style={{ color: C.ashDim }}>ideal-world ETA — assumes you hold the plan; fat loss slows near the end, so let your waist + the mirror confirm "ripped," not just the scale. Strength is tracked on the Workout tab's projection.</p>
       </div>
 
       {/* Trends — per metric (14 days) */}
@@ -4805,18 +4917,28 @@ function DietView({ mem, unit, setDietUnit, logFood, editEntry, corrFood, remove
         })()}
       </div>
 
+      {/* confirmation toast — pinned to the bottom of the screen so it's seen wherever the page is scrolled */}
+      {toast && (
+        <div className="pointer-events-none fixed inset-x-0 z-40 flex justify-center px-5" style={{ bottom: "calc(1.25rem + env(safe-area-inset-bottom))" }} role="status">
+          <span className="max-w-full truncate rounded-full border px-4 py-2.5 text-[13px]" style={{ background: "#221D12", borderColor: C.activeEdge, color: C.bone, boxShadow: "0 6px 24px rgba(0,0,0,0.5)" }}>{toast}</span>
+        </div>
+      )}
+
       {scanOpen && <BarcodeScanner onDetect={async (code) => {
-        // resolution ladder: memory → OFF → not-found
+        // resolution ladder: memory → OFF → not-found / lookup-failed
         const known = findByBarcode(nut, code);
-        if (known) { setScanOpen(false); setScanState(null); setDetail({ food: known, initialGrams: known.lastGrams }); return; }
+        if (known) { scanSeq.current++; setScanOpen(false); setScanState(null); setDetail({ food: known, initialGrams: known.lastGrams }); return; }
+        const seq = ++scanSeq.current;
         setScanState({ looking: true, code });
-        const f = await lookupBarcode(code);
-        if (f) { setScanOpen(false); setScanState(null); setDetail({ food: f }); return; }
-        setScanState({ notFound: true, code });   // clear not-found UI; "Enter manually" pre-seeds the custom form with this barcode. (the overlay offers photo-the-label / manual entry)
-      }} onClose={() => { setScanOpen(false); setScanState(null); }} scanState={scanState}
-        onManual={(code) => { setScanOpen(false); setScanState(null); setCf((c) => ({ ...c, barcode: code })); }}
-        ai={ai} goals={g} dayTotalsBefore={dt} nutFoods={nut.foods} onFavFood={favFood} onAddFood={(payload) => logFood({ ...payload, dk: viewDate })} />}
-      {detail && <FoodDetail food={detail.food} initialGrams={detail.initialGrams} initialT={detail.initialT} goals={g} dayTotalsBefore={detail.edit ? subNutr(dt, (d.entries.find((x) => x.id === detail.edit.id) || {}).nutr) : dt} isFav={!!(nut.foods || []).find((f) => f.id === detail.food.id && f.fav)} onFav={() => favFood(detail.food)} editMode={!!detail.edit} onAdd={(payload) => logFood({ ...payload, dk: viewDate })} onSave={(payload) => { editEntry(detail.edit.id, viewDate, { grams: payload.grams, nutr: payload.nutr, t: payload.t, label: payload.food.label }); if (payload.saveCorr) corrFood(payload.food, payload.nutr, payload.grams); }} onClose={() => setDetail(null)} />}
+        const res = await lookupBarcode(code);
+        if (seq !== scanSeq.current) return;   // closed, rescanned or superseded while the lookup was in flight — a late answer must not reopen anything
+        if (res.food) { setScanOpen(false); setScanState(null); setDetail({ food: res.food }); return; }
+        setScanState(res.error ? { failed: true, code } : { notFound: true, code });   // the overlay offers photo-the-label / scan again / manual entry ("Enter manually" pre-seeds the custom form with this barcode)
+      }} onClose={() => { scanSeq.current++; setScanOpen(false); setScanState(null); }} scanState={scanState}
+        onRescan={() => { scanSeq.current++; setScanState(null); }}
+        onManual={(code) => { scanSeq.current++; setScanOpen(false); setScanState(null); setCf((c) => ({ ...c, barcode: code })); openCustom(); }}
+        ai={ai} goals={g} dayTotalsBefore={dt} nutFoods={nut.foods} onFavFood={favFood} onAddFood={(payload) => { logFood({ ...payload, dk: viewDate }); flash(`Logged ${Math.round((payload.nutr || {}).kcal || 0)} kcal · ${payload.food.label}`); }} />}
+      {detail && <FoodDetail food={detail.food} initialGrams={detail.initialGrams} initialT={detail.initialT} goals={g} dayTotalsBefore={detail.edit ? subNutr(dt, (d.entries.find((x) => x.id === detail.edit.id) || {}).nutr) : dt} isFav={!!(nut.foods || []).find((f) => f.id === detail.food.id && f.fav)} onFav={() => favFood(detail.food)} editMode={!!detail.edit} onAdd={(payload) => { logFood({ ...payload, dk: viewDate }); flash(`Logged ${Math.round((payload.nutr || {}).kcal || 0)} kcal · ${payload.food.label}`); }} onSave={(payload) => { editEntry(detail.edit.id, viewDate, { grams: payload.grams, nutr: payload.nutr, t: payload.t, label: payload.food.label }); if (payload.saveCorr) corrFood(payload.food, payload.nutr, payload.grams); flash(`Saved ${payload.food.label}`); }} onClose={() => setDetail(null)} />}
     </>
   );
 }
@@ -7975,7 +8097,7 @@ function App() {
     const corrOn = saveCorr && grams > 0;
     const keepCorr = !corrOn && idx >= 0 && foods[idx].corr;   // uncorrected re-log of a corrected food (e.g. via fresh search): his saved numbers win
     const corrNutr = corrOn ? scaleToBasis(food, eNutr, grams) : (keepCorr ? foods[idx].nutr : food.nutr);
-    const base = { id: fid, label: food.label || "food", basis: keepCorr ? foods[idx].basis : food.basis, basisGrams: keepCorr ? (foods[idx].basisGrams != null ? foods[idx].basisGrams : null) : (food.basisGrams != null ? food.basisGrams : null), nutr: corrNutr, source: food.source, barcode: food.barcode || (idx >= 0 ? foods[idx].barcode : undefined), corr: corrOn || (idx >= 0 ? foods[idx].corr : undefined) || undefined, ...(food.portionG ? { portionG: food.portionG } : {}) };
+    const base = { id: fid, label: food.label || "food", basis: keepCorr ? foods[idx].basis : food.basis, basisGrams: keepCorr ? (foods[idx].basisGrams != null ? foods[idx].basisGrams : null) : (food.basisGrams != null ? food.basisGrams : null), nutr: corrNutr, source: food.source, barcode: food.barcode || (idx >= 0 ? foods[idx].barcode : undefined), corr: corrOn || (idx >= 0 ? foods[idx].corr : undefined) || undefined, ...(food.portionG ? { portionG: food.portionG } : {}), ...(food.u ? { u: food.u } : {}) };
     const uf = { ...(idx >= 0 ? foods[idx] : {}), ...base, lastGrams: grams, lastUsedT: ts, fav: (idx >= 0 ? foods[idx].fav : false) };
     const nf = idx >= 0 ? foods.map((f, i) => (i === idx ? uf : f)) : [...foods, uf];
     const nd = { ...d, entries: [...d.entries, e] };
@@ -7993,7 +8115,7 @@ function App() {
   // favorite from FoodDetail: ensure the food is in the library (upsert an unsaved DB/custom food), then flip fav
   const favFood = async (food) => updateMem((prev, ret) => { const nut = nutFrom(prev); const foods = nut.foods || []; const idx = findFoodIdx(foods, food, food.id); const fid = food.id || (idx >= 0 ? foods[idx].id : uid()); ret(fid);
     if (idx >= 0) { const nf = foods.map((f, i) => (i === idx ? { ...f, fav: !f.fav } : f)); return withNut(prev, { ...nut, foods: nf }); }
-    const uf = { id: fid, label: food.label || "food", basis: food.basis, basisGrams: food.basisGrams != null ? food.basisGrams : null, nutr: food.nutr, source: food.source, barcode: food.barcode, lastGrams: food.lastGrams, fav: true, ...(food.portionG ? { portionG: food.portionG } : {}) };
+    const uf = { id: fid, label: food.label || "food", basis: food.basis, basisGrams: food.basisGrams != null ? food.basisGrams : null, nutr: food.nutr, source: food.source, barcode: food.barcode, lastGrams: food.lastGrams, fav: true, ...(food.portionG ? { portionG: food.portionG } : {}), ...(food.u ? { u: food.u } : {}) };
     return withNut(prev, { ...nut, foods: pruneFoods([...foods, uf]) }); });
   // ── saved meals (bundles) ── items carry a FULL food snapshot so meals survive food-library pruning
   const addMeal = async ({ label, items }) => updateMem((prev, ret) => { const nut = nutFrom(prev); const m = { id: uid(), label: label || "meal", items: (items || []).map((it) => ({ food: it.food, grams: it.grams })) }; ret(m.id);
@@ -8036,9 +8158,7 @@ function App() {
   const logBW = async () => {
     const body = { ...(mem.body || {}) };
     if (!body.bw) return;
-    const today = new Date().toISOString().slice(0, 10);
-    const hist = (body.bwHist || []).filter((e) => e.t.slice(0, 10) !== today);
-    body.bwHist = [...hist, { t: new Date().toISOString(), w: body.bw }].slice(-60);
+    body.bwHist = addWeighIn(body.bwHist, body.bw);
     const nm = { ...mem, body }; if (hasStore) await saveState(nm); setMem(nm);
   };
 
